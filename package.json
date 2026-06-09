@@ -1,0 +1,30 @@
+{
+  "name": "leadsmart-ringba-scrub-agent",
+  "version": "1.0.0",
+  "description": "LeadSmart System 1 — automated Ringba payout scrub agent",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "ts-node start.ts",
+    "start:prod": "node dist/start.js",
+    "scrub:once": "ts-node index.ts --once",
+    "find:call": "ts-node findCall.ts",
+    "void:test": "ts-node voidTest.ts",
+    "queue:test": "ts-node queueTest.ts",
+    "dashboard": "ts-node server.ts",
+    "db:push-fly": "powershell -ExecutionPolicy Bypass -File scripts/push-db-to-fly.ps1",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}

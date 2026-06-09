@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LeadSmart · Ringba Scrub</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar__brand">
+          <span class="sidebar__mark">LS</span>
+          <div class="sidebar__titles">
+            <span class="sidebar__name">LeadSmart</span>
+            <span class="sidebar__sub">Ringba Scrub Agent</span>
+          </div>
+        </div>
+        <nav class="sidebar__nav" aria-label="Main">
+          <a href="#overview" class="nav-link nav-link--active" data-page="overview">Overview</a>
+          <a href="#scrubs" class="nav-link" data-page="scrubs">Recent Scrubs</a>
+        </nav>
+        <div class="sidebar__foot">
+          <span class="sidebar__status" id="liveStatus">LIVE</span>
+        </div>
+      </aside>
+
+      <button type="button" class="menu-toggle" id="menuToggle" aria-label="Open menu">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="overlay" id="overlay" hidden></div>
+
+      <main class="content">
+        <header class="content__header">
+          <h1 class="content__title" id="pageTitle">Overview</h1>
+          <button type="button" class="btn-refresh" id="refreshBtn">REFRESH</button>
+        </header>
+
+        <section class="page page--active" id="page-overview" data-page="overview">
+          <div class="metrics metrics--3">
+            <article class="metric">
+              <p class="metric__label">Total Scrubs</p>
+              <p class="metric__value" id="totalScrubs">—</p>
+              <p class="metric__hint">All time · success</p>
+            </article>
+            <article class="metric">
+              <p class="metric__label">Total Payout Voided</p>
+              <p class="metric__value metric__value--money" id="totalPayoutVoided">—</p>
+              <p class="metric__hint">All time · affiliate payout</p>
+            </article>
+            <article class="metric">
+              <p class="metric__label">Total Revenue Voided</p>
+              <p class="metric__value metric__value--money" id="totalRevenueVoided">—</p>
+              <p class="metric__hint">All time · buyer revenue</p>
+            </article>
+          </div>
+
+          <article class="panel panel--last-run">
+            <div class="panel__head">
+              <h2 class="panel__title">Last Run</h2>
+              <span class="panel__badge" id="lastRunBadge">—</span>
+            </div>
+            <p class="last-run__time mono" id="lastRunTime">No poll recorded</p>
+            <div class="last-run__grid last-run__grid--4">
+              <div class="stat stat--next-run">
+                <span class="stat__label">Next Run</span>
+                <div class="stat__row">
+                  <span class="stat__value stat__value--accent mono" id="nextRunCountdown">—</span>
+                  <button type="button" class="btn-run-now" id="runNowBtn">RUN NOW</button>
+                </div>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Voided</span>
+                <span class="stat__value stat__value--ok mono" id="lastVoided">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Skipped</span>
+                <span class="stat__value mono" id="lastSkipped" title="Not logged to SQLite">—</span>
+              </div>
+              <div class="stat">
+                <span class="stat__label">Errors</span>
+                <span class="stat__value stat__value--err mono" id="lastErrors">0</span>
+              </div>
+            </div>
+            <p class="panel__note" id="lastRunNote"></p>
+          </article>
+        </section>
+
+        <section class="page" id="page-scrubs" data-page="scrubs" hidden>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Publisher</th>
+                  <th>Amount Voided</th>
+                  <th>Status</th>
+                  <th class="data-table__chevron-col" aria-hidden="true"></th>
+                </tr>
+              </thead>
+              <tbody id="scrubsBody"></tbody>
+            </table>
+          </div>
+          <p class="table-empty" id="scrubsEmpty" hidden>No scrub log entries.</p>
+        </section>
+
+        <p class="load-error" id="loadError" hidden></p>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
