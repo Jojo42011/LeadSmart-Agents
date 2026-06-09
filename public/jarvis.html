@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JARVIS // LEADSMART</title>
+    <style>
+      :root {
+        --bg: #0a0a0a;
+        --cyan: #00ffff;
+        --cyan-dim: #007a7a;
+        --cyan-soft: #00b3b3;
+        --blue-deep: #0a0a2e;
+        --blue: #0033aa;
+        --green: #19e08a;
+        --amber: #e0a000;
+        --red: #e0392b;
+        --text: #b8d8d8;
+        --text-dim: #5a7a7a;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Courier New", Courier, monospace;
+      }
+
+      /* Full-viewport hex grid texture */
+      .hexgrid {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        opacity: 0.5;
+        pointer-events: none;
+        background-color: var(--bg);
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='100' viewBox='0 0 56 100'><g fill='none' stroke='%2300ffff' stroke-width='0.6' stroke-opacity='0.06'><path d='M28 0 L56 16 L56 50 L28 66 L0 50 L0 16 Z'/><path d='M28 66 L56 82 L56 116 L28 132 L0 116 L0 82 Z'/></g></svg>");
+        background-size: 56px 100px;
+      }
+
+      /* Radial vignette over everything */
+      .vignette {
+        position: fixed;
+        inset: 0;
+        z-index: 1;
+        pointer-events: none;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(0, 0, 0, 0) 40%,
+          rgba(0, 0, 0, 0.55) 100%
+        );
+      }
+
+      #app {
+        position: relative;
+        z-index: 2;
+        display: grid;
+        grid-template-rows: 56px 1fr;
+        grid-template-columns: 240px 1fr 280px;
+        grid-template-areas:
+          "topbar topbar topbar"
+          "left   center right";
+        height: 100vh;
+        width: 100vw;
+      }
+
+      /* ---------- TOP BAR ---------- */
+      .topbar {
+        grid-area: topbar;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 22px;
+        border-bottom: 1px solid rgba(0, 122, 122, 0.45);
+        background: linear-gradient(
+          180deg,
+          rgba(0, 30, 30, 0.25),
+          rgba(0, 0, 0, 0)
+        );
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        font-size: 13px;
+      }
+      .topbar__brand {
+        color: var(--cyan);
+        text-shadow: 0 0 8px rgba(0, 255, 255, 0.4);
+        font-weight: 700;
+      }
+      .topbar__brand .slash {
+        color: var(--cyan-dim);
+        margin: 0 8px;
+      }
+      .topbar__brand .unit {
+        color: var(--text);
+      }
+      .topbar__clock {
+        color: var(--cyan-soft);
+        letter-spacing: 4px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ---------- LEFT PANEL ---------- */
+      .panel-left {
+        grid-area: left;
+        border-left: 2px solid rgba(0, 255, 255, 0.5);
+        border-right: 1px solid rgba(0, 122, 122, 0.18);
+        padding: 26px 22px 26px 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 26px;
+        overflow: hidden;
+      }
+      .panel-title {
+        font-size: 10px;
+        letter-spacing: 3px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        margin-bottom: 14px;
+        white-space: nowrap;
+      }
+      .agent-list {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+      .agent {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .agent__dot {
+        flex: 0 0 9px;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        position: relative;
+      }
+      .agent__dot::after {
+        content: "";
+        position: absolute;
+        inset: -4px;
+        border-radius: 50%;
+        opacity: 0.45;
+        background: inherit;
+        filter: blur(3px);
+      }
+      .dot--green {
+        background: var(--green);
+        box-shadow: 0 0 8px var(--green);
+        animation: pulseDot 2.4s ease-in-out infinite;
+      }
+      .dot--amber {
+        background: var(--amber);
+        box-shadow: 0 0 7px var(--amber);
+      }
+      .dot--red {
+        background: var(--red);
+        box-shadow: 0 0 7px var(--red);
+      }
+      @keyframes pulseDot {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.45;
+        }
+      }
+      .agent__meta {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+      }
+      .agent__name {
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        color: var(--text);
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .agent__state {
+        font-size: 9px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+      .state--online {
+        color: var(--green);
+      }
+      .state--standby {
+        color: var(--amber);
+      }
+      .state--offline {
+        color: var(--red);
+      }
+      .panel-left__foot {
+        margin-top: auto;
+        font-size: 9px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        line-height: 1.8;
+        white-space: nowrap;
+      }
+
+      /* ---------- CENTER ---------- */
+      .center {
+        grid-area: center;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      #orb-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        cursor: pointer;
+        z-index: 1;
+      }
+      .center__overlay {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        width: 100%;
+        pointer-events: none;
+      }
+      .status-pill {
+        margin-top: 8%;
+        margin-bottom: auto;
+        padding: 7px 22px;
+        font-size: 11px;
+        letter-spacing: 5px;
+        text-transform: uppercase;
+        border: 1px solid var(--cyan-dim);
+        border-radius: 2px;
+        color: var(--cyan-soft);
+        background: rgba(0, 20, 20, 0.3);
+        transition: color 0.5s ease, border-color 0.5s ease,
+          text-shadow 0.5s ease, background 0.5s ease;
+      }
+      .status-pill[data-state="standby"] {
+        color: var(--cyan-soft);
+        border-color: var(--cyan-dim);
+      }
+      .status-pill[data-state="listening"] {
+        color: var(--bg);
+        background: var(--cyan);
+        border-color: var(--cyan);
+        text-shadow: none;
+        box-shadow: 0 0 18px rgba(0, 255, 255, 0.5);
+      }
+      .status-pill[data-state="processing"] {
+        color: #ffffff;
+        border-color: #ffffff;
+        text-shadow: 0 0 12px rgba(255, 255, 255, 0.9);
+        animation: pillPulse 0.9s ease-in-out infinite;
+      }
+      .status-pill[data-state="responding"] {
+        color: var(--cyan);
+        border-color: var(--cyan);
+        text-shadow: 0 0 12px rgba(0, 255, 255, 0.7);
+      }
+      @keyframes pillPulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+      .core-label {
+        margin-bottom: 9%;
+        margin-top: auto;
+        font-size: 11px;
+        letter-spacing: 4px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        text-align: center;
+        transition: color 0.5s ease;
+      }
+      .voice-note {
+        position: absolute;
+        bottom: 18px;
+        font-size: 9px;
+        letter-spacing: 3px;
+        color: var(--amber);
+        text-transform: uppercase;
+        opacity: 0.8;
+        display: none;
+      }
+
+      /* ---------- RIGHT PANEL ---------- */
+      .panel-right {
+        grid-area: right;
+        border-left: 1px solid rgba(0, 122, 122, 0.18);
+        padding: 26px 20px 22px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+        overflow: hidden;
+      }
+      .transcript {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        flex: 1 1 auto;
+      }
+      .transcript__log {
+        margin-top: 14px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding-right: 6px;
+        scrollbar-width: thin;
+        scrollbar-color: var(--cyan-dim) transparent;
+      }
+      .transcript__log::-webkit-scrollbar {
+        width: 4px;
+      }
+      .transcript__log::-webkit-scrollbar-thumb {
+        background: var(--cyan-dim);
+        border-radius: 2px;
+      }
+      .entry {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        animation: fadeIn 0.4s ease;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .entry__who {
+        font-size: 9px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+      .entry--operator .entry__who {
+        color: var(--cyan);
+      }
+      .entry--user .entry__who {
+        color: var(--text-dim);
+      }
+      .entry__text {
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--text);
+        letter-spacing: 0.5px;
+      }
+      .entry--operator .entry__text {
+        color: var(--cyan-soft);
+      }
+
+      .neural {
+        flex: 0 0 auto;
+      }
+      .waveform {
+        margin-top: 12px;
+        width: 100%;
+        height: 46px;
+        display: block;
+      }
+
+      .directives {
+        flex: 0 0 auto;
+      }
+      .directives__list {
+        margin-top: 12px;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+      .directives__list li {
+        position: relative;
+        padding-left: 16px;
+        font-size: 10px;
+        letter-spacing: 1.5px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        line-height: 1.4;
+      }
+      .directives__list li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 5px;
+        width: 5px;
+        height: 5px;
+        background: var(--cyan-dim);
+        box-shadow: 0 0 5px var(--cyan-dim);
+      }
+
+      .section-head {
+        font-size: 10px;
+        letter-spacing: 3px;
+        color: var(--cyan-soft);
+        text-transform: uppercase;
+        border-bottom: 1px solid rgba(0, 122, 122, 0.3);
+        padding-bottom: 8px;
+      }
+
+      /* Responsive guard for smaller viewports */
+      @media (max-width: 1300px) {
+        #app {
+          grid-template-columns: 210px 1fr 250px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="hexgrid"></div>
+    <div class="vignette"></div>
+
+    <div id="app">
+      <!-- TOP BAR -->
+      <header class="topbar">
+        <div class="topbar__brand">
+          JARVIS<span class="slash">//</span><span class="unit">LEADSMART</span>
+        </div>
+        <div class="topbar__clock" id="clock">--:--:--</div>
+      </header>
+
+      <!-- LEFT PANEL -->
+      <aside class="panel-left">
+        <div>
+          <div class="panel-title">Agent Status</div>
+          <div class="agent-list">
+            <div class="agent">
+              <span class="agent__dot dot--green"></span>
+              <span class="agent__meta">
+                <span class="agent__name">Scrub Agent</span>
+                <span class="agent__state state--online">Online</span>
+              </span>
+            </div>
+            <div class="agent">
+              <span class="agent__dot dot--amber"></span>
+              <span class="agent__meta">
+                <span class="agent__name">Payment Agent</span>
+                <span class="agent__state state--standby">Standby</span>
+              </span>
+            </div>
+            <div class="agent">
+              <span class="agent__dot dot--amber"></span>
+              <span class="agent__meta">
+                <span class="agent__name">Fraud Detection</span>
+                <span class="agent__state state--standby">Standby</span>
+              </span>
+            </div>
+            <div class="agent">
+              <span class="agent__dot dot--red"></span>
+              <span class="agent__meta">
+                <span class="agent__name">Chat Agent</span>
+                <span class="agent__state state--offline">Offline</span>
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="panel-left__foot">
+          SYS // CORE ONLINE<br />
+          LINK // SECURE<br />
+          UPTIME // NOMINAL
+        </div>
+      </aside>
+
+      <!-- CENTER -->
+      <main class="center">
+        <canvas id="orb-canvas"></canvas>
+        <div class="center__overlay">
+          <div class="status-pill" id="statusPill" data-state="standby">
+            Standby
+          </div>
+          <div class="core-label" id="coreLabel">Tap Core To Speak</div>
+        </div>
+        <div class="voice-note" id="voiceNote">Voice Unavailable</div>
+      </main>
+
+      <!-- RIGHT PANEL -->
+      <aside class="panel-right">
+        <section class="transcript">
+          <div class="section-head">Transcript</div>
+          <div class="transcript__log" id="transcript">
+            <div class="entry entry--operator">
+              <span class="entry__who">Operator</span>
+              <span class="entry__text">All systems nominal. Standing by, sir.</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="neural">
+          <div class="section-head">Neural Output</div>
+          <canvas class="waveform" id="waveform"></canvas>
+        </section>
+
+        <section class="directives">
+          <div class="section-head">Directives</div>
+          <ul class="directives__list">
+            <li>Filter noise, surface priorities</li>
+            <li>Protect operator time</li>
+            <li>Dispatch agents efficiently</li>
+            <li>Maintain operational awareness</li>
+          </ul>
+        </section>
+      </aside>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+      "use strict";
+
+      /* =========================================================
+         LIVE CLOCK
+         ========================================================= */
+      (function clock() {
+        const el = document.getElementById("clock");
+        function tick() {
+          const d = new Date();
+          const p = (n) => String(n).padStart(2, "0");
+          el.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(
+            d.getSeconds()
+          )}`;
+        }
+        tick();
+        setInterval(tick, 1000);
+      })();
+
+      /* =========================================================
+         SIMPLEX-ISH 3D NOISE (compact, dependency-free)
+         Classic 3D simplex noise by Stefan Gustavson, ported.
+         ========================================================= */
+      const SimplexNoise = (function () {
+        const grad3 = [
+          [1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0],
+          [1, 0, 1], [-1, 0, 1], [1, 0, -1], [-1, 0, -1],
+          [0, 1, 1], [0, -1, 1], [0, 1, -1], [0, -1, -1],
+        ];
+        const p = [];
+        for (let i = 0; i < 256; i++) p[i] = Math.floor(Math.random() * 256);
+        const perm = new Array(512);
+        const permMod12 = new Array(512);
+        for (let i = 0; i < 512; i++) {
+          perm[i] = p[i & 255];
+          permMod12[i] = perm[i] % 12;
+        }
+        const F3 = 1.0 / 3.0;
+        const G3 = 1.0 / 6.0;
+
+        function noise(xin, yin, zin) {
+          let n0, n1, n2, n3;
+          const s = (xin + yin + zin) * F3;
+          const i = Math.floor(xin + s);
+          const j = Math.floor(yin + s);
+          const k = Math.floor(zin + s);
+          const t = (i + j + k) * G3;
+          const X0 = i - t;
+          const Y0 = j - t;
+          const Z0 = k - t;
+          const x0 = xin - X0;
+          const y0 = yin - Y0;
+          const z0 = zin - Z0;
+          let i1, j1, k1, i2, j2, k2;
+          if (x0 >= y0) {
+            if (y0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
+            else if (x0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 0; k2 = 1; }
+            else { i1 = 0; j1 = 0; k1 = 1; i2 = 1; j2 = 0; k2 = 1; }
+          } else {
+            if (y0 < z0) { i1 = 0; j1 = 0; k1 = 1; i2 = 0; j2 = 1; k2 = 1; }
+            else if (x0 < z0) { i1 = 0; j1 = 1; k1 = 0; i2 = 0; j2 = 1; k2 = 1; }
+            else { i1 = 0; j1 = 1; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
+          }
+          const x1 = x0 - i1 + G3;
+          const y1 = y0 - j1 + G3;
+          const z1 = z0 - k1 + G3;
+          const x2 = x0 - i2 + 2.0 * G3;
+          const y2 = y0 - j2 + 2.0 * G3;
+          const z2 = z0 - k2 + 2.0 * G3;
+          const x3 = x0 - 1.0 + 3.0 * G3;
+          const y3 = y0 - 1.0 + 3.0 * G3;
+          const z3 = z0 - 1.0 + 3.0 * G3;
+          const ii = i & 255;
+          const jj = j & 255;
+          const kk = k & 255;
+          let t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
+          if (t0 < 0) n0 = 0.0;
+          else {
+            const gi0 = permMod12[ii + perm[jj + perm[kk]]];
+            t0 *= t0;
+            n0 = t0 * t0 * dot(grad3[gi0], x0, y0, z0);
+          }
+          let t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
+          if (t1 < 0) n1 = 0.0;
+          else {
+            const gi1 = permMod12[ii + i1 + perm[jj + j1 + perm[kk + k1]]];
+            t1 *= t1;
+            n1 = t1 * t1 * dot(grad3[gi1], x1, y1, z1);
+          }
+          let t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
+          if (t2 < 0) n2 = 0.0;
+          else {
+            const gi2 = permMod12[ii + i2 + perm[jj + j2 + perm[kk + k2]]];
+            t2 *= t2;
+            n2 = t2 * t2 * dot(grad3[gi2], x2, y2, z2);
+          }
+          let t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
+          if (t3 < 0) n3 = 0.0;
+          else {
+            const gi3 = permMod12[ii + 1 + perm[jj + 1 + perm[kk + 1]]];
+            t3 *= t3;
+            n3 = t3 * t3 * dot(grad3[gi3], x3, y3, z3);
+          }
+          return 32.0 * (n0 + n1 + n2 + n3);
+        }
+        function dot(g, x, y, z) {
+          return g[0] * x + g[1] * y + g[2] * z;
+        }
+        return { noise };
+      })();
+
+      /* =========================================================
+         STATE MACHINE
+         ========================================================= */
+      const STATE = {
+        STANDBY: "standby",
+        LISTENING: "listening",
+        PROCESSING: "processing",
+        RESPONDING: "responding",
+      };
+
+      // Per-state target parameters the orb interpolates toward.
+      const STATE_PARAMS = {
+        standby:    { amp: 0.16, freq: 0.55, speed: 0.18, spread: 0.10, glow: 0.55, ripple: 0.0 },
+        listening:  { amp: 0.34, freq: 0.85, speed: 0.34, spread: 0.16, glow: 0.85, ripple: 0.6 },
+        processing: { amp: 0.62, freq: 1.70, speed: 0.95, spread: 0.40, glow: 1.30, ripple: 0.2 },
+        responding: { amp: 0.30, freq: 0.70, speed: 0.30, spread: 0.20, glow: 1.00, ripple: 1.0 },
+      };
+
+      let currentState = STATE.STANDBY;
+      // Live (interpolated) params, start at standby values.
+      const live = Object.assign({}, STATE_PARAMS.standby);
+      let stateTimer = null;
+
+      const statusPill = document.getElementById("statusPill");
+      const coreLabel = document.getElementById("coreLabel");
+      const transcriptEl = document.getElementById("transcript");
+
+      const CORE_LABELS = {
+        standby: "Tap Core To Speak",
+        listening: "Listening",
+        processing: "Processing",
+        responding: "Responding",
+      };
+
+      function setState(next) {
+        currentState = next;
+        statusPill.dataset.state = next;
+        statusPill.textContent = next;
+        coreLabel.textContent = CORE_LABELS[next];
+      }
+
+      function addEntry(who, text) {
+        const entry = document.createElement("div");
+        entry.className =
+          "entry " + (who === "Operator" ? "entry--operator" : "entry--user");
+        const w = document.createElement("span");
+        w.className = "entry__who";
+        w.textContent = who;
+        const t = document.createElement("span");
+        t.className = "entry__text";
+        t.textContent = text;
+        entry.appendChild(w);
+        entry.appendChild(t);
+        transcriptEl.appendChild(entry);
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      }
+
+      /* =========================================================
+         WEB SPEECH
+         ========================================================= */
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
+      const speechSupported = !!SpeechRecognition;
+      let recognition = null;
+
+      if (!speechSupported) {
+        document.getElementById("voiceNote").style.display = "block";
+      } else {
+        recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = "en-US";
+
+        recognition.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          addEntry("Operator", "USER: " + transcript);
+          beginProcessing();
+        };
+        recognition.onerror = () => {
+          // Fall back to demo cycle if mic fails/denied.
+          if (currentState === STATE.LISTENING) beginProcessing();
+        };
+        recognition.onend = () => {
+          // If listening ended with no result, drift back to standby.
+          if (currentState === STATE.LISTENING) {
+            transitionTo(STATE.STANDBY);
+          }
+        };
+      }
+
+      /* =========================================================
+         STATE FLOW
+         ========================================================= */
+      function clearTimer() {
+        if (stateTimer) {
+          clearTimeout(stateTimer);
+          stateTimer = null;
+        }
+      }
+
+      function transitionTo(state) {
+        clearTimer();
+        setState(state);
+      }
+
+      function beginListening() {
+        transitionTo(STATE.LISTENING);
+        if (speechSupported && recognition) {
+          try {
+            recognition.start();
+          } catch (e) {
+            // start() can throw if already started; ignore.
+          }
+        } else {
+          // Demo path: no speech support, auto-advance.
+          stateTimer = setTimeout(beginProcessing, 2200);
+        }
+      }
+
+      function beginProcessing() {
+        transitionTo(STATE.PROCESSING);
+        stateTimer = setTimeout(() => {
+          beginResponding();
+        }, 2000);
+      }
+
+      function beginResponding() {
+        transitionTo(STATE.RESPONDING);
+        addEntry("Operator", "Understood, sir. Standing by.");
+        stateTimer = setTimeout(() => {
+          transitionTo(STATE.STANDBY);
+        }, 3000);
+      }
+
+      function onCoreActivate() {
+        // Clicking the core toggles STANDBY -> LISTENING.
+        if (currentState === STATE.STANDBY) {
+          beginListening();
+        } else if (currentState === STATE.LISTENING) {
+          // Allow user to abort listening back to standby.
+          if (speechSupported && recognition) {
+            try {
+              recognition.stop();
+            } catch (e) {}
+          }
+          transitionTo(STATE.STANDBY);
+        }
+      }
+
+      /* =========================================================
+         THREE.JS PARTICLE ORB
+         ========================================================= */
+      const canvas = document.getElementById("orb-canvas");
+      const renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true,
+        alpha: true,
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+      camera.position.z = 3.4;
+
+      // ----- Inner glow sprite (deep blue-green radial light) -----
+      function makeGlowTexture() {
+        const size = 256;
+        const c = document.createElement("canvas");
+        c.width = c.height = size;
+        const ctx = c.getContext("2d");
+        const g = ctx.createRadialGradient(
+          size / 2, size / 2, 0,
+          size / 2, size / 2, size / 2
+        );
+        g.addColorStop(0.0, "rgba(0, 180, 170, 0.55)");
+        g.addColorStop(0.25, "rgba(0, 90, 120, 0.30)");
+        g.addColorStop(0.6, "rgba(0, 40, 80, 0.10)");
+        g.addColorStop(1.0, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+        return new THREE.CanvasTexture(c);
+      }
+      const glowMaterial = new THREE.SpriteMaterial({
+        map: makeGlowTexture(),
+        color: 0xffffff,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const glow = new THREE.Sprite(glowMaterial);
+      glow.scale.set(3.4, 3.4, 1);
+      scene.add(glow);
+
+      // ----- Particle dot texture (soft round) -----
+      function makeDotTexture() {
+        const size = 64;
+        const c = document.createElement("canvas");
+        c.width = c.height = size;
+        const ctx = c.getContext("2d");
+        const g = ctx.createRadialGradient(
+          size / 2, size / 2, 0,
+          size / 2, size / 2, size / 2
+        );
+        g.addColorStop(0, "rgba(255,255,255,1)");
+        g.addColorStop(0.4, "rgba(220,255,255,0.8)");
+        g.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+        return new THREE.CanvasTexture(c);
+      }
+
+      // ----- Build particle sphere -----
+      const PARTICLE_COUNT = 4200;
+      const RADIUS = 1.0;
+
+      const positions = new Float32Array(PARTICLE_COUNT * 3);
+      const colors = new Float32Array(PARTICLE_COUNT * 3);
+      const sizes = new Float32Array(PARTICLE_COUNT);
+      // Base unit-sphere direction for each particle (fixed).
+      const baseDir = new Float32Array(PARTICLE_COUNT * 3);
+      // Per-particle outward bias (outer particles drift further -> fuzzy edge).
+      const edgeBias = new Float32Array(PARTICLE_COUNT);
+      const sizeBase = new Float32Array(PARTICLE_COUNT);
+
+      const colorInner = new THREE.Color(0xffffff);
+      const colorOuter = new THREE.Color(0x66f0ff);
+
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        // Even distribution over a sphere (golden spiral).
+        const t = i / PARTICLE_COUNT;
+        const phi = Math.acos(1 - 2 * t);
+        const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+        const x = Math.sin(phi) * Math.cos(theta);
+        const y = Math.sin(phi) * Math.sin(theta);
+        const z = Math.cos(phi);
+
+        baseDir[i * 3] = x;
+        baseDir[i * 3 + 1] = y;
+        baseDir[i * 3 + 2] = z;
+
+        positions[i * 3] = x * RADIUS;
+        positions[i * 3 + 1] = y * RADIUS;
+        positions[i * 3 + 2] = z * RADIUS;
+
+        // Some particles biased to sit further out -> atmospheric edge.
+        const bias = Math.pow(Math.random(), 2.2); // mostly near surface
+        edgeBias[i] = bias;
+
+        const mix = bias * 0.9 + Math.random() * 0.1;
+        const col = colorInner.clone().lerp(colorOuter, mix);
+        colors[i * 3] = col.r;
+        colors[i * 3 + 1] = col.g;
+        colors[i * 3 + 2] = col.b;
+
+        const s = 0.018 + Math.random() * 0.022 + bias * 0.01;
+        sizeBase[i] = s;
+        sizes[i] = s;
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.BufferAttribute(positions, 3)
+      );
+      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      geometry.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
+
+      // Custom shader so each particle can have its own size + soft round sprite.
+      const particleMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          uTexture: { value: makeDotTexture() },
+          uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+        },
+        vertexShader: `
+          attribute float size;
+          varying vec3 vColor;
+          uniform float uPixelRatio;
+          void main() {
+            vColor = color;
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            gl_PointSize = size * 320.0 * uPixelRatio / -mvPosition.z;
+            gl_Position = projectionMatrix * mvPosition;
+          }
+        `,
+        fragmentShader: `
+          uniform sampler2D uTexture;
+          varying vec3 vColor;
+          void main() {
+            vec4 tex = texture2D(uTexture, gl_PointCoord);
+            if (tex.a < 0.05) discard;
+            gl_FragColor = vec4(vColor, tex.a);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        vertexColors: true,
+      });
+
+      const points = new THREE.Points(geometry, particleMaterial);
+      scene.add(points);
+
+      // ----- Resize handling: size canvas to its display box -----
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        const w = Math.max(1, rect.width);
+        const h = Math.max(1, rect.height);
+        renderer.setSize(w, h, false);
+        camera.aspect = w / h;
+        // Scale orb so it occupies ~40% of viewport height regardless of box.
+        const targetPx = window.innerHeight * 0.4;
+        // Adjust camera distance so the unit sphere maps near targetPx.
+        const fovRad = (camera.fov * Math.PI) / 180;
+        const visibleH = 2 * Math.tan(fovRad / 2) * camera.position.z;
+        const desiredWorld = (targetPx / h) * visibleH;
+        // Scale the points/glow group to match desired world diameter (~2*RADIUS).
+        const scale = desiredWorld / (2 * RADIUS);
+        points.scale.setScalar(scale);
+        glow.scale.set(3.4 * scale, 3.4 * scale, 1);
+        camera.updateProjectionMatrix();
+      }
+      window.addEventListener("resize", resize);
+
+      /* =========================================================
+         ANIMATION LOOP
+         ========================================================= */
+      const posAttr = geometry.getAttribute("position");
+      const sizeAttr = geometry.getAttribute("size");
+      let phase = 0; // noise time
+      let ripplePhase = 0;
+      let rotation = 0;
+      let breathT = 0;
+      const tmp = new THREE.Vector3();
+
+      function lerp(a, b, f) {
+        return a + (b - a) * f;
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        // Smoothly interpolate live params toward target state.
+        const target = STATE_PARAMS[currentState];
+        const ease = 0.04;
+        live.amp = lerp(live.amp, target.amp, ease);
+        live.freq = lerp(live.freq, target.freq, ease);
+        live.speed = lerp(live.speed, target.speed, ease);
+        live.spread = lerp(live.spread, target.spread, ease);
+        live.glow = lerp(live.glow, target.glow, ease);
+        live.ripple = lerp(live.ripple, target.ripple, ease);
+
+        phase += 0.005 + live.speed * 0.02;
+        ripplePhase += 0.04 + live.speed * 0.03;
+        breathT += 0.012;
+        rotation += 0.0012 + live.speed * 0.004;
+
+        points.rotation.y = rotation;
+        points.rotation.x = Math.sin(rotation * 0.4) * 0.15;
+
+        // Breathing: gentle global scale oscillation.
+        const breath = 1 + Math.sin(breathT) * 0.025;
+
+        const pos = posAttr.array;
+        const szs = sizeAttr.array;
+
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+          const ix = i * 3;
+          const dx = baseDir[ix];
+          const dy = baseDir[ix + 1];
+          const dz = baseDir[ix + 2];
+
+          // Flowing surface noise displacement.
+          const n = SimplexNoise.noise(
+            dx * live.freq + phase,
+            dy * live.freq + phase * 0.8,
+            dz * live.freq + phase * 1.2
+          );
+
+          // Rhythmic ripple traveling outward from center (state-dependent).
+          const rip =
+            live.ripple *
+            0.18 *
+            Math.sin(ripplePhase - (1 - edgeBias[i]) * 6.0 + i * 0.0015);
+
+          // Radial offset: base radius + noise amplitude + outward edge spread + ripple.
+          const offset =
+            RADIUS +
+            n * live.amp +
+            edgeBias[i] * live.spread +
+            rip;
+
+          const r = offset * breath;
+          pos[ix] = dx * r;
+          pos[ix + 1] = dy * r;
+          pos[ix + 2] = dz * r;
+
+          // Particle size flickers slightly with noise for life.
+          szs[i] = sizeBase[i] * (1 + Math.abs(n) * 0.5);
+        }
+
+        posAttr.needsUpdate = true;
+        sizeAttr.needsUpdate = true;
+
+        // Glow intensity follows state.
+        glowMaterial.opacity = 0.5 + (live.glow - 0.5) * 0.8;
+
+        renderer.render(scene, camera);
+      }
+
+      resize();
+      animate();
+
+      // Click / tap the core to activate.
+      canvas.addEventListener("click", onCoreActivate);
+      canvas.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        onCoreActivate();
+      }, { passive: false });
+
+      /* =========================================================
+         NEURAL OUTPUT WAVEFORM
+         Flatline at rest; activates (waves) when RESPONDING.
+         ========================================================= */
+      (function waveform() {
+        const wcanvas = document.getElementById("waveform");
+        const wctx = wcanvas.getContext("2d");
+        let t = 0;
+        let activity = 0; // 0 = flatline, 1 = active
+
+        function resizeWave() {
+          const rect = wcanvas.getBoundingClientRect();
+          const ratio = Math.min(window.devicePixelRatio, 2);
+          wcanvas.width = rect.width * ratio;
+          wcanvas.height = rect.height * ratio;
+          wctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        }
+        resizeWave();
+        window.addEventListener("resize", resizeWave);
+
+        function draw() {
+          requestAnimationFrame(draw);
+          const rect = wcanvas.getBoundingClientRect();
+          const w = rect.width;
+          const h = rect.height;
+          t += 0.08;
+
+          // Target activity based on state.
+          const targetAct =
+            currentState === STATE.RESPONDING
+              ? 1
+              : currentState === STATE.LISTENING
+              ? 0.45
+              : 0;
+          activity += (targetAct - activity) * 0.06;
+
+          wctx.clearRect(0, 0, w, h);
+          wctx.lineWidth = 1.4;
+          wctx.strokeStyle =
+            activity > 0.1 ? "rgba(0,255,255,0.85)" : "rgba(0,122,122,0.6)";
+          wctx.shadowBlur = activity > 0.1 ? 8 : 0;
+          wctx.shadowColor = "rgba(0,255,255,0.6)";
+          wctx.beginPath();
+
+          const mid = h / 2;
+          const segments = 120;
+          for (let i = 0; i <= segments; i++) {
+            const x = (i / segments) * w;
+            // Envelope so the wave tapers at the edges.
+            const env = Math.sin((i / segments) * Math.PI);
+            const wave =
+              Math.sin(i * 0.35 + t) * 0.6 +
+              Math.sin(i * 0.13 - t * 1.5) * 0.4;
+            const y = mid + wave * env * activity * (h * 0.36);
+            if (i === 0) wctx.moveTo(x, y);
+            else wctx.lineTo(x, y);
+          }
+          wctx.stroke();
+        }
+        draw();
+      })();
+    </script>
+  </body>
+</html>
