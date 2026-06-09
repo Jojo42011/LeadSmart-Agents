@@ -47,7 +47,7 @@
         background-size: 56px 100px;
       }
 
-      /* Radial vignette over everything */
+      /* Subtle vignette: pure black at corners fading to slightly less black in center */
       .vignette {
         position: fixed;
         inset: 0;
@@ -55,9 +55,36 @@
         pointer-events: none;
         background: radial-gradient(
           ellipse at center,
-          rgba(0, 0, 0, 0) 40%,
-          rgba(0, 0, 0, 0.55) 100%
+          rgba(0, 0, 0, 0) 35%,
+          rgba(0, 0, 0, 0.4) 75%,
+          rgba(0, 0, 0, 0.92) 100%
         );
+      }
+
+      /* Faint scan line traveling slowly down the viewport */
+      .scanline {
+        position: fixed;
+        left: 0;
+        right: 0;
+        top: 0;
+        height: 140px;
+        z-index: 3;
+        pointer-events: none;
+        background: linear-gradient(
+          180deg,
+          rgba(0, 255, 255, 0) 0%,
+          rgba(0, 255, 255, 0.035) 50%,
+          rgba(0, 255, 255, 0) 100%
+        );
+        animation: scanMove 8s linear infinite;
+      }
+      @keyframes scanMove {
+        0% {
+          transform: translateY(-140px);
+        }
+        100% {
+          transform: translateY(100vh);
+        }
       }
 
       #app {
@@ -65,10 +92,9 @@
         z-index: 2;
         display: grid;
         grid-template-rows: 56px 1fr;
-        grid-template-columns: 240px 1fr 280px;
         grid-template-areas:
-          "topbar topbar topbar"
-          "left   center right";
+          "topbar"
+          "center";
         height: 100vh;
         width: 100vw;
       }
@@ -108,109 +134,6 @@
         font-variant-numeric: tabular-nums;
       }
 
-      /* ---------- LEFT PANEL ---------- */
-      .panel-left {
-        grid-area: left;
-        border-left: 2px solid rgba(0, 255, 255, 0.5);
-        border-right: 1px solid rgba(0, 122, 122, 0.18);
-        padding: 26px 22px 26px 24px;
-        display: flex;
-        flex-direction: column;
-        gap: 26px;
-        overflow: hidden;
-      }
-      .panel-title {
-        font-size: 10px;
-        letter-spacing: 3px;
-        color: var(--text-dim);
-        text-transform: uppercase;
-        margin-bottom: 14px;
-        white-space: nowrap;
-      }
-      .agent-list {
-        display: flex;
-        flex-direction: column;
-        gap: 18px;
-      }
-      .agent {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-      .agent__dot {
-        flex: 0 0 9px;
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        position: relative;
-      }
-      .agent__dot::after {
-        content: "";
-        position: absolute;
-        inset: -4px;
-        border-radius: 50%;
-        opacity: 0.45;
-        background: inherit;
-        filter: blur(3px);
-      }
-      .dot--green {
-        background: var(--green);
-        box-shadow: 0 0 8px var(--green);
-        animation: pulseDot 2.4s ease-in-out infinite;
-      }
-      .dot--amber {
-        background: var(--amber);
-        box-shadow: 0 0 7px var(--amber);
-      }
-      .dot--red {
-        background: var(--red);
-        box-shadow: 0 0 7px var(--red);
-      }
-      @keyframes pulseDot {
-        0%,
-        100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.45;
-        }
-      }
-      .agent__meta {
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-        min-width: 0;
-      }
-      .agent__name {
-        font-size: 11px;
-        letter-spacing: 1.5px;
-        color: var(--text);
-        text-transform: uppercase;
-        white-space: nowrap;
-      }
-      .agent__state {
-        font-size: 9px;
-        letter-spacing: 2px;
-        text-transform: uppercase;
-      }
-      .state--online {
-        color: var(--green);
-      }
-      .state--standby {
-        color: var(--amber);
-      }
-      .state--offline {
-        color: var(--red);
-      }
-      .panel-left__foot {
-        margin-top: auto;
-        font-size: 9px;
-        letter-spacing: 2px;
-        color: var(--text-dim);
-        line-height: 1.8;
-        white-space: nowrap;
-      }
-
       /* ---------- CENTER ---------- */
       .center {
         grid-area: center;
@@ -229,6 +152,55 @@
         cursor: pointer;
         z-index: 1;
       }
+
+      /* Faint concentric orbit rings around the orb */
+      .orbit-rings {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        pointer-events: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .ring {
+        position: absolute;
+        border-radius: 50%;
+        border: 1px solid rgba(0, 255, 255, 0.04);
+      }
+      .ring--1 {
+        width: 50vh;
+        height: 50vh;
+        border-top-color: rgba(0, 255, 255, 0.2);
+        animation: spin 38s linear infinite;
+      }
+      .ring--2 {
+        width: 63vh;
+        height: 63vh;
+        border-bottom-color: rgba(0, 255, 255, 0.16);
+        animation: spin 52s linear infinite reverse;
+      }
+      .ring--3 {
+        width: 77vh;
+        height: 77vh;
+        border-left-color: rgba(0, 255, 255, 0.12);
+        animation: spin 68s linear infinite;
+      }
+      .ring--4 {
+        width: 92vh;
+        height: 92vh;
+        border-right-color: rgba(0, 255, 255, 0.09);
+        animation: spin 86s linear infinite reverse;
+      }
+      @keyframes spin {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
       .center__overlay {
         position: relative;
         z-index: 2;
@@ -247,16 +219,32 @@
         font-size: 11px;
         letter-spacing: 5px;
         text-transform: uppercase;
-        border: 1px solid var(--cyan-dim);
+        border: 1px solid var(--cyan);
         border-radius: 2px;
         color: var(--cyan-soft);
         background: rgba(0, 20, 20, 0.3);
+        box-shadow: 0 0 10px rgba(0, 255, 255, 0.25),
+          inset 0 0 8px rgba(0, 255, 255, 0.1);
         transition: color 0.5s ease, border-color 0.5s ease,
           text-shadow 0.5s ease, background 0.5s ease;
       }
       .status-pill[data-state="standby"] {
         color: var(--cyan-soft);
-        border-color: var(--cyan-dim);
+        border-color: var(--cyan);
+        animation: pillGlow 2.8s ease-in-out infinite;
+      }
+      @keyframes pillGlow {
+        0%,
+        100% {
+          box-shadow: 0 0 8px rgba(0, 255, 255, 0.2),
+            inset 0 0 6px rgba(0, 255, 255, 0.08);
+          border-color: rgba(0, 255, 255, 0.55);
+        }
+        50% {
+          box-shadow: 0 0 18px rgba(0, 255, 255, 0.55),
+            inset 0 0 12px rgba(0, 255, 255, 0.18);
+          border-color: rgba(0, 255, 255, 0.95);
+        }
       }
       .status-pill[data-state="listening"] {
         color: var(--bg);
@@ -264,6 +252,7 @@
         border-color: var(--cyan);
         text-shadow: none;
         box-shadow: 0 0 18px rgba(0, 255, 255, 0.5);
+        animation: none;
       }
       .status-pill[data-state="processing"] {
         color: #ffffff;
@@ -275,6 +264,7 @@
         color: var(--cyan);
         border-color: var(--cyan);
         text-shadow: 0 0 12px rgba(0, 255, 255, 0.7);
+        animation: none;
       }
       @keyframes pillPulse {
         0%,
@@ -294,6 +284,16 @@
         text-transform: uppercase;
         text-align: center;
         transition: color 0.5s ease;
+        animation: labelBreath 4.5s ease-in-out infinite;
+      }
+      @keyframes labelBreath {
+        0%,
+        100% {
+          opacity: 0.35;
+        }
+        50% {
+          opacity: 0.9;
+        }
       }
       .voice-note {
         position: absolute;
@@ -305,137 +305,12 @@
         opacity: 0.8;
         display: none;
       }
-
-      /* ---------- RIGHT PANEL ---------- */
-      .panel-right {
-        grid-area: right;
-        border-left: 1px solid rgba(0, 122, 122, 0.18);
-        padding: 26px 20px 22px 20px;
-        display: flex;
-        flex-direction: column;
-        gap: 22px;
-        overflow: hidden;
-      }
-      .transcript {
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-        flex: 1 1 auto;
-      }
-      .transcript__log {
-        margin-top: 14px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 14px;
-        padding-right: 6px;
-        scrollbar-width: thin;
-        scrollbar-color: var(--cyan-dim) transparent;
-      }
-      .transcript__log::-webkit-scrollbar {
-        width: 4px;
-      }
-      .transcript__log::-webkit-scrollbar-thumb {
-        background: var(--cyan-dim);
-        border-radius: 2px;
-      }
-      .entry {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        animation: fadeIn 0.4s ease;
-      }
-      @keyframes fadeIn {
-        from {
-          opacity: 0;
-          transform: translateY(4px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-      .entry__who {
-        font-size: 9px;
-        letter-spacing: 2px;
-        text-transform: uppercase;
-      }
-      .entry--operator .entry__who {
-        color: var(--cyan);
-      }
-      .entry--user .entry__who {
-        color: var(--text-dim);
-      }
-      .entry__text {
-        font-size: 12px;
-        line-height: 1.5;
-        color: var(--text);
-        letter-spacing: 0.5px;
-      }
-      .entry--operator .entry__text {
-        color: var(--cyan-soft);
-      }
-
-      .neural {
-        flex: 0 0 auto;
-      }
-      .waveform {
-        margin-top: 12px;
-        width: 100%;
-        height: 46px;
-        display: block;
-      }
-
-      .directives {
-        flex: 0 0 auto;
-      }
-      .directives__list {
-        margin-top: 12px;
-        list-style: none;
-        display: flex;
-        flex-direction: column;
-        gap: 9px;
-      }
-      .directives__list li {
-        position: relative;
-        padding-left: 16px;
-        font-size: 10px;
-        letter-spacing: 1.5px;
-        color: var(--text-dim);
-        text-transform: uppercase;
-        line-height: 1.4;
-      }
-      .directives__list li::before {
-        content: "";
-        position: absolute;
-        left: 0;
-        top: 5px;
-        width: 5px;
-        height: 5px;
-        background: var(--cyan-dim);
-        box-shadow: 0 0 5px var(--cyan-dim);
-      }
-
-      .section-head {
-        font-size: 10px;
-        letter-spacing: 3px;
-        color: var(--cyan-soft);
-        text-transform: uppercase;
-        border-bottom: 1px solid rgba(0, 122, 122, 0.3);
-        padding-bottom: 8px;
-      }
-
-      /* Responsive guard for smaller viewports */
-      @media (max-width: 1300px) {
-        #app {
-          grid-template-columns: 210px 1fr 250px;
-        }
-      }
     </style>
   </head>
   <body>
     <div class="hexgrid"></div>
     <div class="vignette"></div>
+    <div class="scanline"></div>
 
     <div id="app">
       <!-- TOP BAR -->
@@ -446,51 +321,15 @@
         <div class="topbar__clock" id="clock">--:--:--</div>
       </header>
 
-      <!-- LEFT PANEL -->
-      <aside class="panel-left">
-        <div>
-          <div class="panel-title">Agent Status</div>
-          <div class="agent-list">
-            <div class="agent">
-              <span class="agent__dot dot--green"></span>
-              <span class="agent__meta">
-                <span class="agent__name">Scrub Agent</span>
-                <span class="agent__state state--online">Online</span>
-              </span>
-            </div>
-            <div class="agent">
-              <span class="agent__dot dot--amber"></span>
-              <span class="agent__meta">
-                <span class="agent__name">Payment Agent</span>
-                <span class="agent__state state--standby">Standby</span>
-              </span>
-            </div>
-            <div class="agent">
-              <span class="agent__dot dot--amber"></span>
-              <span class="agent__meta">
-                <span class="agent__name">Fraud Detection</span>
-                <span class="agent__state state--standby">Standby</span>
-              </span>
-            </div>
-            <div class="agent">
-              <span class="agent__dot dot--red"></span>
-              <span class="agent__meta">
-                <span class="agent__name">Chat Agent</span>
-                <span class="agent__state state--offline">Offline</span>
-              </span>
-            </div>
-          </div>
-        </div>
-        <div class="panel-left__foot">
-          SYS // CORE ONLINE<br />
-          LINK // SECURE<br />
-          UPTIME // NOMINAL
-        </div>
-      </aside>
-
       <!-- CENTER -->
       <main class="center">
         <canvas id="orb-canvas"></canvas>
+        <div class="orbit-rings">
+          <div class="ring ring--1"></div>
+          <div class="ring ring--2"></div>
+          <div class="ring ring--3"></div>
+          <div class="ring ring--4"></div>
+        </div>
         <div class="center__overlay">
           <div class="status-pill" id="statusPill" data-state="standby">
             Standby
@@ -499,34 +338,6 @@
         </div>
         <div class="voice-note" id="voiceNote">Voice Unavailable</div>
       </main>
-
-      <!-- RIGHT PANEL -->
-      <aside class="panel-right">
-        <section class="transcript">
-          <div class="section-head">Transcript</div>
-          <div class="transcript__log" id="transcript">
-            <div class="entry entry--operator">
-              <span class="entry__who">Operator</span>
-              <span class="entry__text">All systems nominal. Standing by, sir.</span>
-            </div>
-          </div>
-        </section>
-
-        <section class="neural">
-          <div class="section-head">Neural Output</div>
-          <canvas class="waveform" id="waveform"></canvas>
-        </section>
-
-        <section class="directives">
-          <div class="section-head">Directives</div>
-          <ul class="directives__list">
-            <li>Filter noise, surface priorities</li>
-            <li>Protect operator time</li>
-            <li>Dispatch agents efficiently</li>
-            <li>Maintain operational awareness</li>
-          </ul>
-        </section>
-      </aside>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -652,11 +463,13 @@
       };
 
       // Per-state target parameters the orb interpolates toward.
+      // Amplitude / spread kept low so the sphere holds a tight, clean
+      // silhouette — a gentle breathing pulse, not a chaotic dust cloud.
       const STATE_PARAMS = {
-        standby:    { amp: 0.16, freq: 0.55, speed: 0.18, spread: 0.10, glow: 0.55, ripple: 0.0 },
-        listening:  { amp: 0.34, freq: 0.85, speed: 0.34, spread: 0.16, glow: 0.85, ripple: 0.6 },
-        processing: { amp: 0.62, freq: 1.70, speed: 0.95, spread: 0.40, glow: 1.30, ripple: 0.2 },
-        responding: { amp: 0.30, freq: 0.70, speed: 0.30, spread: 0.20, glow: 1.00, ripple: 1.0 },
+        standby:    { amp: 0.035, freq: 0.55, speed: 0.18, spread: 0.015, glow: 0.55, ripple: 0.0 },
+        listening:  { amp: 0.07,  freq: 0.85, speed: 0.34, spread: 0.03,  glow: 0.85, ripple: 0.5 },
+        processing: { amp: 0.13,  freq: 1.70, speed: 0.95, spread: 0.06,  glow: 1.30, ripple: 0.2 },
+        responding: { amp: 0.06,  freq: 0.70, speed: 0.30, spread: 0.03,  glow: 1.00, ripple: 0.8 },
       };
 
       let currentState = STATE.STANDBY;
@@ -666,7 +479,6 @@
 
       const statusPill = document.getElementById("statusPill");
       const coreLabel = document.getElementById("coreLabel");
-      const transcriptEl = document.getElementById("transcript");
 
       const CORE_LABELS = {
         standby: "Tap Core To Speak",
@@ -680,22 +492,6 @@
         statusPill.dataset.state = next;
         statusPill.textContent = next;
         coreLabel.textContent = CORE_LABELS[next];
-      }
-
-      function addEntry(who, text) {
-        const entry = document.createElement("div");
-        entry.className =
-          "entry " + (who === "Operator" ? "entry--operator" : "entry--user");
-        const w = document.createElement("span");
-        w.className = "entry__who";
-        w.textContent = who;
-        const t = document.createElement("span");
-        t.className = "entry__text";
-        t.textContent = text;
-        entry.appendChild(w);
-        entry.appendChild(t);
-        transcriptEl.appendChild(entry);
-        transcriptEl.scrollTop = transcriptEl.scrollHeight;
       }
 
       /* =========================================================
@@ -715,8 +511,6 @@
         recognition.lang = "en-US";
 
         recognition.onresult = (event) => {
-          const transcript = event.results[0][0].transcript;
-          addEntry("Operator", "USER: " + transcript);
           beginProcessing();
         };
         recognition.onerror = () => {
@@ -769,7 +563,6 @@
 
       function beginResponding() {
         transitionTo(STATE.RESPONDING);
-        addEntry("Operator", "Understood, sir. Standing by.");
         stateTimer = setTimeout(() => {
           transitionTo(STATE.STANDBY);
         }, 3000);
@@ -805,6 +598,35 @@
       const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
       camera.position.z = 3.4;
 
+      // ----- Bright inner core sprite (intense teal/cyan center) -----
+      function makeCoreTexture() {
+        const size = 256;
+        const c = document.createElement("canvas");
+        c.width = c.height = size;
+        const ctx = c.getContext("2d");
+        const g = ctx.createRadialGradient(
+          size / 2, size / 2, 0,
+          size / 2, size / 2, size / 2
+        );
+        g.addColorStop(0.0, "rgba(220, 255, 255, 0.95)");
+        g.addColorStop(0.12, "rgba(120, 255, 255, 0.7)");
+        g.addColorStop(0.35, "rgba(0, 200, 210, 0.28)");
+        g.addColorStop(0.7, "rgba(0, 120, 150, 0.06)");
+        g.addColorStop(1.0, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+        return new THREE.CanvasTexture(c);
+      }
+      const coreMaterial = new THREE.SpriteMaterial({
+        map: makeCoreTexture(),
+        color: 0xffffff,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const core = new THREE.Sprite(coreMaterial);
+      scene.add(core);
+
       // ----- Inner glow sprite (deep blue-green radial light) -----
       function makeGlowTexture() {
         const size = 256;
@@ -815,9 +637,9 @@
           size / 2, size / 2, 0,
           size / 2, size / 2, size / 2
         );
-        g.addColorStop(0.0, "rgba(0, 180, 170, 0.55)");
-        g.addColorStop(0.25, "rgba(0, 90, 120, 0.30)");
-        g.addColorStop(0.6, "rgba(0, 40, 80, 0.10)");
+        g.addColorStop(0.0, "rgba(0, 200, 200, 0.5)");
+        g.addColorStop(0.25, "rgba(0, 110, 140, 0.28)");
+        g.addColorStop(0.6, "rgba(0, 50, 90, 0.1)");
         g.addColorStop(1.0, "rgba(0, 0, 0, 0)");
         ctx.fillStyle = g;
         ctx.fillRect(0, 0, size, size);
@@ -831,8 +653,36 @@
         depthWrite: false,
       });
       const glow = new THREE.Sprite(glowMaterial);
-      glow.scale.set(3.4, 3.4, 1);
       scene.add(glow);
+
+      // ----- Soft outer halo bloom ring (~1.2x sphere radius) -----
+      function makeHaloTexture() {
+        const size = 256;
+        const c = document.createElement("canvas");
+        c.width = c.height = size;
+        const ctx = c.getContext("2d");
+        const g = ctx.createRadialGradient(
+          size / 2, size / 2, 0,
+          size / 2, size / 2, size / 2
+        );
+        g.addColorStop(0.0, "rgba(0, 255, 255, 0)");
+        g.addColorStop(0.72, "rgba(0, 255, 255, 0)");
+        g.addColorStop(0.85, "rgba(0, 230, 255, 0.18)");
+        g.addColorStop(0.92, "rgba(0, 200, 255, 0.08)");
+        g.addColorStop(1.0, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+        return new THREE.CanvasTexture(c);
+      }
+      const haloMaterial = new THREE.SpriteMaterial({
+        map: makeHaloTexture(),
+        color: 0xffffff,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const halo = new THREE.Sprite(haloMaterial);
+      scene.add(halo);
 
       // ----- Particle dot texture (soft round) -----
       function makeDotTexture() {
@@ -853,7 +703,7 @@
       }
 
       // ----- Build particle sphere -----
-      const PARTICLE_COUNT = 4200;
+      const PARTICLE_COUNT = 5000;
       const RADIUS = 1.0;
 
       const positions = new Float32Array(PARTICLE_COUNT * 3);
@@ -865,8 +715,8 @@
       const edgeBias = new Float32Array(PARTICLE_COUNT);
       const sizeBase = new Float32Array(PARTICLE_COUNT);
 
-      const colorInner = new THREE.Color(0xffffff);
-      const colorOuter = new THREE.Color(0x66f0ff);
+      const colorInner = new THREE.Color(0xeaffff);
+      const colorOuter = new THREE.Color(0x33e6ff);
 
       for (let i = 0; i < PARTICLE_COUNT; i++) {
         // Even distribution over a sphere (golden spiral).
@@ -885,17 +735,18 @@
         positions[i * 3 + 1] = y * RADIUS;
         positions[i * 3 + 2] = z * RADIUS;
 
-        // Some particles biased to sit further out -> atmospheric edge.
-        const bias = Math.pow(Math.random(), 2.2); // mostly near surface
+        // Particles sit very close to the surface for a clean silhouette.
+        const bias = Math.pow(Math.random(), 3.0);
         edgeBias[i] = bias;
 
-        const mix = bias * 0.9 + Math.random() * 0.1;
+        const mix = bias * 0.85 + Math.random() * 0.15;
         const col = colorInner.clone().lerp(colorOuter, mix);
         colors[i * 3] = col.r;
         colors[i * 3 + 1] = col.g;
         colors[i * 3 + 2] = col.b;
 
-        const s = 0.018 + Math.random() * 0.022 + bias * 0.01;
+        // Small, uniform particles -> ball of energy, not a dust cloud.
+        const s = 0.011 + Math.random() * 0.005;
         sizeBase[i] = s;
         sizes[i] = s;
       }
@@ -943,6 +794,11 @@
       const points = new THREE.Points(geometry, particleMaterial);
       scene.add(points);
 
+      // ----- Scale state shared between resize and the animation loop -----
+      let orbScale = 1; // base scale set by resize()
+      let hoverLevel = 0; // 0 -> 1, eased toward hoverTarget
+      let hoverTarget = 0;
+
       // ----- Resize handling: size canvas to its display box -----
       function resize() {
         const rect = canvas.getBoundingClientRect();
@@ -956,13 +812,15 @@
         const fovRad = (camera.fov * Math.PI) / 180;
         const visibleH = 2 * Math.tan(fovRad / 2) * camera.position.z;
         const desiredWorld = (targetPx / h) * visibleH;
-        // Scale the points/glow group to match desired world diameter (~2*RADIUS).
-        const scale = desiredWorld / (2 * RADIUS);
-        points.scale.setScalar(scale);
-        glow.scale.set(3.4 * scale, 3.4 * scale, 1);
+        // Base scale so the points map to the desired world diameter (~2*RADIUS).
+        orbScale = desiredWorld / (2 * RADIUS);
         camera.updateProjectionMatrix();
       }
       window.addEventListener("resize", resize);
+
+      // Hover: slight scale-up + intensified glow, pointer cursor handled in CSS.
+      canvas.addEventListener("mouseenter", () => (hoverTarget = 1));
+      canvas.addEventListener("mouseleave", () => (hoverTarget = 0));
 
       /* =========================================================
          ANIMATION LOOP
@@ -992,6 +850,9 @@
         live.glow = lerp(live.glow, target.glow, ease);
         live.ripple = lerp(live.ripple, target.ripple, ease);
 
+        // Ease hover level toward its target.
+        hoverLevel = lerp(hoverLevel, hoverTarget, 0.08);
+
         phase += 0.005 + live.speed * 0.02;
         ripplePhase += 0.04 + live.speed * 0.03;
         breathT += 0.012;
@@ -1000,8 +861,8 @@
         points.rotation.y = rotation;
         points.rotation.x = Math.sin(rotation * 0.4) * 0.15;
 
-        // Breathing: gentle global scale oscillation.
-        const breath = 1 + Math.sin(breathT) * 0.025;
+        // Breathing: subtle, gentle global scale oscillation.
+        const breath = 1 + Math.sin(breathT) * 0.015;
 
         const pos = posAttr.array;
         const szs = sizeAttr.array;
@@ -1022,7 +883,7 @@
           // Rhythmic ripple traveling outward from center (state-dependent).
           const rip =
             live.ripple *
-            0.18 *
+            0.08 *
             Math.sin(ripplePhase - (1 - edgeBias[i]) * 6.0 + i * 0.0015);
 
           // Radial offset: base radius + noise amplitude + outward edge spread + ripple.
@@ -1038,14 +899,23 @@
           pos[ix + 2] = dz * r;
 
           // Particle size flickers slightly with noise for life.
-          szs[i] = sizeBase[i] * (1 + Math.abs(n) * 0.5);
+          szs[i] = sizeBase[i] * (1 + Math.abs(n) * 0.35);
         }
 
         posAttr.needsUpdate = true;
         sizeAttr.needsUpdate = true;
 
-        // Glow intensity follows state.
-        glowMaterial.opacity = 0.5 + (live.glow - 0.5) * 0.8;
+        // Apply base scale + hover scale (1.05x) to the orb and its halos.
+        const s = orbScale * (1 + 0.05 * hoverLevel);
+        points.scale.setScalar(s);
+        core.scale.set(2.2 * s, 2.2 * s, 1);
+        glow.scale.set(3.4 * s, 3.4 * s, 1);
+        halo.scale.set(2.85 * s, 2.85 * s, 1);
+
+        // Glow + core intensity follow state, brighten on hover.
+        glowMaterial.opacity = 0.5 + (live.glow - 0.5) * 0.8 + hoverLevel * 0.25;
+        coreMaterial.opacity = 0.85 + (live.glow - 0.55) * 0.4 + hoverLevel * 0.3;
+        haloMaterial.opacity = 0.6 + hoverLevel * 0.4;
 
         renderer.render(scene, camera);
       }
@@ -1059,68 +929,6 @@
         e.preventDefault();
         onCoreActivate();
       }, { passive: false });
-
-      /* =========================================================
-         NEURAL OUTPUT WAVEFORM
-         Flatline at rest; activates (waves) when RESPONDING.
-         ========================================================= */
-      (function waveform() {
-        const wcanvas = document.getElementById("waveform");
-        const wctx = wcanvas.getContext("2d");
-        let t = 0;
-        let activity = 0; // 0 = flatline, 1 = active
-
-        function resizeWave() {
-          const rect = wcanvas.getBoundingClientRect();
-          const ratio = Math.min(window.devicePixelRatio, 2);
-          wcanvas.width = rect.width * ratio;
-          wcanvas.height = rect.height * ratio;
-          wctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-        }
-        resizeWave();
-        window.addEventListener("resize", resizeWave);
-
-        function draw() {
-          requestAnimationFrame(draw);
-          const rect = wcanvas.getBoundingClientRect();
-          const w = rect.width;
-          const h = rect.height;
-          t += 0.08;
-
-          // Target activity based on state.
-          const targetAct =
-            currentState === STATE.RESPONDING
-              ? 1
-              : currentState === STATE.LISTENING
-              ? 0.45
-              : 0;
-          activity += (targetAct - activity) * 0.06;
-
-          wctx.clearRect(0, 0, w, h);
-          wctx.lineWidth = 1.4;
-          wctx.strokeStyle =
-            activity > 0.1 ? "rgba(0,255,255,0.85)" : "rgba(0,122,122,0.6)";
-          wctx.shadowBlur = activity > 0.1 ? 8 : 0;
-          wctx.shadowColor = "rgba(0,255,255,0.6)";
-          wctx.beginPath();
-
-          const mid = h / 2;
-          const segments = 120;
-          for (let i = 0; i <= segments; i++) {
-            const x = (i / segments) * w;
-            // Envelope so the wave tapers at the edges.
-            const env = Math.sin((i / segments) * Math.PI);
-            const wave =
-              Math.sin(i * 0.35 + t) * 0.6 +
-              Math.sin(i * 0.13 - t * 1.5) * 0.4;
-            const y = mid + wave * env * activity * (h * 0.36);
-            if (i === 0) wctx.moveTo(x, y);
-            else wctx.lineTo(x, y);
-          }
-          wctx.stroke();
-        }
-        draw();
-      })();
     </script>
   </body>
 </html>
