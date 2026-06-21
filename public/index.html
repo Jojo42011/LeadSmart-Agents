@@ -108,6 +108,28 @@
             </table>
           </div>
           <p class="table-empty" id="scrubsEmpty" hidden>No scrub log entries.</p>
+
+          <div class="panel panel--failed" style="margin-top: 2rem;">
+            <div class="panel__head">
+              <h2 class="panel__title">FAILED &amp; SKIPPED</h2>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table data-table--failed">
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>Publisher</th>
+                    <th>Inbound Call ID</th>
+                    <th>Task ID</th>
+                    <th>Status</th>
+                    <th>Error</th>
+                  </tr>
+                </thead>
+                <tbody id="failedScrubsBody"></tbody>
+              </table>
+            </div>
+            <p class="table-empty" id="failedScrubsEmpty" hidden>No failed or skipped entries.</p>
+          </div>
         </section>
 
         <p class="load-error" id="loadError" hidden></p>

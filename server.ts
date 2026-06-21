@@ -1,3 +1,4 @@
+import "dotenv/config";
 import * as path from "path";
 import express from "express";
 import Database from "better-sqlite3";
@@ -5,6 +6,7 @@ import { ensureScrubLogSchema } from "./lib/logger";
 import { getDataDir, getDbPath, getPublicDir } from "./lib/paths";
 import { importDatabaseFile } from "./lib/importDatabase";
 import { triggerPollNow } from "./lib/pollScheduler";
+import { fetchPublisherPayouts, fetchPolyaresPayouts, mergeAffiliates } from "./agents/paymentAgent";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const DB_PATH = getDbPath();
@@ -337,6 +339,219 @@ app.get("/api/stats", (_req, res) => {
 
 app.get("/jarvis", (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "jarvis.html"));
+});
+
+const CHICAGO_TZ = "America/Chicago";
+
+function getChicagoOffsetMs(at: Date): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO_TZ,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const parts = dtf.formatToParts(at);
+  const read = (type: string) =>
+    parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+  let hour = read("hour");
+  if (hour === 24) {
+    hour = 0;
+  }
+  const asUtc = Date.UTC(
+    read("year"),
+    read("month") - 1,
+    read("day"),
+    hour,
+    read("minute"),
+    read("second")
+  );
+  return asUtc - at.getTime();
+}
+
+function chicagoLocalToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  millisecond: number
+): Date {
+  let utcMs = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  for (let i = 0; i < 3; i++) {
+    const offset = getChicagoOffsetMs(new Date(utcMs));
+    utcMs =
+      Date.UTC(year, month - 1, day, hour, minute, second, millisecond) - offset;
+  }
+  return new Date(utcMs);
+}
+
+function chicagoNowYearMonth(): { year: number; monthNum: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO_TZ,
+    year: "numeric",
+    month: "numeric",
+  }).formatToParts(new Date());
+  const read = (type: string) =>
+    parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10);
+  return { year: read("year"), monthNum: read("month") };
+}
+
+function monthToDateRange(month?: string): {
+  month: string;
+  startDate: string;
+  endDate: string;
+} {
+  let year: number;
+  let monthNum: number;
+
+  if (month && /^\d{4}-\d{2}$/.test(month)) {
+    const [y, m] = month.split("-");
+    year = parseInt(y, 10);
+    monthNum = parseInt(m, 10);
+  } else {
+    const now = chicagoNowYearMonth();
+    year = now.year;
+    monthNum = now.monthNum;
+  }
+
+  const monthKey = `${year}-${String(monthNum).padStart(2, "0")}`;
+  const start = chicagoLocalToUtc(year, monthNum, 1, 0, 0, 0, 0);
+  const nextMonth = monthNum === 12 ? 1 : monthNum + 1;
+  const nextYear = monthNum === 12 ? year + 1 : year;
+  const end = new Date(
+    chicagoLocalToUtc(nextYear, nextMonth, 1, 0, 0, 0, 0).getTime() - 1
+  );
+
+  return {
+    month: monthKey,
+    startDate: start.toISOString(),
+    endDate: end.toISOString(),
+  };
+}
+
+app.get("/payment", (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "payment.html"));
+});
+
+app.get("/payments", (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "payment.html"));
+});
+
+app.get("/api/payment/stats", async (req, res) => {
+  try {
+    const monthParam =
+      typeof req.query.month === "string" ? req.query.month : undefined;
+    const range = monthToDateRange(monthParam);
+    const publishers = await fetchPublisherPayouts(
+      range.startDate,
+      range.endDate
+    );
+
+    const totalPayout = publishers.reduce(
+      (sum, row) => sum + row.payoutAmount,
+      0
+    );
+
+    res.json({
+      month: range.month,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      lastUpdated: new Date().toISOString(),
+      totalAffiliates: publishers.length,
+      totalPayout,
+      publishers,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to fetch payment stats",
+    });
+  }
+});
+
+app.get("/api/payment/stats/all", async (req, res) => {
+  try {
+    const monthParam =
+      typeof req.query.month === "string" ? req.query.month : undefined;
+    const range = monthToDateRange(monthParam);
+
+    const [ringbaPublishers, polyaresPublishers] = await Promise.all([
+      fetchPublisherPayouts(range.startDate, range.endDate),
+      fetchPolyaresPayouts(range.startDate, range.endDate),
+    ]);
+
+    const { publishers, outliers } = mergeAffiliates(
+      ringbaPublishers,
+      polyaresPublishers
+    );
+
+    const ringbaTotalPayout = ringbaPublishers.reduce(
+      (sum, row) => sum + row.payoutAmount,
+      0
+    );
+    const polyareasTotalPayout = polyaresPublishers.reduce(
+      (sum, row) => sum + row.payoutAmount,
+      0
+    );
+    const grandTotalPayout = ringbaTotalPayout + polyareasTotalPayout;
+
+    res.json({
+      month: range.month,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      lastUpdated: new Date().toISOString(),
+      totalAffiliates: publishers.length,
+      ringbaTotalPayout,
+      polyareasTotalPayout,
+      grandTotalPayout,
+      publishers,
+      outliers,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to fetch payment stats",
+    });
+  }
+});
+
+app.get("/api/debug/failed-scrubs", (req, res) => {
+  try {
+    const callId =
+      typeof req.query.callId === "string" ? req.query.callId.trim() : "";
+
+    const db = openDb();
+    try {
+      const rows = callId
+        ? db
+            .prepare(
+              `SELECT inboundCallId, taskId, publisherName, status, errorMessage, createdAt
+               FROM scrub_log
+               WHERE inboundCallId = ?
+               ORDER BY createdAt ASC`
+            )
+            .all(callId)
+        : db
+            .prepare(
+              `SELECT inboundCallId, taskId, publisherName, status, errorMessage, createdAt
+               FROM scrub_log
+               WHERE status NOT IN ('success')
+               ORDER BY createdAt DESC
+               LIMIT 100`
+            )
+            .all();
+      res.json(rows);
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read failed scrubs",
+    });
+  }
 });
 
 app.get("*", (_req, res) => {

@@ -68,6 +68,26 @@ export class RingbaAuthError extends Error {
   }
 }
 
+function formatRingba401Message(error: import("axios").AxiosError): string {
+  const status = error.response?.status ?? 401;
+  const statusText = error.response?.statusText ?? "";
+  const data = error.response?.data;
+  const parts = [
+    `Ringba API returned ${status}${statusText ? ` ${statusText}` : ""} Unauthorized`,
+  ];
+  if (data !== undefined) {
+    parts.push(`response body: ${JSON.stringify(data)}`);
+  } else {
+    parts.push("response body: (empty)");
+  }
+  parts.push("check RINGBA_API_TOKEN");
+  return parts.join(" | ");
+}
+
+function throwRingbaAuthError(error: import("axios").AxiosError): never {
+  throw new RingbaAuthError(formatRingba401Message(error));
+}
+
 /** Thrown when Ringba returns 429 — rate limited. */
 export class RingbaRateLimitError extends Error {
   constructor(message: string) {
@@ -104,9 +124,7 @@ function handleAxiosError(error: unknown): never {
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
     if (status === 401) {
-      throw new RingbaAuthError(
-        "Ringba API returned 401 Unauthorized — check RINGBA_API_TOKEN"
-      );
+      throwRingbaAuthError(error);
     }
     if (status === 429) {
       throw new RingbaRateLimitError(
@@ -364,9 +382,7 @@ export async function voidCall(
       if (axios.isAxiosError(error)) {
         const status = error.response?.status;
         if (status === 401) {
-          throw new RingbaAuthError(
-            "Ringba API returned 401 Unauthorized — check RINGBA_API_TOKEN"
-          );
+          throwRingbaAuthError(error);
         }
         if (status === 429) {
           attempt += 1;
@@ -506,13 +522,20 @@ export interface ApproveConversionAdjustmentArgs {
   amountPayout: number;
 }
 
+/** Full Ringba approve HTTP response for caller inspection. */
+export interface ApproveConversionAdjustmentResult {
+  httpStatus: number;
+  httpStatusText: string;
+  body: unknown;
+}
+
 /**
  * Approves a conversion-adjustment task via jobQueue action (after void).
  */
 export async function approveConversionAdjustmentJob(
   jobId: string,
   args: ApproveConversionAdjustmentArgs
-): Promise<unknown> {
+): Promise<ApproveConversionAdjustmentResult> {
   const client = createClient();
   const accountId = getAccountId();
 
@@ -530,12 +553,18 @@ export async function approveConversionAdjustmentJob(
       payload
     );
 
+    const result: ApproveConversionAdjustmentResult = {
+      httpStatus: response.status,
+      httpStatusText: response.statusText,
+      body: response.data,
+    };
+
     console.log(
       `[ScrubAgent] approval response jobId=${jobId}:`,
-      JSON.stringify(response.data, null, 2)
+      JSON.stringify(result, null, 2)
     );
 
-    return response.data;
+    return result;
   } catch (error) {
     handleAxiosError(error);
   }

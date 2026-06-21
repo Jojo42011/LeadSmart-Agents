@@ -26,6 +26,8 @@
     lastRunNote: document.getElementById("lastRunNote"),
     scrubsBody: document.getElementById("scrubsBody"),
     scrubsEmpty: document.getElementById("scrubsEmpty"),
+    failedScrubsBody: document.getElementById("failedScrubsBody"),
+    failedScrubsEmpty: document.getElementById("failedScrubsEmpty"),
   };
 
   let currentPage = "overview";
@@ -73,7 +75,11 @@
 
   function statusClass(status) {
     if (status === "success") return "status-pill--success";
-    if (status === "error" || status === "void_success_approve_failed") {
+    if (
+      status === "error" ||
+      status === "void_success_approve_failed" ||
+      status === "auth_error_abort"
+    ) {
       return "status-pill--error";
     }
     if (status === "dry_run") return "status-pill--dry_run";
@@ -231,11 +237,48 @@
     els.scrubsEmpty.hidden = rows.length > 0;
   }
 
+  function renderFailedRows(tbody, rows) {
+    tbody.innerHTML = "";
+    for (const row of rows) {
+      const tr = document.createElement("tr");
+      tr.className = "scrub-row";
+      tr.innerHTML =
+        "<td>" +
+        formatTs(row.createdAt) +
+        "</td>" +
+        "<td>" +
+        escapeHtml(row.publisherName || "—") +
+        "</td>" +
+        '<td class="mono">' +
+        escapeHtml(row.inboundCallId || "—") +
+        "</td>" +
+        '<td class="mono">' +
+        escapeHtml(row.taskId || "—") +
+        "</td>" +
+        "<td><span class=\"status-pill " +
+        statusClass(row.status) +
+        "\">" +
+        escapeHtml(row.status || "—") +
+        "</span></td>" +
+        '<td class="mono scrub-detail__text">' +
+        escapeHtml(formatErrorDetail(row.errorMessage)) +
+        "</td>";
+      tbody.appendChild(tr);
+    }
+  }
+
+  async function loadFailedScrubs() {
+    const rows = await fetchJson("/api/debug/failed-scrubs");
+    renderFailedRows(els.failedScrubsBody, rows);
+    els.failedScrubsEmpty.hidden = rows.length > 0;
+  }
+
   async function refresh() {
     setError("");
     try {
       await loadOverview();
       await loadScrubs();
+      await loadFailedScrubs();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load data");
     }

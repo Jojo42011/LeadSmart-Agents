@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LeadSmart · Payment Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0a0a0a;
+        --bg-panel: #111111;
+        --bg-card: #161616;
+        --border: #1e1e1e;
+        --border-bright: #2e2e2e;
+        --text: #e8e8e8;
+        --text-dim: #6a6a6a;
+        --green: #00ff88;
+        --green-dim: #00cc6e;
+        --amber: #ffb000;
+        --amber-dim: #cc8c00;
+        --purple: #b388ff;
+        --red: #ff4444;
+        --font: "JetBrains Mono", ui-monospace, monospace;
+        --glow-green: 0 0 20px rgba(0, 255, 136, 0.15);
+        --glow-amber: 0 0 20px rgba(255, 176, 0, 0.15);
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      ::selection {
+        background: rgba(0, 255, 136, 0.2);
+        color: #fff;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      /* ---------- LOGIN ---------- */
+      .login-screen {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: var(--bg);
+        background-image:
+          radial-gradient(ellipse at 30% 20%, rgba(0, 255, 136, 0.03) 0%, transparent 50%),
+          radial-gradient(ellipse at 70% 80%, rgba(255, 176, 0, 0.02) 0%, transparent 50%);
+      }
+
+      .login-card {
+        width: 100%;
+        max-width: 420px;
+        border: 1px solid var(--border-bright);
+        background: var(--bg-panel);
+        padding: 40px 36px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6), var(--glow-green);
+        position: relative;
+      }
+
+      .login-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, var(--green), transparent);
+        opacity: 0.6;
+      }
+
+      .login-card__title {
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 3px;
+        color: var(--green);
+        margin-bottom: 8px;
+        text-shadow: 0 0 30px rgba(0, 255, 136, 0.3);
+      }
+
+      .login-card__sub {
+        color: var(--text-dim);
+        font-size: 11px;
+        margin-bottom: 32px;
+        letter-spacing: 1.5px;
+      }
+
+      .field-label {
+        display: block;
+        font-size: 10px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        margin-bottom: 8px;
+        text-transform: uppercase;
+      }
+
+      .field-input {
+        width: 100%;
+        padding: 14px 16px;
+        border: 1px solid var(--border-bright);
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+
+      .field-input:focus {
+        border-color: var(--green);
+        box-shadow: 0 0 0 3px rgba(0, 255, 136, 0.08);
+      }
+
+      .login-error {
+        margin-top: 12px;
+        color: var(--red);
+        font-size: 11px;
+        min-height: 16px;
+      }
+
+      .btn {
+        font-family: var(--font);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        border: 1px solid var(--border-bright);
+        background: var(--bg-card);
+        color: var(--text);
+        padding: 12px 18px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .btn:hover:not(:disabled) {
+        border-color: var(--green);
+        color: var(--green);
+        box-shadow: var(--glow-green);
+        transform: translateY(-1px);
+      }
+
+      .btn:active:not(:disabled) {
+        transform: translateY(0);
+      }
+
+      .btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      .btn--primary {
+        width: 100%;
+        margin-top: 24px;
+        padding: 14px 18px;
+        background: rgba(0, 255, 136, 0.08);
+        border-color: var(--green);
+        color: var(--green);
+      }
+
+      .btn--primary:hover:not(:disabled) {
+        background: rgba(0, 255, 136, 0.15);
+      }
+
+      .btn--amber {
+        border-color: var(--amber);
+        color: var(--amber);
+        background: rgba(255, 176, 0, 0.08);
+      }
+
+      .btn--amber:hover:not(:disabled) {
+        background: rgba(255, 176, 0, 0.15);
+        box-shadow: var(--glow-amber);
+        border-color: var(--amber);
+        color: var(--amber);
+      }
+
+      .btn--ghost {
+        background: transparent;
+        border-color: var(--border-bright);
+        color: var(--text-dim);
+        padding: 8px 14px;
+      }
+
+      /* ---------- DASHBOARD ---------- */
+      .dashboard {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        background-image:
+          radial-gradient(ellipse at 0% 0%, rgba(0, 255, 136, 0.015) 0%, transparent 40%),
+          radial-gradient(ellipse at 100% 100%, rgba(255, 176, 0, 0.01) 0%, transparent 40%);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 0 24px;
+        height: 56px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(12px);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+      }
+
+      .topbar__brand {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 3px;
+        color: var(--green);
+        text-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+      }
+
+      .topbar__right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .topbar__clock {
+        font-size: 12px;
+        color: var(--text-dim);
+        letter-spacing: 1px;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 16px;
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-panel);
+      }
+
+      .control-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .control-label {
+        font-size: 10px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+      }
+
+      .select-month {
+        font-family: var(--font);
+        font-size: 12px;
+        padding: 10px 12px;
+        border: 1px solid var(--border-bright);
+        background: var(--bg);
+        color: var(--text);
+        min-width: 150px;
+        transition: border-color 0.2s;
+      }
+
+      .select-month:focus {
+        border-color: var(--green);
+        outline: none;
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 6px 10px;
+        border: 1px solid var(--border-bright);
+        background: var(--bg);
+        font-size: 11px;
+        letter-spacing: 1px;
+      }
+
+      .badge--count {
+        color: var(--text);
+      }
+
+      .stats-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 20px;
+        margin-left: auto;
+      }
+
+      .stat-box {
+        text-align: right;
+      }
+
+      .stat-box__label {
+        font-size: 9px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        margin-bottom: 2px;
+      }
+
+      .stat-box__value {
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+
+      .stat-box__value--green {
+        color: var(--green);
+      }
+
+      .stat-box__value--amber {
+        color: var(--amber);
+      }
+
+      .stat-box--main .stat-box__value {
+        font-size: 28px;
+        font-weight: 700;
+        text-shadow: 0 0 30px rgba(0, 255, 136, 0.2);
+      }
+
+      .last-updated {
+        font-size: 11px;
+        color: var(--text-dim);
+      }
+
+      .main {
+        flex: 1;
+        padding: 20px 24px;
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .source-filters {
+        display: flex;
+        gap: 0;
+        border: 1px solid var(--border-bright);
+        overflow: hidden;
+      }
+
+      .source-filter {
+        font-family: var(--font);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        padding: 10px 16px;
+        border: none;
+        border-right: 1px solid var(--border-bright);
+        background: var(--bg);
+        color: var(--text-dim);
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .source-filter:last-child {
+        border-right: none;
+      }
+
+      .source-filter:hover {
+        color: var(--text);
+        background: var(--bg-card);
+      }
+
+      .source-filter--active {
+        background: rgba(0, 255, 136, 0.08);
+        color: var(--green);
+      }
+
+      .badge-source {
+        display: inline-block;
+        padding: 4px 8px;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        border: 1px solid;
+      }
+
+      .badge-source--ringba {
+        border-color: rgba(0, 255, 136, 0.4);
+        color: var(--green);
+        background: rgba(0, 255, 136, 0.06);
+      }
+
+      .badge-source--polyeras {
+        border-color: rgba(255, 176, 0, 0.4);
+        color: var(--amber);
+        background: rgba(255, 176, 0, 0.06);
+      }
+
+      .badge-source--both {
+        border-color: rgba(179, 136, 255, 0.45);
+        color: var(--purple);
+        background: rgba(179, 136, 255, 0.08);
+      }
+
+      .col-payout--amber {
+        color: var(--amber);
+        font-weight: 600;
+      }
+
+      .outliers-section {
+        margin-top: 28px;
+      }
+
+      .outliers-section__header {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 1.5px;
+        color: var(--amber);
+        margin-bottom: 8px;
+        text-transform: uppercase;
+      }
+
+      .outliers-section__note {
+        font-size: 11px;
+        color: var(--text-dim);
+        margin-bottom: 12px;
+      }
+
+      .table-wrap--outliers {
+        border-color: rgba(255, 176, 0, 0.45);
+        box-shadow: 0 0 0 1px rgba(255, 176, 0, 0.12), 0 4px 24px rgba(0, 0, 0, 0.3);
+      }
+
+      .search-input {
+        flex: 1;
+        max-width: 360px;
+        padding: 10px 12px;
+        border: 1px solid var(--border-bright);
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+        font-size: 12px;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+
+      .search-input:focus {
+        border-color: var(--green);
+        box-shadow: 0 0 0 3px rgba(0, 255, 136, 0.06);
+        outline: none;
+      }
+
+      .page-size-controls {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        margin-left: auto;
+        border: 1px solid var(--border-bright);
+      }
+
+      .page-size-btn {
+        font-family: var(--font);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        padding: 10px 14px;
+        border: none;
+        border-right: 1px solid var(--border-bright);
+        background: var(--bg);
+        color: var(--text-dim);
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+
+      .page-size-btn:last-child {
+        border-right: none;
+      }
+
+      .page-size-btn:hover {
+        color: var(--text);
+      }
+
+      .page-size-btn--active {
+        background: rgba(0, 255, 136, 0.08);
+        color: var(--green);
+      }
+
+      .status-banner {
+        padding: 12px 14px;
+        border: 1px solid var(--border-bright);
+        margin-bottom: 14px;
+        font-size: 12px;
+      }
+
+      .status-banner--error {
+        border-color: var(--red);
+        color: var(--red);
+        background: rgba(255, 68, 68, 0.06);
+      }
+
+      .status-banner--loading {
+        border-color: var(--amber);
+        color: var(--amber);
+        background: rgba(255, 176, 0, 0.06);
+      }
+
+      .status-banner--warning {
+        border-color: var(--amber);
+        color: var(--amber);
+        background: rgba(255, 176, 0, 0.06);
+      }
+
+      .spinner {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border: 2px solid var(--amber);
+        border-top-color: transparent;
+        animation: spin 0.8s linear infinite;
+        vertical-align: middle;
+        margin-right: 8px;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .table-wrap {
+        border: 1px solid var(--border);
+        overflow-x: auto;
+        background: var(--bg-panel);
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+
+      thead {
+        background: rgba(0, 0, 0, 0.4);
+        border-bottom: 1px solid var(--border-bright);
+      }
+
+      th {
+        padding: 14px 14px;
+        text-align: left;
+        font-size: 10px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+        transition: color 0.15s;
+      }
+
+      th:hover {
+        color: var(--green);
+      }
+
+      th.sorted-asc::after {
+        content: " \25B2";
+        color: var(--green);
+      }
+
+      th.sorted-desc::after {
+        content: " \25BC";
+        color: var(--green);
+      }
+
+      td {
+        padding: 11px 14px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: middle;
+      }
+
+      tbody tr {
+        cursor: pointer;
+        transition: background 0.1s ease;
+      }
+
+      tbody tr:hover {
+        background: rgba(0, 255, 136, 0.03);
+      }
+
+      tbody tr.row--selected {
+        background: rgba(0, 255, 136, 0.06);
+        outline: 1px solid rgba(0, 255, 136, 0.2);
+      }
+
+      .col-rank {
+        color: var(--text-dim);
+        width: 48px;
+      }
+
+      .col-name {
+        max-width: 300px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .col-payout {
+        color: var(--green);
+        font-weight: 600;
+      }
+
+      .col-dim {
+        color: var(--text-dim);
+      }
+
+      .col-calls {
+        /* responsive hide target */
+      }
+
+      .badge-active {
+        display: inline-block;
+        padding: 4px 8px;
+        border: 1px solid rgba(0, 255, 136, 0.4);
+        color: var(--green);
+        background: rgba(0, 255, 136, 0.06);
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 1px;
+      }
+
+      .btn-pay {
+        font-family: var(--font);
+        padding: 6px 12px;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        border: 1px solid rgba(255, 176, 0, 0.4);
+        color: var(--amber);
+        background: rgba(255, 176, 0, 0.06);
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+
+      .empty-state {
+        padding: 48px;
+        text-align: center;
+        color: var(--text-dim);
+      }
+
+      .pagination {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 16px;
+        border-top: 1px solid var(--border);
+        background: var(--bg-panel);
+        font-size: 11px;
+        color: var(--text-dim);
+      }
+
+      .pagination__info {
+        letter-spacing: 1px;
+      }
+
+      .pagination__btns {
+        display: flex;
+        gap: 8px;
+      }
+
+      .pagination__btn {
+        font-family: var(--font);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        padding: 8px 14px;
+        border: 1px solid var(--border-bright);
+        background: var(--bg);
+        color: var(--text-dim);
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+
+      .pagination__btn:hover:not(:disabled) {
+        border-color: var(--green);
+        color: var(--green);
+      }
+
+      .pagination__btn:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+
+      /* ---------- MOBILE ---------- */
+      @media (max-width: 768px) {
+        .topbar { padding: 0 12px; }
+        .controls { padding: 12px; gap: 10px; }
+        .main { padding: 12px; }
+        .stats-row { gap: 12px; flex-wrap: wrap; }
+        .stat-box--main .stat-box__value { font-size: 20px; }
+        .stat-box__value { font-size: 13px; }
+        .col-calls,
+        th[data-sort="callCount"],
+        th[data-sort="convertedCalls"],
+        th[data-sort="completedCalls"] {
+          display: none;
+        }
+        .search-input { max-width: 100%; }
+        .page-size-controls { margin-left: 0; }
+        .toolbar { gap: 8px; }
+        .col-name { max-width: 160px; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- LOGIN -->
+    <div class="login-screen" id="loginScreen">
+      <div class="login-card">
+        <div class="login-card__title">LEADSMART // PAYMENT PORTAL</div>
+        <div class="login-card__sub">Authorized access only</div>
+        <form id="loginForm">
+          <label class="field-label" for="passwordInput">Password</label>
+          <input
+            class="field-input"
+            type="password"
+            id="passwordInput"
+            autocomplete="current-password"
+            required
+          />
+          <div class="login-error" id="loginError"></div>
+          <button class="btn btn--primary" type="submit">Login</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div class="dashboard hidden" id="dashboard">
+      <header class="topbar">
+        <div class="topbar__brand">LEADSMART // PAYMENT DASHBOARD</div>
+        <div class="topbar__right">
+          <div class="topbar__clock" id="cstClock">CST --:--:--</div>
+          <button class="btn btn--ghost" type="button" id="logoutBtn">Logout</button>
+        </div>
+      </header>
+
+      <section class="controls">
+        <div class="control-group">
+          <span class="control-label">Month</span>
+          <select class="select-month" id="monthSelect" aria-label="Select month"></select>
+        </div>
+        <button class="btn btn--amber" type="button" id="runNowBtn">Run Now</button>
+        <span class="last-updated" id="lastUpdated">Last updated: —</span>
+        <span class="badge badge--count" id="affiliateCount">Affiliates: —</span>
+        <div class="stats-row">
+          <div class="stat-box">
+            <div class="stat-box__label">Ringba</div>
+            <div class="stat-box__value stat-box__value--green" id="ringbaTotal">$0.00</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-box__label">Polyares</div>
+            <div class="stat-box__value stat-box__value--amber" id="polyaresTotal">$0.00</div>
+          </div>
+          <div class="stat-box stat-box--main">
+            <div class="stat-box__label">Total Payout</div>
+            <div class="stat-box__value stat-box__value--green" id="totalPayout">$0.00</div>
+          </div>
+        </div>
+      </section>
+
+      <main class="main">
+        <div class="toolbar">
+          <div class="source-filters" id="sourceFilters">
+            <button type="button" class="source-filter source-filter--active" data-source="ALL">ALL</button>
+            <button type="button" class="source-filter" data-source="RINGBA">RINGBA</button>
+            <button type="button" class="source-filter" data-source="POLYERAS">POLYERAS</button>
+            <button type="button" class="source-filter" data-source="BOTH">BOTH</button>
+          </div>
+          <input
+            class="search-input"
+            type="search"
+            id="searchInput"
+            placeholder="Filter by publisher name..."
+            aria-label="Filter publishers"
+          />
+          <div class="page-size-controls" id="pageSizeControls">
+            <button type="button" class="page-size-btn" data-size="50">50</button>
+            <button type="button" class="page-size-btn page-size-btn--active" data-size="100">100</button>
+            <button type="button" class="page-size-btn" data-size="250">250</button>
+            <button type="button" class="page-size-btn" data-size="all">All</button>
+          </div>
+        </div>
+
+        <div class="status-banner hidden" id="statusBanner"></div>
+        <div class="status-banner status-banner--warning hidden" id="warningBanner"></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-sort="rank">#</th>
+                <th data-sort="publisherName">Publisher Name</th>
+                <th data-sort="source">Source</th>
+                <th data-sort="callCount" class="col-calls">Calls</th>
+                <th data-sort="convertedCalls" class="col-calls">Converted</th>
+                <th data-sort="completedCalls" class="col-calls">Completed</th>
+                <th data-sort="ringbaAmount">Ringba Amount</th>
+                <th data-sort="polyaresAmount">Polyares Amount</th>
+                <th data-sort="totalAmount">Total</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody">
+              <tr>
+                <td colspan="11" class="empty-state">No data loaded</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="pagination" id="pagination">
+            <span class="pagination__info" id="paginationInfo">—</span>
+            <div class="pagination__btns">
+              <button class="pagination__btn" type="button" id="prevBtn" disabled>Previous</button>
+              <button class="pagination__btn" type="button" id="nextBtn" disabled>Next</button>
+            </div>
+          </div>
+        </div>
+
+        <section class="outliers-section hidden" id="outliersSection">
+          <h2 class="outliers-section__header">
+            OUTLIERS — Similar but not exact name matches
+          </h2>
+          <p class="outliers-section__note">
+            These affiliates may be the same person — confirm and merge manually.
+          </p>
+          <div class="table-wrap table-wrap--outliers">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Polyares Name</th>
+                  <th>Polyares Amount</th>
+                  <th>Similar Ringba Name</th>
+                  <th>Ringba Amount</th>
+                </tr>
+              </thead>
+              <tbody id="outliersBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      "use strict";
+
+      const AUTH_KEY = "leadsmart_payment_auth";
+      const PASSWORD = "leadsmart2026";
+
+      const loginScreen = document.getElementById("loginScreen");
+      const dashboard = document.getElementById("dashboard");
+      const loginForm = document.getElementById("loginForm");
+      const passwordInput = document.getElementById("passwordInput");
+      const loginError = document.getElementById("loginError");
+      const logoutBtn = document.getElementById("logoutBtn");
+      const monthSelect = document.getElementById("monthSelect");
+      const runNowBtn = document.getElementById("runNowBtn");
+      const lastUpdated = document.getElementById("lastUpdated");
+      const affiliateCount = document.getElementById("affiliateCount");
+      const totalPayoutEl = document.getElementById("totalPayout");
+      const ringbaTotalEl = document.getElementById("ringbaTotal");
+      const polyaresTotalEl = document.getElementById("polyaresTotal");
+      const searchInput = document.getElementById("searchInput");
+      const statusBanner = document.getElementById("statusBanner");
+      const warningBanner = document.getElementById("warningBanner");
+      const tableBody = document.getElementById("tableBody");
+      const cstClock = document.getElementById("cstClock");
+      const sourceFilters = document.getElementById("sourceFilters");
+      const pageSizeControls = document.getElementById("pageSizeControls");
+      const paginationInfo = document.getElementById("paginationInfo");
+      const prevBtn = document.getElementById("prevBtn");
+      const nextBtn = document.getElementById("nextBtn");
+      const outliersSection = document.getElementById("outliersSection");
+      const outliersBody = document.getElementById("outliersBody");
+
+      let allPublishers = [];
+      let allOutliers = [];
+      let filteredPublishers = [];
+      let selectedRowIndex = -1;
+      let sortKey = "totalAmount";
+      let sortDir = "desc";
+      let isLoading = false;
+      let sourceFilter = "ALL";
+      let pageSize = 100;
+      let currentPage = 1;
+
+      const MONTHS = [
+        { value: "2026-01", label: "Jan 2026" },
+        { value: "2026-02", label: "Feb 2026" },
+        { value: "2026-03", label: "Mar 2026" },
+        { value: "2026-04", label: "Apr 2026" },
+        { value: "2026-05", label: "May 2026" },
+        { value: "2026-06", label: "Jun 2026" },
+        { value: "2026-07", label: "Jul 2026" },
+        { value: "2026-08", label: "Aug 2026" },
+        { value: "2026-09", label: "Sep 2026" },
+        { value: "2026-10", label: "Oct 2026" },
+        { value: "2026-11", label: "Nov 2026" },
+        { value: "2026-12", label: "Dec 2026" },
+      ];
+
+      function currentMonthValue() {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, "0");
+        const value = `${y}-${m}`;
+        const found = MONTHS.find((item) => item.value === value);
+        return found ? value : "2026-06";
+      }
+
+      function initMonthSelect() {
+        monthSelect.innerHTML = "";
+        for (const month of MONTHS) {
+          const opt = document.createElement("option");
+          opt.value = month.value;
+          opt.textContent = month.label;
+          monthSelect.appendChild(opt);
+        }
+        monthSelect.value = currentMonthValue();
+      }
+
+      function formatMoney(amount) {
+        return (
+          "$" +
+          Number(amount || 0).toLocaleString("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })
+        );
+      }
+
+      const CST_TIMEZONE = "America/Chicago";
+
+      function centralTzLabel(date) {
+        const parts = new Intl.DateTimeFormat("en-US", {
+          timeZone: CST_TIMEZONE,
+          timeZoneName: "short",
+        }).formatToParts(date);
+        return parts.find((part) => part.type === "timeZoneName")?.value ?? "CST";
+      }
+
+      function formatCstClock() {
+        const d = new Date();
+        const p = (n) => String(n).padStart(2, "0");
+        const parts = new Intl.DateTimeFormat("en-US", {
+          timeZone: CST_TIMEZONE,
+          hour12: false,
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }).formatToParts(d);
+        const read = (type) =>
+          parseInt(parts.find((part) => part.type === type)?.value ?? "0", 10);
+        let hour = read("hour");
+        if (hour === 24) {
+          hour = 0;
+        }
+        cstClock.textContent =
+          centralTzLabel(d) +
+          " " +
+          p(hour) +
+          ":" +
+          p(read("minute")) +
+          ":" +
+          p(read("second"));
+      }
+
+      function formatCstTimestamp(iso) {
+        const d = new Date(iso);
+        return (
+          d.toLocaleString("en-US", { timeZone: CST_TIMEZONE }) +
+          " " +
+          centralTzLabel(d)
+        );
+      }
+
+      function showLogin() {
+        sessionStorage.removeItem(AUTH_KEY);
+        loginScreen.classList.remove("hidden");
+        dashboard.classList.add("hidden");
+        loginError.textContent = "";
+        passwordInput.value = "";
+      }
+
+      function showDashboard() {
+        sessionStorage.setItem(AUTH_KEY, "1");
+        loginScreen.classList.add("hidden");
+        dashboard.classList.remove("hidden");
+        initMonthSelect();
+        fetchStats();
+      }
+
+      function setBanner(type, message) {
+        if (!message) {
+          statusBanner.classList.add("hidden");
+          statusBanner.textContent = "";
+          statusBanner.classList.remove("status-banner--error", "status-banner--loading");
+          return;
+        }
+        statusBanner.classList.remove("hidden", "status-banner--error", "status-banner--loading");
+        if (type === "error") {
+          statusBanner.classList.add("status-banner--error");
+          statusBanner.textContent = message;
+        } else if (type === "loading") {
+          statusBanner.classList.add("status-banner--loading");
+          statusBanner.innerHTML = '<span class="spinner"></span>' + message;
+        }
+      }
+
+      function setWarning(message) {
+        if (!message) {
+          warningBanner.classList.add("hidden");
+          warningBanner.textContent = "";
+          return;
+        }
+        warningBanner.classList.remove("hidden");
+        warningBanner.textContent = message;
+      }
+
+      function setLoading(loading) {
+        isLoading = loading;
+        runNowBtn.disabled = loading;
+        monthSelect.disabled = loading;
+      }
+
+      function updateHeaderTotals(data) {
+        ringbaTotalEl.textContent = formatMoney(data.ringbaTotalPayout ?? 0);
+        polyaresTotalEl.textContent = formatMoney(data.polyareasTotalPayout ?? 0);
+        totalPayoutEl.textContent = formatMoney(data.grandTotalPayout ?? 0);
+      }
+
+      function normalizePublisherRow(row) {
+        if (row.totalAmount !== undefined) {
+          return row;
+        }
+        const ringbaAmount =
+          row.ringbaAmount !== undefined
+            ? row.ringbaAmount
+            : row.source === "POLYERAS"
+              ? 0
+              : row.payoutAmount || 0;
+        const polyaresAmount =
+          row.polyaresAmount !== undefined
+            ? row.polyaresAmount
+            : row.source === "POLYERAS"
+              ? row.payoutAmount || 0
+              : 0;
+        return {
+          publisherName: row.publisherName,
+          ringbaAmount,
+          polyaresAmount,
+          totalAmount: ringbaAmount + polyaresAmount,
+          source: row.source || "RINGBA",
+          callCount: row.callCount,
+          convertedCalls: row.convertedCalls,
+          completedCalls: row.completedCalls,
+        };
+      }
+
+      function renderOutliers() {
+        if (!allOutliers.length) {
+          outliersSection.classList.add("hidden");
+          outliersBody.innerHTML = "";
+          return;
+        }
+
+        outliersSection.classList.remove("hidden");
+        outliersBody.innerHTML = "";
+        allOutliers.forEach((row, index) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            '<td class="col-rank">' +
+            (index + 1) +
+            "</td>" +
+            '<td class="col-name" title="' +
+            escapeHtml(row.polyaresName) +
+            '">' +
+            escapeHtml(row.polyaresName) +
+            "</td>" +
+            '<td class="col-payout col-payout--amber">' +
+            formatMoney(row.polyaresAmount) +
+            "</td>" +
+            '<td class="col-name" title="' +
+            escapeHtml(row.similarRingbaName) +
+            '">' +
+            escapeHtml(row.similarRingbaName) +
+            "</td>" +
+            '<td class="col-payout">' +
+            formatMoney(row.ringbaAmount) +
+            "</td>";
+          outliersBody.appendChild(tr);
+        });
+      }
+
+      async function fetchStats() {
+        if (isLoading) return;
+        setLoading(true);
+        setBanner("loading", "Fetching publisher payout data...");
+        setWarning(null);
+
+        const month = monthSelect.value;
+        try {
+          const res = await fetch("/api/payment/stats/all?month=" + encodeURIComponent(month));
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || "Failed to fetch payment stats");
+          }
+
+          allPublishers = Array.isArray(data.publishers)
+            ? data.publishers.map(normalizePublisherRow)
+            : [];
+          allOutliers = Array.isArray(data.outliers) ? data.outliers : [];
+          affiliateCount.textContent = "Affiliates: " + (data.totalAffiliates ?? allPublishers.length);
+          updateHeaderTotals(data);
+          lastUpdated.textContent =
+            "Last updated: " +
+            (data.lastUpdated ? formatCstTimestamp(data.lastUpdated) : "\u2014");
+          renderOutliers();
+          currentPage = 1;
+          applyFilterAndSort();
+          setBanner(null, "");
+        } catch (err) {
+          try {
+            const fallbackRes = await fetch("/api/payment/stats?month=" + encodeURIComponent(month));
+            const fallbackData = await fallbackRes.json();
+            if (!fallbackRes.ok) {
+              throw new Error(fallbackData.error || "Fallback also failed");
+            }
+
+            allPublishers = Array.isArray(fallbackData.publishers)
+              ? fallbackData.publishers.map(normalizePublisherRow)
+              : [];
+            allOutliers = [];
+            affiliateCount.textContent = "Affiliates: " + (fallbackData.totalAffiliates ?? allPublishers.length);
+            updateHeaderTotals({
+              ringbaTotalPayout: fallbackData.totalPayout ?? 0,
+              polyareasTotalPayout: 0,
+              grandTotalPayout: fallbackData.totalPayout ?? 0,
+            });
+            lastUpdated.textContent =
+              "Last updated: " +
+              (fallbackData.lastUpdated
+                ? formatCstTimestamp(fallbackData.lastUpdated)
+                : "\u2014");
+            renderOutliers();
+            currentPage = 1;
+            applyFilterAndSort();
+            setBanner(null, "");
+            setWarning("Polyares data unavailable \u2014 showing Ringba only");
+          } catch (fallbackErr) {
+            setBanner("error", err.message || "Fetch failed");
+            tableBody.innerHTML =
+              '<tr><td colspan="11" class="empty-state">Unable to load data</td></tr>';
+            outliersSection.classList.add("hidden");
+          }
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function compareRows(a, b, key) {
+        if (key === "rank") {
+          return 0;
+        }
+        const av = a[key];
+        const bv = b[key];
+        if (typeof av === "number" && typeof bv === "number") {
+          return sortDir === "asc" ? av - bv : bv - av;
+        }
+        const as = String(av ?? "").toLowerCase();
+        const bs = String(bv ?? "").toLowerCase();
+        if (as < bs) return sortDir === "asc" ? -1 : 1;
+        if (as > bs) return sortDir === "asc" ? 1 : -1;
+        return 0;
+      }
+
+      function sourceBadgeHtml(source) {
+        if (source === "BOTH") {
+          return '<span class="badge-source badge-source--both">BOTH</span>';
+        }
+        if (source === "POLYERAS") {
+          return '<span class="badge-source badge-source--polyeras">POLYERAS</span>';
+        }
+        return '<span class="badge-source badge-source--ringba">RINGBA</span>';
+      }
+
+      function applyFilterAndSort() {
+        const q = searchInput.value.trim().toLowerCase();
+        filteredPublishers = allPublishers.filter((row) => {
+          if (sourceFilter !== "ALL" && row.source !== sourceFilter) {
+            return false;
+          }
+          if (!q) return true;
+          return String(row.publisherName || "").toLowerCase().includes(q);
+        });
+
+        if (sortKey !== "rank") {
+          filteredPublishers.sort((a, b) => compareRows(a, b, sortKey));
+        } else if (sortDir === "desc") {
+          filteredPublishers.sort((a, b) => b.totalAmount - a.totalAmount);
+        } else {
+          filteredPublishers.sort((a, b) => a.totalAmount - b.totalAmount);
+        }
+
+        renderTable();
+        updateSortHeaders();
+      }
+
+      function updateSortHeaders() {
+        document.querySelectorAll("th[data-sort]").forEach((th) => {
+          th.classList.remove("sorted-asc", "sorted-desc");
+          if (th.dataset.sort === sortKey) {
+            th.classList.add(sortDir === "asc" ? "sorted-asc" : "sorted-desc");
+          }
+        });
+      }
+
+      function getTotalPages() {
+        if (pageSize === Infinity) return 1;
+        return Math.max(1, Math.ceil(filteredPublishers.length / pageSize));
+      }
+
+      function getPageSlice() {
+        if (pageSize === Infinity) return filteredPublishers;
+        const start = (currentPage - 1) * pageSize;
+        return filteredPublishers.slice(start, start + pageSize);
+      }
+
+      function updatePagination() {
+        const total = filteredPublishers.length;
+        const totalPages = getTotalPages();
+        if (currentPage > totalPages) currentPage = totalPages;
+        if (currentPage < 1) currentPage = 1;
+
+        const start = pageSize === Infinity ? 1 : (currentPage - 1) * pageSize + 1;
+        const end = pageSize === Infinity ? total : Math.min(currentPage * pageSize, total);
+
+        if (total === 0) {
+          paginationInfo.textContent = "No rows";
+        } else {
+          paginationInfo.textContent = `${start}\u2013${end} of ${total} \u00B7 Page ${currentPage} of ${totalPages}`;
+        }
+
+        prevBtn.disabled = currentPage <= 1;
+        nextBtn.disabled = currentPage >= totalPages;
+      }
+
+      function renderTable() {
+        updatePagination();
+        const pageRows = getPageSlice();
+
+        if (pageRows.length === 0) {
+          tableBody.innerHTML =
+            '<tr><td colspan="11" class="empty-state">No publishers match your filter</td></tr>';
+          return;
+        }
+
+        const globalOffset = pageSize === Infinity ? 0 : (currentPage - 1) * pageSize;
+
+        tableBody.innerHTML = "";
+        pageRows.forEach((row, index) => {
+          const globalIndex = globalOffset + index;
+          const tr = document.createElement("tr");
+          if (globalIndex === selectedRowIndex) {
+            tr.classList.add("row--selected");
+          }
+
+          const hasCallMetrics =
+            row.source === "RINGBA" || row.source === "BOTH";
+          const callsHtml = hasCallMetrics
+            ? Number(row.callCount || 0).toLocaleString()
+            : '<span class="col-dim">\u2014</span>';
+          const convertedHtml = hasCallMetrics
+            ? Number(row.convertedCalls || 0).toLocaleString()
+            : '<span class="col-dim">\u2014</span>';
+          const completedHtml = hasCallMetrics
+            ? Number(row.completedCalls || 0).toLocaleString()
+            : '<span class="col-dim">\u2014</span>';
+
+          const ringbaHtml =
+            row.source === "POLYERAS"
+              ? '<span class="col-dim">\u2014</span>'
+              : '<span class="col-payout">' + formatMoney(row.ringbaAmount) + "</span>";
+          const polyaresHtml =
+            row.source === "RINGBA"
+              ? '<span class="col-dim">\u2014</span>'
+              : '<span class="col-payout col-payout--amber">' + formatMoney(row.polyaresAmount) + "</span>";
+
+          tr.innerHTML =
+            '<td class="col-rank">' + (globalIndex + 1) + "</td>" +
+            '<td class="col-name" title="' + escapeHtml(row.publisherName) + '">' + escapeHtml(row.publisherName) + "</td>" +
+            "<td>" + sourceBadgeHtml(row.source) + "</td>" +
+            '<td class="col-calls">' + callsHtml + "</td>" +
+            '<td class="col-calls">' + convertedHtml + "</td>" +
+            '<td class="col-calls">' + completedHtml + "</td>" +
+            "<td>" + ringbaHtml + "</td>" +
+            "<td>" + polyaresHtml + "</td>" +
+            '<td class="col-payout">' + formatMoney(row.totalAmount) + "</td>" +
+            '<td><span class="badge-active">ACTIVE</span></td>' +
+            '<td><button type="button" class="btn-pay" disabled title="Coming in Phase 2">PAY</button></td>';
+
+          tr.addEventListener("click", (e) => {
+            if (e.target.closest(".btn-pay")) return;
+            selectedRowIndex = globalIndex;
+            renderTable();
+          });
+
+          tableBody.appendChild(tr);
+        });
+      }
+
+      function escapeHtml(str) {
+        return String(str)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      loginForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        if (passwordInput.value === PASSWORD) {
+          showDashboard();
+        } else {
+          loginError.textContent = "Invalid password";
+        }
+      });
+
+      logoutBtn.addEventListener("click", showLogin);
+      runNowBtn.addEventListener("click", fetchStats);
+      monthSelect.addEventListener("change", fetchStats);
+      searchInput.addEventListener("input", () => {
+        selectedRowIndex = -1;
+        currentPage = 1;
+        applyFilterAndSort();
+      });
+
+      sourceFilters.addEventListener("click", (e) => {
+        const btn = e.target.closest(".source-filter");
+        if (!btn) return;
+        sourceFilter = btn.dataset.source || "ALL";
+        document.querySelectorAll(".source-filter").forEach((el) => {
+          el.classList.toggle("source-filter--active", el === btn);
+        });
+        selectedRowIndex = -1;
+        currentPage = 1;
+        applyFilterAndSort();
+      });
+
+      pageSizeControls.addEventListener("click", (e) => {
+        const btn = e.target.closest(".page-size-btn");
+        if (!btn) return;
+        const size = btn.dataset.size;
+        pageSize = size === "all" ? Infinity : parseInt(size, 10);
+        currentPage = 1;
+        document.querySelectorAll(".page-size-btn").forEach((el) => {
+          el.classList.toggle("page-size-btn--active", el === btn);
+        });
+        renderTable();
+      });
+
+      prevBtn.addEventListener("click", () => {
+        if (currentPage > 1) {
+          currentPage--;
+          renderTable();
+        }
+      });
+
+      nextBtn.addEventListener("click", () => {
+        if (currentPage < getTotalPages()) {
+          currentPage++;
+          renderTable();
+        }
+      });
+
+      document.querySelectorAll("th[data-sort]").forEach((th) => {
+        th.addEventListener("click", () => {
+          const key = th.dataset.sort;
+          if (!key) return;
+          if (sortKey === key) {
+            sortDir = sortDir === "asc" ? "desc" : "asc";
+          } else {
+            sortKey = key;
+            sortDir = key === "publisherName" || key === "source" ? "asc" : "desc";
+          }
+          selectedRowIndex = -1;
+          currentPage = 1;
+          applyFilterAndSort();
+        });
+      });
+
+      formatCstClock();
+      setInterval(formatCstClock, 1000);
+
+      if (sessionStorage.getItem(AUTH_KEY) === "1") {
+        showDashboard();
+      }
+    </script>
+  </body>
+</html>

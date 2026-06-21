@@ -10,20 +10,25 @@
     "find:call": "ts-node findCall.ts",
     "void:test": "ts-node voidTest.ts",
     "queue:test": "ts-node queueTest.ts",
-    "dashboard": "ts-node server.ts",
+    "test:affiliates": "ts-node testAffiliates.ts",
+    "dashboard": "ts-node -r dotenv/config server.ts",
     "db:push-fly": "powershell -ExecutionPolicy Bypass -File scripts/push-db-to-fly.ps1",
     "build": "tsc"
   },
   "dependencies": {
     "axios": "^1.7.9",
+    "axios-cookiejar-support": "^7.0.0",
     "better-sqlite3": "^11.8.1",
+    "csv-parse": "^6.2.1",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "tough-cookie": "^6.0.1"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
     "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^4.17.21",
     "@types/node": "^22.10.5",
+    "@types/tough-cookie": "^4.0.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.3"
   }
