@@ -60,6 +60,11 @@ function normalizePublisherName(name: string): string {
   return name.trim().toLowerCase();
 }
 
+const FORCE_BOTH_MERGE: Record<string, string> = {
+  "dominik mikula": "DOMINIK MIKULA AND COMPANY LTD",
+  "muhammad bilal2": "Muhammad Bilal2 LSW - N",
+};
+
 function isRingbaSuffixTagMatch(polyName: string, ringbaName: string): boolean {
   const poly = normalizePublisherName(polyName);
   const ringba = normalizePublisherName(ringbaName);
@@ -182,6 +187,26 @@ export function mergeAffiliates(
         completedCalls: ringbaRow.completedCalls,
       };
       continue;
+    }
+
+    const forcedRingbaName = FORCE_BOTH_MERGE[key];
+    if (forcedRingbaName) {
+      const forcedRingba = ringbaByKey.get(normalizePublisherName(forcedRingbaName));
+      const forcedIndex = publisherIndexByKey.get(normalizePublisherName(forcedRingbaName));
+      if (forcedRingba && forcedIndex !== undefined) {
+        const existing = publishers[forcedIndex];
+        publishers[forcedIndex] = {
+          publisherName: forcedRingba.publisherName,
+          ringbaAmount: existing.ringbaAmount,
+          polyaresAmount: existing.polyaresAmount + polyRow.payoutAmount,
+          totalAmount: existing.ringbaAmount + existing.polyaresAmount + polyRow.payoutAmount,
+          source: "BOTH",
+          callCount: forcedRingba.callCount,
+          convertedCalls: forcedRingba.convertedCalls,
+          completedCalls: forcedRingba.completedCalls,
+        };
+        continue;
+      }
     }
 
     const suffixTagRingba = findSuffixTagRingbaMatch(
