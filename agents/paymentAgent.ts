@@ -519,6 +519,68 @@ export async function fetchPublisherProfitData(
   return rows;
 }
 
+const RENTAL_COST_PER_NUMBER = 1;
+
+function findNumbersCsvPublisherColumn(columns: string[]): string | null {
+  for (const column of columns) {
+    const normalized = column.trim().toLowerCase().replace(/\s+/g, " ");
+    if (
+      normalized === "publisher name" ||
+      normalized === "publishername" ||
+      normalized === "publisher"
+    ) {
+      return column;
+    }
+  }
+  return null;
+}
+
+/**
+ * Parses a Ringba numbers CSV and counts rows per publisher.
+ * Keys are normalized publisher names.
+ */
+export function parseNumbersCSV(csvText: string): Record<string, number> {
+  const records = parse(csvText, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    relax_column_count: true,
+  }) as Record<string, string>[];
+
+  if (records.length === 0) {
+    return {};
+  }
+
+  const publisherColumn = findNumbersCsvPublisherColumn(
+    Object.keys(records[0] ?? {})
+  );
+  if (!publisherColumn) {
+    throw new Error('CSV must include a "Publisher Name" column');
+  }
+
+  const counts: Record<string, number> = {};
+  for (const record of records) {
+    const publisherName = String(record[publisherColumn] ?? "").trim();
+    if (!publisherName) {
+      continue;
+    }
+    const key = normalizePublisherName(publisherName);
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+export function rentalCostsFromNumberCounts(
+  counts: Record<string, number>
+): Record<string, number> {
+  const rentalCosts: Record<string, number> = {};
+  for (const [key, count] of Object.entries(counts)) {
+    rentalCosts[key] = count * RENTAL_COST_PER_NUMBER;
+  }
+  return rentalCosts;
+}
+
 function createPolyaresClient(jar: CookieJar) {
   return wrapper(
     axios.create({

@@ -11,6 +11,8 @@ import {
   fetchPolyaresPayouts,
   fetchPublisherProfitData,
   mergeAffiliates,
+  parseNumbersCSV,
+  rentalCostsFromNumberCounts,
 } from "./agents/paymentAgent";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -547,6 +549,28 @@ app.get("/api/payment/profit", async (req, res) => {
     });
   }
 });
+
+app.post(
+  "/api/payment/numbers-csv",
+  express.text({ type: "*/*", limit: "10mb" }),
+  (req, res) => {
+    try {
+      const csvText = typeof req.body === "string" ? req.body : "";
+      if (!csvText.trim()) {
+        res.status(400).json({ error: "CSV body is required" });
+        return;
+      }
+
+      const counts = parseNumbersCSV(csvText);
+      const rentalCosts = rentalCostsFromNumberCounts(counts);
+      res.json({ rentalCosts });
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : "Failed to parse CSV",
+      });
+    }
+  }
+);
 
 app.get("/api/debug/failed-scrubs", (req, res) => {
   try {

@@ -443,6 +443,47 @@
         color: var(--text-dim);
       }
 
+      .profit-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .btn-upload {
+        font-family: var(--font);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        padding: 10px 16px;
+        border: 1px solid rgba(255, 176, 0, 0.45);
+        background: rgba(255, 176, 0, 0.08);
+        color: var(--amber);
+        cursor: pointer;
+      }
+
+      .btn-upload:hover:not(:disabled) {
+        background: rgba(255, 176, 0, 0.14);
+        border-color: var(--amber);
+      }
+
+      .btn-upload:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .profit-upload-status {
+        font-size: 11px;
+        color: var(--text-dim);
+      }
+
+      .col-rental {
+        color: var(--amber);
+        font-weight: 600;
+      }
+
       .pagination-bar {
         border: 1px solid var(--border);
         border-top: none;
@@ -886,6 +927,13 @@
         </div>
 
         <div id="profitPanel" class="hidden">
+          <div class="profit-toolbar">
+            <input type="file" id="numbersCsvInput" accept=".csv,text/csv" hidden />
+            <button type="button" class="btn-upload" id="uploadNumbersCsvBtn">
+              Upload Numbers CSV
+            </button>
+            <span class="profit-upload-status" id="numbersCsvStatus"></span>
+          </div>
           <div class="table-wrap" id="profitTableWrap">
             <table>
               <thead>
@@ -895,18 +943,19 @@
                   <th data-profit-sort="callCount">Calls</th>
                   <th data-profit-sort="payoutAmount">Payout Amount</th>
                   <th data-profit-sort="telcoCost">Telecom Cost</th>
+                  <th data-profit-sort="rentalCost">Number Rental</th>
                   <th data-profit-sort="netProfit">Net Profit</th>
                 </tr>
               </thead>
               <tbody id="profitTableBody">
                 <tr>
-                  <td colspan="6" class="empty-state">No profit data loaded</td>
+                  <td colspan="7" class="empty-state">No profit data loaded</td>
                 </tr>
               </tbody>
             </table>
           </div>
           <p class="profit-section__note">
-            Note: Phone number rental costs are not available via Ringba API and are excluded from this view.
+            Upload a Ringba numbers CSV to include phone rental costs ($1.00 per number) in net profit.
           </p>
         </div>
 
@@ -956,12 +1005,18 @@
       const affiliatesPanel = document.getElementById("affiliatesPanel");
       const profitPanel = document.getElementById("profitPanel");
       const profitTableBody = document.getElementById("profitTableBody");
+      const uploadNumbersCsvBtn = document.getElementById("uploadNumbersCsvBtn");
+      const numbersCsvInput = document.getElementById("numbersCsvInput");
+      const numbersCsvStatus = document.getElementById("numbersCsvStatus");
 
       let allPublishers = [];
       let allOutliers = [];
       let allProfitRows = [];
       let filteredPublishers = [];
       let filteredProfitRows = [];
+      let rentalCostsByPublisher = {};
+      let rentalCostsLoaded = false;
+      let isUploadingNumbersCsv = false;
       let selectedRowIndex = -1;
       let sortKey = "totalAmount";
       let sortDir = "desc";
@@ -1111,6 +1166,85 @@
         warningBanner.textContent = message;
       }
 
+      function normalizePublisherNameKey(name) {
+        return String(name || "").trim().toLowerCase();
+      }
+
+      function getRentalCostForPublisher(publisherName) {
+        if (!rentalCostsLoaded) {
+          return null;
+        }
+        return rentalCostsByPublisher[normalizePublisherNameKey(publisherName)] ?? 0;
+      }
+
+      function getAdjustedNetProfit(row) {
+        const payoutAmount = Number(row.payoutAmount || 0);
+        const telcoCost = Number(row.telcoCost || 0);
+        if (!rentalCostsLoaded) {
+          return Number(row.netProfit ?? payoutAmount - telcoCost);
+        }
+        const rentalCost = getRentalCostForPublisher(row.publisherName) ?? 0;
+        return payoutAmount - telcoCost - rentalCost;
+      }
+
+      function getProfitSortValue(row, key) {
+        if (key === "rentalCost") {
+          return getRentalCostForPublisher(row.publisherName) ?? 0;
+        }
+        if (key === "netProfit") {
+          return getAdjustedNetProfit(row);
+        }
+        return row[key];
+      }
+
+      function updateNumbersCsvStatus(message) {
+        numbersCsvStatus.textContent = message || "";
+      }
+
+      async function uploadNumbersCsv(file) {
+        if (!file || isUploadingNumbersCsv) {
+          return;
+        }
+
+        isUploadingNumbersCsv = true;
+        uploadNumbersCsvBtn.disabled = true;
+        updateNumbersCsvStatus("Uploading numbers CSV...");
+
+        try {
+          const csvText = await file.text();
+          const res = await fetch("/api/payment/numbers-csv", {
+            method: "POST",
+            headers: {
+              "Content-Type": "text/csv",
+            },
+            body: csvText,
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || "Failed to parse numbers CSV");
+          }
+
+          rentalCostsByPublisher =
+            data.rentalCosts && typeof data.rentalCosts === "object"
+              ? data.rentalCosts
+              : {};
+          rentalCostsLoaded = true;
+          const publisherCount = Object.keys(rentalCostsByPublisher).length;
+          updateNumbersCsvStatus(
+            "Loaded rental costs for " + publisherCount + " publisher(s)"
+          );
+          if (isProfitView()) {
+            applyProfitFilterAndSort();
+          }
+        } catch (err) {
+          updateNumbersCsvStatus(err.message || "CSV upload failed");
+        } finally {
+          isUploadingNumbersCsv = false;
+          uploadNumbersCsvBtn.disabled = false;
+          numbersCsvInput.value = "";
+        }
+      }
+
       function setLoading(loading) {
         isLoading = loading;
         runNowBtn.disabled = loading || isProfitLoading;
@@ -1231,7 +1365,7 @@
           if (isProfitView()) {
             setBanner("error", err.message || "Failed to fetch profit data");
             profitTableBody.innerHTML =
-              '<tr><td colspan="6" class="empty-state">Unable to load profit data</td></tr>';
+              '<tr><td colspan="7" class="empty-state">Unable to load profit data</td></tr>';
           }
           throw err;
         } finally {
@@ -1362,7 +1496,16 @@
         });
 
         if (profitSortKey !== "rank") {
-          filteredProfitRows.sort((a, b) => compareRows(a, b, profitSortKey, profitSortDir));
+          filteredProfitRows.sort((a, b) => {
+            const av = getProfitSortValue(a, profitSortKey);
+            const bv = getProfitSortValue(b, profitSortKey);
+            return compareRows(
+              { [profitSortKey]: av },
+              { [profitSortKey]: bv },
+              profitSortKey,
+              profitSortDir
+            );
+          });
         } else if (profitSortDir === "desc") {
           filteredProfitRows.sort((a, b) => b.telcoCost - a.telcoCost);
         } else {
@@ -1450,7 +1593,7 @@
 
         if (pageRows.length === 0) {
           profitTableBody.innerHTML =
-            '<tr><td colspan="6" class="empty-state">No publishers match your filter</td></tr>';
+            '<tr><td colspan="7" class="empty-state">No publishers match your filter</td></tr>';
           return;
         }
 
@@ -1463,9 +1606,14 @@
             tr.classList.add("row--selected");
           }
 
-          const netProfit = Number(row.netProfit || 0);
+          const rentalCost = getRentalCostForPublisher(row.publisherName);
+          const netProfit = getAdjustedNetProfit(row);
           const profitClass =
             netProfit >= 0 ? "col-profit--positive" : "col-profit--negative";
+          const rentalHtml =
+            rentalCost === null
+              ? '<span class="col-dim">\u2014</span>'
+              : '<span class="col-rental">' + formatMoney(rentalCost) + "</span>";
 
           tr.innerHTML =
             '<td class="col-rank">' + (globalIndex + 1) + "</td>" +
@@ -1473,6 +1621,7 @@
             "<td>" + Number(row.callCount || 0).toLocaleString() + "</td>" +
             '<td class="col-payout">' + formatMoney(row.payoutAmount) + "</td>" +
             '<td class="col-telco">' + formatMoney(row.telcoCost) + "</td>" +
+            "<td>" + rentalHtml + "</td>" +
             '<td class="' + profitClass + '">' + formatMoney(netProfit) + "</td>";
 
           tr.addEventListener("click", () => {
@@ -1566,6 +1715,14 @@
       });
 
       logoutBtn.addEventListener("click", showLogin);
+      uploadNumbersCsvBtn.addEventListener("click", () => {
+        numbersCsvInput.click();
+      });
+      numbersCsvInput.addEventListener("change", async () => {
+        const file = numbersCsvInput.files && numbersCsvInput.files[0];
+        if (!file) return;
+        await uploadNumbersCsv(file);
+      });
       runNowBtn.addEventListener("click", async () => {
         if (isProfitView()) {
           await fetchStats();
