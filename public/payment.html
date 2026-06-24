@@ -422,6 +422,34 @@
         font-weight: 600;
       }
 
+      .col-telco {
+        color: var(--amber);
+        font-weight: 600;
+      }
+
+      .col-profit--positive {
+        color: var(--green);
+        font-weight: 600;
+      }
+
+      .col-profit--negative {
+        color: var(--red);
+        font-weight: 600;
+      }
+
+      .profit-section__note {
+        margin-top: 12px;
+        font-size: 11px;
+        color: var(--text-dim);
+      }
+
+      .pagination-bar {
+        border: 1px solid var(--border);
+        border-top: none;
+        background: var(--bg-panel);
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+      }
+
       .outliers-section {
         margin-top: 28px;
       }
@@ -787,6 +815,7 @@
             <button type="button" class="source-filter" data-source="RINGBA">RINGBA</button>
             <button type="button" class="source-filter" data-source="POLYERAS">POLYERAS</button>
             <button type="button" class="source-filter" data-source="BOTH">BOTH</button>
+            <button type="button" class="source-filter" data-source="PROFIT">PUBLISHER PROFIT</button>
           </div>
           <input
             class="search-input"
@@ -806,29 +835,82 @@
         <div class="status-banner hidden" id="statusBanner"></div>
         <div class="status-banner status-banner--warning hidden" id="warningBanner"></div>
 
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th data-sort="rank">#</th>
-                <th data-sort="publisherName">Publisher Name</th>
-                <th data-sort="source">Source</th>
-                <th data-sort="callCount" class="col-calls">Calls</th>
-                <th data-sort="convertedCalls" class="col-calls">Converted</th>
-                <th data-sort="completedCalls" class="col-calls">Completed</th>
-                <th data-sort="ringbaAmount">Ringba Amount</th>
-                <th data-sort="polyaresAmount">Polyares Amount</th>
-                <th data-sort="totalAmount">Total</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="tableBody">
-              <tr>
-                <td colspan="11" class="empty-state">No data loaded</td>
-              </tr>
-            </tbody>
-          </table>
+        <div id="affiliatesPanel">
+          <div class="table-wrap" id="affiliatesTableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th data-sort="rank">#</th>
+                  <th data-sort="publisherName">Publisher Name</th>
+                  <th data-sort="source">Source</th>
+                  <th data-sort="callCount" class="col-calls">Calls</th>
+                  <th data-sort="convertedCalls" class="col-calls">Converted</th>
+                  <th data-sort="completedCalls" class="col-calls">Completed</th>
+                  <th data-sort="ringbaAmount">Ringba Amount</th>
+                  <th data-sort="polyaresAmount">Polyares Amount</th>
+                  <th data-sort="totalAmount">Total</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="tableBody">
+                <tr>
+                  <td colspan="11" class="empty-state">No data loaded</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <section class="outliers-section hidden" id="outliersSection">
+            <h2 class="outliers-section__header">
+              OUTLIERS — Similar but not exact name matches
+            </h2>
+            <p class="outliers-section__note">
+              These affiliates may be the same person — confirm and merge manually.
+            </p>
+            <div class="table-wrap table-wrap--outliers">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Polyares Name</th>
+                    <th>Polyares Amount</th>
+                    <th>Similar Ringba Name</th>
+                    <th>Ringba Amount</th>
+                  </tr>
+                </thead>
+                <tbody id="outliersBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div id="profitPanel" class="hidden">
+          <div class="table-wrap" id="profitTableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th data-profit-sort="rank">#</th>
+                  <th data-profit-sort="publisherName">Publisher Name</th>
+                  <th data-profit-sort="callCount">Calls</th>
+                  <th data-profit-sort="payoutAmount">Payout Amount</th>
+                  <th data-profit-sort="telcoCost">Telecom Cost</th>
+                  <th data-profit-sort="netProfit">Net Profit</th>
+                </tr>
+              </thead>
+              <tbody id="profitTableBody">
+                <tr>
+                  <td colspan="6" class="empty-state">No profit data loaded</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="profit-section__note">
+            Note: Phone number rental costs are not available via Ringba API and are excluded from this view.
+          </p>
+        </div>
+
+        <div class="pagination-bar">
           <div class="pagination" id="pagination">
             <span class="pagination__info" id="paginationInfo">—</span>
             <div class="pagination__btns">
@@ -837,29 +919,6 @@
             </div>
           </div>
         </div>
-
-        <section class="outliers-section hidden" id="outliersSection">
-          <h2 class="outliers-section__header">
-            OUTLIERS — Similar but not exact name matches
-          </h2>
-          <p class="outliers-section__note">
-            These affiliates may be the same person — confirm and merge manually.
-          </p>
-          <div class="table-wrap table-wrap--outliers">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Polyares Name</th>
-                  <th>Polyares Amount</th>
-                  <th>Similar Ringba Name</th>
-                  <th>Ringba Amount</th>
-                </tr>
-              </thead>
-              <tbody id="outliersBody"></tbody>
-            </table>
-          </div>
-        </section>
       </main>
     </div>
 
@@ -894,17 +953,30 @@
       const nextBtn = document.getElementById("nextBtn");
       const outliersSection = document.getElementById("outliersSection");
       const outliersBody = document.getElementById("outliersBody");
+      const affiliatesPanel = document.getElementById("affiliatesPanel");
+      const profitPanel = document.getElementById("profitPanel");
+      const profitTableBody = document.getElementById("profitTableBody");
 
       let allPublishers = [];
       let allOutliers = [];
+      let allProfitRows = [];
       let filteredPublishers = [];
+      let filteredProfitRows = [];
       let selectedRowIndex = -1;
       let sortKey = "totalAmount";
       let sortDir = "desc";
+      let profitSortKey = "telcoCost";
+      let profitSortDir = "desc";
       let isLoading = false;
+      let isProfitLoading = false;
       let sourceFilter = "ALL";
       let pageSize = 100;
       let currentPage = 1;
+      let profitDataMonth = null;
+
+      function isProfitView() {
+        return sourceFilter === "PROFIT";
+      }
 
       const MONTHS = [
         { value: "2026-01", label: "Jan 2026" },
@@ -1041,8 +1113,24 @@
 
       function setLoading(loading) {
         isLoading = loading;
-        runNowBtn.disabled = loading;
-        monthSelect.disabled = loading;
+        runNowBtn.disabled = loading || isProfitLoading;
+        monthSelect.disabled = loading || isProfitLoading;
+      }
+
+      function setProfitLoading(loading) {
+        isProfitLoading = loading;
+        runNowBtn.disabled = loading || isLoading;
+        monthSelect.disabled = loading || isLoading;
+      }
+
+      function updateViewPanels() {
+        if (isProfitView()) {
+          affiliatesPanel.classList.add("hidden");
+          profitPanel.classList.remove("hidden");
+        } else {
+          affiliatesPanel.classList.remove("hidden");
+          profitPanel.classList.add("hidden");
+        }
       }
 
       function updateHeaderTotals(data) {
@@ -1114,6 +1202,43 @@
         });
       }
 
+      async function fetchProfitData() {
+        const month = monthSelect.value;
+        setProfitLoading(true);
+        if (isProfitView()) {
+          setBanner("loading", "Fetching publisher profit data...");
+        }
+        try {
+          const res = await fetch("/api/payment/profit?month=" + encodeURIComponent(month));
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || "Failed to fetch profit data");
+          }
+
+          allProfitRows = Array.isArray(data.publishers) ? data.publishers : [];
+          profitDataMonth = month;
+          if (isProfitView()) {
+            affiliateCount.textContent =
+              "Publishers: " + (data.totalPublishers ?? allProfitRows.length);
+            lastUpdated.textContent =
+              "Last updated: " +
+              (data.lastUpdated ? formatCstTimestamp(data.lastUpdated) : "\u2014");
+            currentPage = 1;
+            applyProfitFilterAndSort();
+            setBanner(null, "");
+          }
+        } catch (err) {
+          if (isProfitView()) {
+            setBanner("error", err.message || "Failed to fetch profit data");
+            profitTableBody.innerHTML =
+              '<tr><td colspan="6" class="empty-state">Unable to load profit data</td></tr>';
+          }
+          throw err;
+        } finally {
+          setProfitLoading(false);
+        }
+      }
+
       async function fetchStats() {
         if (isLoading) return;
         setLoading(true);
@@ -1139,7 +1264,16 @@
             (data.lastUpdated ? formatCstTimestamp(data.lastUpdated) : "\u2014");
           renderOutliers();
           currentPage = 1;
-          applyFilterAndSort();
+          if (isProfitView()) {
+            updateViewPanels();
+            if (profitDataMonth !== month) {
+              await fetchProfitData();
+            } else {
+              applyProfitFilterAndSort();
+            }
+          } else {
+            applyFilterAndSort();
+          }
           setBanner(null, "");
         } catch (err) {
           try {
@@ -1166,7 +1300,16 @@
                 : "\u2014");
             renderOutliers();
             currentPage = 1;
-            applyFilterAndSort();
+            if (isProfitView()) {
+              updateViewPanels();
+              if (profitDataMonth !== month) {
+                await fetchProfitData();
+              } else {
+                applyProfitFilterAndSort();
+              }
+            } else {
+              applyFilterAndSort();
+            }
             setBanner(null, "");
             setWarning("Polyares data unavailable \u2014 showing Ringba only");
           } catch (fallbackErr) {
@@ -1180,19 +1323,20 @@
         }
       }
 
-      function compareRows(a, b, key) {
+      function compareRows(a, b, key, dir) {
         if (key === "rank") {
           return 0;
         }
         const av = a[key];
         const bv = b[key];
+        const sortDirection = dir ?? sortDir;
         if (typeof av === "number" && typeof bv === "number") {
-          return sortDir === "asc" ? av - bv : bv - av;
+          return sortDirection === "asc" ? av - bv : bv - av;
         }
         const as = String(av ?? "").toLowerCase();
         const bs = String(bv ?? "").toLowerCase();
-        if (as < bs) return sortDir === "asc" ? -1 : 1;
-        if (as > bs) return sortDir === "asc" ? 1 : -1;
+        if (as < bs) return sortDirection === "asc" ? -1 : 1;
+        if (as > bs) return sortDirection === "asc" ? 1 : -1;
         return 0;
       }
 
@@ -1206,6 +1350,29 @@
         return '<span class="badge-source badge-source--ringba">RINGBA</span>';
       }
 
+      function getActiveFilteredRows() {
+        return isProfitView() ? filteredProfitRows : filteredPublishers;
+      }
+
+      function applyProfitFilterAndSort() {
+        const q = searchInput.value.trim().toLowerCase();
+        filteredProfitRows = allProfitRows.filter((row) => {
+          if (!q) return true;
+          return String(row.publisherName || "").toLowerCase().includes(q);
+        });
+
+        if (profitSortKey !== "rank") {
+          filteredProfitRows.sort((a, b) => compareRows(a, b, profitSortKey, profitSortDir));
+        } else if (profitSortDir === "desc") {
+          filteredProfitRows.sort((a, b) => b.telcoCost - a.telcoCost);
+        } else {
+          filteredProfitRows.sort((a, b) => a.telcoCost - b.telcoCost);
+        }
+
+        renderProfitTable();
+        updateProfitSortHeaders();
+      }
+
       function applyFilterAndSort() {
         const q = searchInput.value.trim().toLowerCase();
         filteredPublishers = allPublishers.filter((row) => {
@@ -1217,7 +1384,7 @@
         });
 
         if (sortKey !== "rank") {
-          filteredPublishers.sort((a, b) => compareRows(a, b, sortKey));
+          filteredPublishers.sort((a, b) => compareRows(a, b, sortKey, sortDir));
         } else if (sortDir === "desc") {
           filteredPublishers.sort((a, b) => b.totalAmount - a.totalAmount);
         } else {
@@ -1226,6 +1393,15 @@
 
         renderTable();
         updateSortHeaders();
+      }
+
+      function updateProfitSortHeaders() {
+        document.querySelectorAll("th[data-profit-sort]").forEach((th) => {
+          th.classList.remove("sorted-asc", "sorted-desc");
+          if (th.dataset.profitSort === profitSortKey) {
+            th.classList.add(profitSortDir === "asc" ? "sorted-asc" : "sorted-desc");
+          }
+        });
       }
 
       function updateSortHeaders() {
@@ -1239,17 +1415,18 @@
 
       function getTotalPages() {
         if (pageSize === Infinity) return 1;
-        return Math.max(1, Math.ceil(filteredPublishers.length / pageSize));
+        return Math.max(1, Math.ceil(getActiveFilteredRows().length / pageSize));
       }
 
       function getPageSlice() {
-        if (pageSize === Infinity) return filteredPublishers;
+        const rows = getActiveFilteredRows();
+        if (pageSize === Infinity) return rows;
         const start = (currentPage - 1) * pageSize;
-        return filteredPublishers.slice(start, start + pageSize);
+        return rows.slice(start, start + pageSize);
       }
 
       function updatePagination() {
-        const total = filteredPublishers.length;
+        const total = getActiveFilteredRows().length;
         const totalPages = getTotalPages();
         if (currentPage > totalPages) currentPage = totalPages;
         if (currentPage < 1) currentPage = 1;
@@ -1265,6 +1442,46 @@
 
         prevBtn.disabled = currentPage <= 1;
         nextBtn.disabled = currentPage >= totalPages;
+      }
+
+      function renderProfitTable() {
+        updatePagination();
+        const pageRows = getPageSlice();
+
+        if (pageRows.length === 0) {
+          profitTableBody.innerHTML =
+            '<tr><td colspan="6" class="empty-state">No publishers match your filter</td></tr>';
+          return;
+        }
+
+        const globalOffset = pageSize === Infinity ? 0 : (currentPage - 1) * pageSize;
+        profitTableBody.innerHTML = "";
+        pageRows.forEach((row, index) => {
+          const globalIndex = globalOffset + index;
+          const tr = document.createElement("tr");
+          if (globalIndex === selectedRowIndex) {
+            tr.classList.add("row--selected");
+          }
+
+          const netProfit = Number(row.netProfit || 0);
+          const profitClass =
+            netProfit >= 0 ? "col-profit--positive" : "col-profit--negative";
+
+          tr.innerHTML =
+            '<td class="col-rank">' + (globalIndex + 1) + "</td>" +
+            '<td class="col-name" title="' + escapeHtml(row.publisherName) + '">' + escapeHtml(row.publisherName) + "</td>" +
+            "<td>" + Number(row.callCount || 0).toLocaleString() + "</td>" +
+            '<td class="col-payout">' + formatMoney(row.payoutAmount) + "</td>" +
+            '<td class="col-telco">' + formatMoney(row.telcoCost) + "</td>" +
+            '<td class="' + profitClass + '">' + formatMoney(netProfit) + "</td>";
+
+          tr.addEventListener("click", () => {
+            selectedRowIndex = globalIndex;
+            renderProfitTable();
+          });
+
+          profitTableBody.appendChild(tr);
+        });
       }
 
       function renderTable() {
@@ -1349,24 +1566,68 @@
       });
 
       logoutBtn.addEventListener("click", showLogin);
-      runNowBtn.addEventListener("click", fetchStats);
-      monthSelect.addEventListener("change", fetchStats);
+      runNowBtn.addEventListener("click", async () => {
+        if (isProfitView()) {
+          await fetchStats();
+          if (profitDataMonth !== monthSelect.value || allProfitRows.length === 0) {
+            try {
+              await fetchProfitData();
+            } catch {
+              /* error banner set in fetchProfitData */
+            }
+          }
+        } else {
+          await fetchStats();
+        }
+      });
+      monthSelect.addEventListener("change", async () => {
+        profitDataMonth = null;
+        await fetchStats();
+        if (isProfitView()) {
+          try {
+            await fetchProfitData();
+          } catch {
+            /* error banner set in fetchProfitData */
+          }
+        }
+      });
       searchInput.addEventListener("input", () => {
         selectedRowIndex = -1;
         currentPage = 1;
-        applyFilterAndSort();
+        if (isProfitView()) {
+          applyProfitFilterAndSort();
+        } else {
+          applyFilterAndSort();
+        }
       });
 
-      sourceFilters.addEventListener("click", (e) => {
+      sourceFilters.addEventListener("click", async (e) => {
         const btn = e.target.closest(".source-filter");
         if (!btn) return;
-        sourceFilter = btn.dataset.source || "ALL";
+        const nextSource = btn.dataset.source || "ALL";
+        sourceFilter = nextSource;
         document.querySelectorAll(".source-filter").forEach((el) => {
           el.classList.toggle("source-filter--active", el === btn);
         });
         selectedRowIndex = -1;
         currentPage = 1;
-        applyFilterAndSort();
+        updateViewPanels();
+
+        if (isProfitView()) {
+          affiliateCount.textContent =
+            "Publishers: " + (allProfitRows.length || "\u2014");
+          if (profitDataMonth !== monthSelect.value || allProfitRows.length === 0) {
+            try {
+              await fetchProfitData();
+            } catch {
+              /* error banner set in fetchProfitData */
+            }
+          } else {
+            applyProfitFilterAndSort();
+          }
+        } else {
+          applyFilterAndSort();
+        }
       });
 
       pageSizeControls.addEventListener("click", (e) => {
@@ -1378,21 +1639,49 @@
         document.querySelectorAll(".page-size-btn").forEach((el) => {
           el.classList.toggle("page-size-btn--active", el === btn);
         });
-        renderTable();
+        if (isProfitView()) {
+          renderProfitTable();
+        } else {
+          renderTable();
+        }
       });
 
       prevBtn.addEventListener("click", () => {
         if (currentPage > 1) {
           currentPage--;
-          renderTable();
+          if (isProfitView()) {
+            renderProfitTable();
+          } else {
+            renderTable();
+          }
         }
       });
 
       nextBtn.addEventListener("click", () => {
         if (currentPage < getTotalPages()) {
           currentPage++;
-          renderTable();
+          if (isProfitView()) {
+            renderProfitTable();
+          } else {
+            renderTable();
+          }
         }
+      });
+
+      document.querySelectorAll("th[data-profit-sort]").forEach((th) => {
+        th.addEventListener("click", () => {
+          const key = th.dataset.profitSort;
+          if (!key) return;
+          if (profitSortKey === key) {
+            profitSortDir = profitSortDir === "asc" ? "desc" : "asc";
+          } else {
+            profitSortKey = key;
+            profitSortDir = key === "publisherName" ? "asc" : "desc";
+          }
+          selectedRowIndex = -1;
+          currentPage = 1;
+          applyProfitFilterAndSort();
+        });
       });
 
       document.querySelectorAll("th[data-sort]").forEach((th) => {

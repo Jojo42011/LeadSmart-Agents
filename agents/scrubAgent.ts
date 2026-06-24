@@ -1,10 +1,12 @@
 import axios from "axios";
 import {
   approveConversionAdjustmentJob,
+  CONVERSION_ALREADY_ZERO_VOID_MARKER,
   getOpenCallVoidConversionJobs,
   RingbaAuthError,
   RingbaRateLimitError,
   voidCall,
+  type ApproveConversionAdjustmentArgs,
   type OpenConversionVoidJob,
 } from "../lib/ringbaClient";
 import {
@@ -86,13 +88,107 @@ function classifyScrubError(error: unknown): ScrubErrorInfo {
   return { message: String(error), kind: "unknown" };
 }
 
-const CONVERSION_ALREADY_ZERO_VOID_MARKER =
-  "Conversion would be brought below zero";
-
 function isConversionAlreadyAtZeroVoidError(error: unknown): boolean {
   return classifyScrubError(error).message.includes(
     CONVERSION_ALREADY_ZERO_VOID_MARKER
   );
+}
+
+interface ApproveLogContext {
+  inboundCallId: string;
+  taskId: string;
+  publisherName: string;
+}
+
+async function runApproveWithZeroConversionRetry(
+  jobId: string,
+  approveArgs: ApproveConversionAdjustmentArgs,
+  context: ApproveLogContext
+): Promise<void> {
+  const { inboundCallId, taskId, publisherName } = context;
+
+  const logApproveCalled = (args: ApproveConversionAdjustmentArgs) => {
+    logTaskStep("APPROVE_CALLED", {
+      inboundCallId,
+      taskId,
+      publisherName,
+      errorMessage: jsonForScrubLog({
+        args: { ...args, actionName: "approve" },
+      }),
+    });
+  };
+
+  const logApproveSuccess = (approveResult: unknown) => {
+    logTaskStep("APPROVE_SUCCESS", {
+      inboundCallId,
+      taskId,
+      publisherName,
+      errorMessage: jsonForScrubLog(approveResult),
+    });
+  };
+
+  logApproveCalled(approveArgs);
+  try {
+    const approveResult = await approveConversionAdjustmentJob(jobId, approveArgs);
+    logApproveSuccess(approveResult);
+    return;
+  } catch (firstError) {
+    const alreadyZeroArgs =
+      approveArgs.amountConversion === 0 && approveArgs.amountPayout === 0;
+    if (!isConversionAlreadyAtZeroVoidError(firstError) || alreadyZeroArgs) {
+      throw firstError;
+    }
+
+    const retryArgs: ApproveConversionAdjustmentArgs = {
+      amountConversion: 0,
+      amountPayout: 0,
+    };
+    logApproveCalled(retryArgs);
+    const retryResult = await approveConversionAdjustmentJob(jobId, retryArgs);
+    logApproveSuccess(retryResult);
+  }
+}
+
+function logApproveFailureAfterVoid(
+  context: ApproveLogContext & {
+    totalAmount: number;
+    payoutAmount: number;
+    conversionAmount: number;
+  },
+  approveError: unknown
+): void {
+  const {
+    inboundCallId,
+    taskId,
+    publisherName,
+    totalAmount,
+    payoutAmount,
+    conversionAmount,
+  } = context;
+  const { message, kind } = classifyScrubError(approveError);
+
+  logTaskStep("APPROVE_FAILED", {
+    inboundCallId,
+    taskId,
+    publisherName,
+    amountVoided: totalAmount,
+    voidPayoutAmount: payoutAmount,
+    voidConversionAmount: conversionAmount,
+    errorMessage: message,
+  });
+  console.log(
+    `[ScrubAgent] VOID OK, APPROVE FAILED $${totalAmount.toFixed(2)} ${publisherName} — [${kind}] ${message}`
+  );
+  logScrub({
+    inboundCallId,
+    publisherName,
+    amountVoided: totalAmount,
+    voidPayoutAmount: payoutAmount,
+    voidConversionAmount: conversionAmount,
+    status: "void_success_approve_failed",
+    errorMessage: message,
+    taskId,
+  });
 }
 
 function voidAmountsFromJob(
@@ -282,51 +378,54 @@ export async function runScrubAgent(): Promise<ScrubRunResult> {
         voidConversionAmount: conversionAmount,
       });
 
-      const amountConversion =
-        conversionAmount > 0 ? -conversionAmount : 0;
+      try {
+        await runApproveWithZeroConversionRetry(
+          jobId,
+          { amountConversion: 0, amountPayout: 0 },
+          { inboundCallId, taskId: jobId, publisherName }
+        );
 
-      const approveArgs = {
-        amountConversion,
-        amountPayout: 0,
-      };
-      const approvePayload = {
-        args: {
-          ...approveArgs,
-          actionName: "approve",
-        },
-      };
+        console.log(
+          `[ScrubAgent] SUCCESS $${totalAmount.toFixed(2)} ${publisherName}`
+        );
+        logScrub({
+          inboundCallId,
+          publisherName,
+          amountVoided: totalAmount,
+          voidPayoutAmount: payoutAmount,
+          voidConversionAmount: conversionAmount,
+          status: "success",
+          taskId: jobId,
+        });
+        result.processed += 1;
+      } catch (approveError) {
+        if (approveError instanceof RingbaAuthError) {
+          const { message } = classifyScrubError(approveError);
+          logTaskStep("AUTH_ABORT", {
+            inboundCallId,
+            taskId: jobId,
+            publisherName,
+            amountVoided: 0,
+            errorMessage: message,
+          });
+          result.authFailure = true;
+          return result;
+        }
 
-      logTaskStep("APPROVE_CALLED", {
-        inboundCallId,
-        taskId: jobId,
-        publisherName,
-        errorMessage: jsonForScrubLog(approvePayload),
-      });
-      const approveResult = await approveConversionAdjustmentJob(
-        jobId,
-        approveArgs
-      );
-
-      logTaskStep("APPROVE_SUCCESS", {
-        inboundCallId,
-        taskId: jobId,
-        publisherName,
-        errorMessage: jsonForScrubLog(approveResult),
-      });
-
-      console.log(
-        `[ScrubAgent] SUCCESS $${totalAmount.toFixed(2)} ${publisherName}`
-      );
-      logScrub({
-        inboundCallId,
-        publisherName,
-        amountVoided: totalAmount,
-        voidPayoutAmount: payoutAmount,
-        voidConversionAmount: conversionAmount,
-        status: "success",
-        taskId: jobId,
-      });
-      result.processed += 1;
+        recordError(inboundCallId, approveError);
+        logApproveFailureAfterVoid(
+          {
+            inboundCallId,
+            taskId: jobId,
+            publisherName,
+            totalAmount,
+            payoutAmount,
+            conversionAmount,
+          },
+          approveError
+        );
+        result.errors += 1;
+      }
 
       if (callDelayMs > 0) {
         await sleep(callDelayMs);
@@ -357,34 +456,11 @@ export async function runScrubAgent(): Promise<ScrubRunResult> {
           `[ScrubAgent] VOID SKIPPED (conversion already zero), approving task ${publisherName}`
         );
         try {
-          const approveArgs = {
-            amountConversion: 0,
-            amountPayout: 0,
-          };
-          const approvePayload = {
-            args: {
-              ...approveArgs,
-              actionName: "approve",
-            },
-          };
-
-          logTaskStep("APPROVE_CALLED", {
-            inboundCallId,
-            taskId: jobId,
-            publisherName,
-            errorMessage: jsonForScrubLog(approvePayload),
-          });
-          const approveResult = await approveConversionAdjustmentJob(
+          await runApproveWithZeroConversionRetry(
             jobId,
-            approveArgs
+            { amountConversion: 0, amountPayout: 0 },
+            { inboundCallId, taskId: jobId, publisherName }
           );
-
-          logTaskStep("APPROVE_SUCCESS", {
-            inboundCallId,
-            taskId: jobId,
-            publisherName,
-            errorMessage: jsonForScrubLog(approveResult),
-          });
 
           console.log(
             `[ScrubAgent] SUCCESS $${totalAmount.toFixed(2)} ${publisherName}`
@@ -413,27 +489,18 @@ export async function runScrubAgent(): Promise<ScrubRunResult> {
             return result;
           }
 
-          const { message, kind } = classifyScrubError(approveError);
-          logTaskStep("APPROVE_FAILED", {
-            inboundCallId,
-            taskId: jobId,
-            publisherName,
-            errorMessage: message,
-          });
           recordError(inboundCallId, approveError);
-          console.log(
-            `[ScrubAgent] VOID OK, APPROVE FAILED $${totalAmount.toFixed(2)} ${publisherName} — [${kind}] ${message}`
+          logApproveFailureAfterVoid(
+            {
+              inboundCallId,
+              taskId: jobId,
+              publisherName,
+              totalAmount,
+              payoutAmount,
+              conversionAmount,
+            },
+            approveError
           );
-          logScrub({
-            inboundCallId,
-            publisherName,
-            amountVoided: totalAmount,
-            voidPayoutAmount: payoutAmount,
-            voidConversionAmount: conversionAmount,
-            status: "void_success_approve_failed",
-            errorMessage: message,
-            taskId: jobId,
-          });
           result.errors += 1;
         }
 
@@ -443,32 +510,21 @@ export async function runScrubAgent(): Promise<ScrubRunResult> {
         continue;
       }
 
-      const { message, kind } = classifyScrubError(error);
+      const { message } = classifyScrubError(error);
       recordError(inboundCallId, error);
 
       if (voidSucceeded) {
-        logTaskStep("APPROVE_FAILED", {
-          inboundCallId,
-          taskId: jobId,
-          publisherName,
-          amountVoided: totalAmount,
-          voidPayoutAmount: payoutAmount,
-          voidConversionAmount: conversionAmount,
-          errorMessage: message,
-        });
-        console.log(
-          `[ScrubAgent] VOID OK, APPROVE FAILED $${totalAmount.toFixed(2)} ${publisherName} — [${kind}] ${message}`
+        logApproveFailureAfterVoid(
+          {
+            inboundCallId,
+            taskId: jobId,
+            publisherName,
+            totalAmount,
+            payoutAmount,
+            conversionAmount,
+          },
+          error
         );
-        logScrub({
-          inboundCallId,
-          publisherName,
-          amountVoided: totalAmount,
-          voidPayoutAmount: payoutAmount,
-          voidConversionAmount: conversionAmount,
-          status: "void_success_approve_failed",
-          errorMessage: message,
-          taskId: jobId,
-        });
       } else {
         logTaskStep("VOID_FAILED", {
           inboundCallId,

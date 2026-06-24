@@ -25,6 +25,14 @@ export interface PublisherPayoutRow {
   completedCalls?: number;
 }
 
+export interface PublisherProfitRow {
+  publisherName: string;
+  payoutAmount: number;
+  telcoCost: number;
+  callCount: number;
+  netProfit: number;
+}
+
 export interface MergedPublisherRow {
   publisherName: string;
   ringbaAmount: number;
@@ -52,13 +60,48 @@ function normalizePublisherName(name: string): string {
   return name.trim().toLowerCase();
 }
 
+function isRingbaSuffixTagMatch(polyName: string, ringbaName: string): boolean {
+  const poly = normalizePublisherName(polyName);
+  const ringba = normalizePublisherName(ringbaName);
+  if (poly === ringba) {
+    return false;
+  }
+  if (!ringba.startsWith(poly)) {
+    return false;
+  }
+  return ringba.slice(poly.length).startsWith(" -");
+}
+
 function isSimilarNameMatch(polyName: string, ringbaName: string): boolean {
   const poly = normalizePublisherName(polyName);
   const ringba = normalizePublisherName(ringbaName);
-  if (poly === ringba) return false;
-  if (!ringba.startsWith(poly)) return false;
+  if (poly === ringba) {
+    return false;
+  }
+  if (isRingbaSuffixTagMatch(polyName, ringbaName)) {
+    return false;
+  }
+  if (!ringba.startsWith(poly)) {
+    return false;
+  }
   const nextChar = ringba[poly.length];
   return nextChar === undefined || /[\s\-–—|/,(]/.test(nextChar);
+}
+
+function findSuffixTagRingbaMatch(
+  polyName: string,
+  ringbaRows: PublisherPayoutRow[]
+): PublisherPayoutRow | null {
+  const matches = ringbaRows.filter((row) =>
+    isRingbaSuffixTagMatch(polyName, row.publisherName)
+  );
+
+  if (matches.length === 0) {
+    return null;
+  }
+
+  matches.sort((a, b) => b.payoutAmount - a.payoutAmount);
+  return matches[0];
 }
 
 function findPartialRingbaMatch(
@@ -91,8 +134,8 @@ function findPartialRingbaMatch(
 }
 
 /**
- * Merges Ringba and Polyares payout rows by exact publisher name (case-insensitive trim).
- * Partial name matches are kept as separate rows and flagged in outliers for manual review.
+ * Merges Ringba and Polyares payout rows by exact name or Ringba suffix-tag name.
+ * Ambiguous partial matches are flagged in outliers for manual review.
  */
 export function mergeAffiliates(
   ringbaRows: PublisherPayoutRow[],
@@ -139,6 +182,29 @@ export function mergeAffiliates(
         completedCalls: ringbaRow.completedCalls,
       };
       continue;
+    }
+
+    const suffixTagRingba = findSuffixTagRingbaMatch(
+      polyRow.publisherName,
+      ringbaRows
+    );
+    if (suffixTagRingba) {
+      const suffixKey = normalizePublisherName(suffixTagRingba.publisherName);
+      const suffixIndex = publisherIndexByKey.get(suffixKey);
+      if (suffixIndex !== undefined) {
+        const existing = publishers[suffixIndex];
+        publishers[suffixIndex] = {
+          publisherName: suffixTagRingba.publisherName,
+          ringbaAmount: existing.ringbaAmount,
+          polyaresAmount: existing.polyaresAmount + polyRow.payoutAmount,
+          totalAmount: existing.ringbaAmount + existing.polyaresAmount + polyRow.payoutAmount,
+          source: "BOTH",
+          callCount: suffixTagRingba.callCount,
+          convertedCalls: suffixTagRingba.convertedCalls,
+          completedCalls: suffixTagRingba.completedCalls,
+        };
+        continue;
+      }
     }
 
     publishers.push({
@@ -346,6 +412,84 @@ export async function fetchPublisherPayouts(
     .filter((row): row is PublisherPayoutRow => row !== null);
 
   rows.sort((a, b) => b.payoutAmount - a.payoutAmount);
+
+  return rows;
+}
+
+function normalizeProfitRow(
+  raw: Record<string, unknown>
+): PublisherProfitRow | null {
+  const publisherName = String(
+    raw.publisherName ?? raw.PublisherName ?? raw.publisher ?? ""
+  ).trim();
+
+  if (!publisherName) {
+    return null;
+  }
+
+  const payoutAmount = parseNumber(raw.payoutAmount);
+  const telcoCost = parseNumber(raw.telcoCost);
+  const callCount = parseNumber(raw.callCount);
+
+  if (payoutAmount === 0 && telcoCost === 0) {
+    return null;
+  }
+
+  return {
+    publisherName,
+    payoutAmount,
+    telcoCost,
+    callCount,
+    netProfit: payoutAmount - telcoCost,
+  };
+}
+
+/**
+ * Pulls per-publisher payout, telco cost, and net profit from Ringba insights.
+ */
+export async function fetchPublisherProfitData(
+  startDate: string,
+  endDate: string
+): Promise<PublisherProfitRow[]> {
+  const client = createClient();
+  const accountId = getAccountId();
+
+  const body = {
+    reportStart: startDate,
+    reportEnd: endDate,
+    groupByColumns: [{ column: "publisherName" }],
+    valueColumns: [
+      { column: "payoutAmount", aggregateFunction: null },
+      { column: "telcoCost", aggregateFunction: null },
+      { column: "callCount", aggregateFunction: null },
+    ],
+    orderByColumns: [{ column: "telcoCost", direction: "desc" }],
+    formatTimespans: true,
+    formatPercentages: true,
+    generateRollups: true,
+    maxResultsPerGroup: 1000,
+    filters: [],
+    formatTimeZone: "America/Chicago",
+  };
+
+  let response;
+  try {
+    response = await client.post<unknown>(`/${accountId}/insights`, body);
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      console.error(
+        "[PaymentAgent] Ringba profit insights error response:",
+        JSON.stringify(error.response?.data, null, 2)
+      );
+    }
+    throw error;
+  }
+
+  const rows = extractRawRows(response.data)
+    .map(normalizeProfitRow)
+    .filter((row): row is PublisherProfitRow => row !== null);
+
+  rows.sort((a, b) => b.telcoCost - a.telcoCost);
 
   return rows;
 }

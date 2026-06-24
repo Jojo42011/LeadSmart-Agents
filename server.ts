@@ -6,7 +6,12 @@ import { ensureScrubLogSchema } from "./lib/logger";
 import { getDataDir, getDbPath, getPublicDir } from "./lib/paths";
 import { importDatabaseFile } from "./lib/importDatabase";
 import { triggerPollNow } from "./lib/pollScheduler";
-import { fetchPublisherPayouts, fetchPolyaresPayouts, mergeAffiliates } from "./agents/paymentAgent";
+import {
+  fetchPublisherPayouts,
+  fetchPolyaresPayouts,
+  fetchPublisherProfitData,
+  mergeAffiliates,
+} from "./agents/paymentAgent";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const DB_PATH = getDbPath();
@@ -514,6 +519,31 @@ app.get("/api/payment/stats/all", async (req, res) => {
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : "Failed to fetch payment stats",
+    });
+  }
+});
+
+app.get("/api/payment/profit", async (req, res) => {
+  try {
+    const monthParam =
+      typeof req.query.month === "string" ? req.query.month : undefined;
+    const range = monthToDateRange(monthParam);
+    const publishers = await fetchPublisherProfitData(
+      range.startDate,
+      range.endDate
+    );
+
+    res.json({
+      month: range.month,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      lastUpdated: new Date().toISOString(),
+      totalPublishers: publishers.length,
+      publishers,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to fetch profit data",
     });
   }
 });

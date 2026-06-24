@@ -161,7 +161,7 @@ export function getRecentLogs(limit: number): ScrubLogEntry[] {
 }
 
 /**
- * Returns true if void already ran for this call (full success or approve failed after void).
+ * Returns true if this call was fully scrubbed (approve succeeded).
  */
 export function wasSuccessfullyProcessed(inboundCallId: string): boolean {
   const database = getDb();
@@ -169,7 +169,7 @@ export function wasSuccessfullyProcessed(inboundCallId: string): boolean {
     .prepare(
       `SELECT 1 FROM scrub_log
        WHERE inboundCallId = ?
-         AND status IN ('success', 'void_success_approve_failed')
+         AND status = 'success'
        LIMIT 1`
     )
     .get(inboundCallId);

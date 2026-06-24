@@ -516,10 +516,31 @@ export async function getOpenCallVoidConversionJobs(): Promise<
   }
 }
 
+/** Substring in Ringba void/approve errors when conversion is already zero. */
+export const CONVERSION_ALREADY_ZERO_VOID_MARKER =
+  "Conversion would be brought below zero";
+
 /** Args for jobQueue approve action on a conversion-adjustment task. */
 export interface ApproveConversionAdjustmentArgs {
   amountConversion: number;
   amountPayout: number;
+}
+
+interface ApproveJobResponseBody {
+  success?: boolean;
+  job?: unknown;
+  errors?: Array<{ errorMessage?: string }>;
+}
+
+function extractApproveErrorMessage(body: unknown): string {
+  if (body && typeof body === "object") {
+    const data = body as ApproveJobResponseBody;
+    const message = data.errors?.[0]?.errorMessage;
+    if (message) {
+      return message;
+    }
+  }
+  return JSON.stringify(body);
 }
 
 /** Full Ringba approve HTTP response for caller inspection. */
@@ -563,6 +584,15 @@ export async function approveConversionAdjustmentJob(
       `[ScrubAgent] approval response jobId=${jobId}:`,
       JSON.stringify(result, null, 2)
     );
+
+    const body = response.data;
+    if (
+      body &&
+      typeof body === "object" &&
+      (body as ApproveJobResponseBody).success === false
+    ) {
+      throw new Error(extractApproveErrorMessage(body));
+    }
 
     return result;
   } catch (error) {
