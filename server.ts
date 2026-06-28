@@ -15,6 +15,12 @@ import {
   rentalCostsFromNumberCounts,
 } from "./agents/paymentAgent";
 
+import http from "http";
+import { WebSocketServer } from "ws";
+import { handleDeepgramUpgrade } from "./hull/voice/deepgramProxy";
+import { generateTTS } from "./hull/voice/tts";
+import { runAgentLoop } from "./hull/brain/agent-loop";
+
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const DB_PATH = getDbPath();
 const PUBLIC_DIR = getPublicDir();
@@ -74,6 +80,62 @@ function getOverview() {
         "SELECT lastSuccessfulPollAt FROM poll_state WHERE id = 1"
       )
       .get() as { lastSuccessfulPollAt: string | null } | undefined;
+
+    const lastRunAt = pollRow?.lastSuccessfulPollAt ?? null;
+
+    let lastRun = {
+      timestamp: lastRunAt,
+      voided: 0,
+      skipped: null as number | null,
+      errors: 0,
+      dryRuns: 0,
+    };
+
+    if (lastRunAt) {
+      const window = db
+        .prepare(
+          `SELECT
+             SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS voided,
+             SUM(CASE WHEN status IN ('error', 'void_success_approve_failed') THEN 1 ELSE 0 END) AS errors,
+             SUM(CASE WHEN status = 'dry_run' THEN 1 ELSE 0 END) AS dryRuns
+           FROM scrub_log
+           WHERE createdAt > datetime(?, '-11 minutes')
+             AND createdAt <= datetime(?, '+1 second')`
+        )
+        .get(lastRunAt, lastRunAt) as {
+        voided: number | null;
+        errors: number | null;
+        dryRuns: number | null;
+      };
+
+      lastRun = {
+        timestamp: lastRunAt,
+        voided: window.voided ?? 0,
+        skipped: null,
+        errors: window.errors ?? 0,
+        dryRuns: window.dryRuns ?? 0,
+      };
+    }
+
+    const pollIntervalMs = envPollIntervalMs();
+    let nextRunAt: string | null = null;
+    if (lastRunAt) {
+      const nextMs = new Date(lastRunAt).getTime() + pollIntervalMs;
+      nextRunAt = new Date(nextMs).toISOString();
+    }
+
+    return {
+      totalScrubs: totals.totalScrubs,
+      totalPayoutVoided: totals.totalPayoutVoided,
+      totalRevenueVoided: totals.totalRevenueVoided,
+      lastRun,
+      pollIntervalMs,
+      nextRunAt,
+    };
+  } finally {
+    db.close();
+  }
+}
 
     const lastRunAt = pollRow?.lastSuccessfulPollAt ?? null;
 
@@ -608,10 +670,44 @@ app.get("/api/debug/failed-scrubs", (req, res) => {
   }
 });
 
+app.post("/jarvis/tts", async (req, res) => {
+  const text = (req.body?.text || "").trim();
+  if (!text) return res.status(400).json({ error: "text required" });
+  const result = await generateTTS(text);
+  if (!result) return res.status(500).json({ error: "TTS failed" });
+  res.setHeader("Content-Type", "audio/pcm");
+  res.setHeader("X-Sample-Rate", String(result.sampleRate));
+  res.send(result.pcm);
+});
+
+app.post("/v1/chat/completions", async (req, res) => {
+  // Placeholder – will use agent loop from brain
+  res.status(501).json({ error: "Not yet integrated – brain layer pending" });
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, model: process.env.AETHON_MODEL || "claude-sonnet-4-6", memory: "initializing" });
+});
+
+app.get("/memory", (_req, res) => {
+  res.status(501).json({ error: "Memory page pending – UI phase" });
+});
+
 app.get("*", (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "index.html"));
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+
+server.on("upgrade", (request, socket, head) => {
+  const { pathname } = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+  if (handleDeepgramUpgrade(request, socket, head, (_req) => true)) {
+    return;
+  }
+  socket.destroy();
+});
+
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`[Dashboard] listening on 0.0.0.0:${PORT}`);
 });
