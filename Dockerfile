@@ -13,6 +13,7 @@ COPY tsconfig.json ./
 COPY index.ts start.ts server.ts ./
 COPY agents ./agents
 COPY lib ./lib
+COPY hull ./hull
 COPY public ./public
 
 RUN npm run build && npm prune --omit=dev
