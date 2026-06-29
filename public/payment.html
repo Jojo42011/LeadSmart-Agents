@@ -234,6 +234,34 @@
         text-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
       }
 
+      .topbar__nav {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+        margin-right: 8px;
+      }
+
+      .topbar__nav-link {
+        font-size: 10px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        text-decoration: none;
+        color: var(--text-dim);
+        padding: 6px 10px;
+        border: 1px solid transparent;
+      }
+
+      .topbar__nav-link:hover {
+        color: var(--green);
+        border-color: rgba(0, 255, 136, 0.35);
+      }
+
+      .topbar__nav-link--active {
+        color: var(--green);
+        border-color: rgba(0, 255, 136, 0.45);
+      }
+
       .topbar__right {
         display: flex;
         align-items: center;
@@ -819,6 +847,12 @@
     <div class="dashboard hidden" id="dashboard">
       <header class="topbar">
         <div class="topbar__brand">LEADSMART // PAYMENT DASHBOARD</div>
+        <nav class="topbar__nav" aria-label="LeadSmart navigation">
+          <a class="topbar__nav-link" href="/">Scrub</a>
+          <a class="topbar__nav-link topbar__nav-link--active" href="/payments">Payments</a>
+          <a class="topbar__nav-link" href="/jarvis">JARVIS</a>
+          <a class="topbar__nav-link" href="/memory">Memory</a>
+        </nav>
         <div class="topbar__right">
           <div class="topbar__clock" id="cstClock">CST --:--:--</div>
           <button class="btn btn--ghost" type="button" id="logoutBtn">Logout</button>

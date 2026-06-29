@@ -16,13 +16,13 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
     "axios": "^1.7.9",
     "axios-cookiejar-support": "^7.0.0",
     "better-sqlite3": "^11.8.1",
     "csv-parse": "^6.2.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "openai": "^4.77.0",
     "tough-cookie": "^6.0.1",
     "ws": "^8.18.0"
   },

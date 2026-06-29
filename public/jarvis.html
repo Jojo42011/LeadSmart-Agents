@@ -92,11 +92,159 @@
         z-index: 2;
         display: grid;
         grid-template-rows: 56px 1fr;
+        grid-template-columns: 1fr min(360px, 34vw);
         grid-template-areas:
-          "topbar"
-          "center";
+          "topbar topbar"
+          "center console";
         height: 100vh;
         width: 100vw;
+      }
+
+      .topbar__nav {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+        margin-right: 18px;
+      }
+      .topbar__link {
+        font-size: 10px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        text-decoration: none;
+        padding: 6px 10px;
+        border: 1px solid transparent;
+        transition: color 0.2s, border-color 0.2s, box-shadow 0.2s;
+      }
+      .topbar__link:hover {
+        color: var(--cyan);
+        border-color: rgba(0, 255, 255, 0.35);
+        box-shadow: 0 0 12px rgba(0, 255, 255, 0.12);
+      }
+      .topbar__link--active {
+        color: var(--cyan);
+        border-color: rgba(0, 255, 255, 0.5);
+      }
+
+      .jarvis-console {
+        grid-area: console;
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid rgba(0, 122, 122, 0.35);
+        background: linear-gradient(
+          180deg,
+          rgba(0, 18, 18, 0.92),
+          rgba(0, 8, 8, 0.96)
+        );
+        backdrop-filter: blur(8px);
+        z-index: 4;
+      }
+      .console__header {
+        padding: 14px 16px 10px;
+        border-bottom: 1px solid rgba(0, 122, 122, 0.25);
+      }
+      .console__title {
+        font-size: 10px;
+        letter-spacing: 3px;
+        color: var(--cyan-soft);
+        text-transform: uppercase;
+      }
+      .console__sub {
+        margin-top: 4px;
+        font-size: 9px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+      }
+      .console__log {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .chat-msg {
+        padding: 10px 12px;
+        border: 1px solid rgba(0, 122, 122, 0.2);
+        background: rgba(0, 0, 0, 0.35);
+      }
+      .chat-msg--user {
+        border-color: rgba(0, 255, 255, 0.15);
+      }
+      .chat-msg--assistant {
+        border-color: rgba(0, 255, 136, 0.2);
+        box-shadow: inset 0 0 20px rgba(0, 255, 255, 0.03);
+      }
+      .chat-msg__role {
+        display: block;
+        font-size: 9px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        margin-bottom: 6px;
+      }
+      .chat-msg__text {
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--text);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .console__error {
+        margin: 0 14px;
+        font-size: 10px;
+        color: var(--amber);
+        letter-spacing: 1px;
+      }
+      .console__input-row {
+        display: flex;
+        gap: 8px;
+        padding: 12px 14px 14px;
+        border-top: 1px solid rgba(0, 122, 122, 0.25);
+      }
+      .console__input {
+        flex: 1;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(0, 122, 122, 0.35);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 12px;
+        padding: 10px 12px;
+        outline: none;
+      }
+      .console__input:focus {
+        border-color: var(--cyan-dim);
+        box-shadow: 0 0 0 1px rgba(0, 255, 255, 0.15);
+      }
+      .console__send {
+        font-family: inherit;
+        font-size: 10px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        padding: 10px 14px;
+        border: 1px solid var(--cyan-dim);
+        background: rgba(0, 255, 255, 0.08);
+        color: var(--cyan);
+        cursor: pointer;
+      }
+      .console__send:hover {
+        background: rgba(0, 255, 255, 0.14);
+        box-shadow: 0 0 14px rgba(0, 255, 255, 0.2);
+      }
+
+      @media (max-width: 960px) {
+        #app {
+          grid-template-columns: 1fr;
+          grid-template-rows: 56px 1fr min(240px, 32vh);
+          grid-template-areas:
+            "topbar"
+            "center"
+            "console";
+        }
+        .jarvis-console {
+          border-left: none;
+          border-top: 1px solid rgba(0, 122, 122, 0.35);
+        }
       }
 
       /* ---------- TOP BAR ---------- */
@@ -318,6 +466,12 @@
         <div class="topbar__brand">
           JARVIS<span class="slash">//</span><span class="unit">LEADSMART</span>
         </div>
+        <nav class="topbar__nav" aria-label="LeadSmart navigation">
+          <a class="topbar__link" href="/">Scrub</a>
+          <a class="topbar__link" href="/payments">Payments</a>
+          <a class="topbar__link topbar__link--active" href="/jarvis">JARVIS</a>
+          <a class="topbar__link" href="/memory">Memory</a>
+        </nav>
         <div class="topbar__clock" id="clock">--:--:--</div>
       </header>
 
@@ -338,6 +492,25 @@
         </div>
         <div class="voice-note" id="voiceNote">Voice Unavailable</div>
       </main>
+
+      <aside class="jarvis-console" aria-label="JARVIS conversation">
+        <div class="console__header">
+          <div class="console__title">Neural Link</div>
+          <div class="console__sub">Tap orb to speak · or type below</div>
+        </div>
+        <div class="console__log" id="chatLog"></div>
+        <p class="console__error" id="chatError" hidden></p>
+        <div class="console__input-row">
+          <input
+            type="text"
+            class="console__input"
+            id="chatInput"
+            placeholder="Ask JARVIS..."
+            autocomplete="off"
+          />
+          <button type="button" class="console__send" id="chatSendBtn">Send</button>
+        </div>
+      </aside>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -511,11 +684,23 @@
         recognition.lang = "en-US";
 
         recognition.onresult = (event) => {
-          beginProcessing();
+          const text =
+            event.results &&
+            event.results[0] &&
+            event.results[0][0] &&
+            event.results[0][0].transcript
+              ? event.results[0][0].transcript.trim()
+              : "";
+          if (text) {
+            window.dispatchEvent(
+              new CustomEvent("jarvis-transcript", { detail: { text } })
+            );
+          }
         };
         recognition.onerror = () => {
-          // Fall back to demo cycle if mic fails/denied.
-          if (currentState === STATE.LISTENING) beginProcessing();
+          if (currentState === STATE.LISTENING) {
+            transitionTo(STATE.STANDBY);
+          }
         };
         recognition.onend = () => {
           // If listening ended with no result, drift back to standby.
@@ -540,6 +725,13 @@
         setState(state);
       }
 
+      window.JarvisShell = {
+        transitionTo,
+        STATE,
+        clearTimer,
+        setState,
+      };
+
       function beginListening() {
         transitionTo(STATE.LISTENING);
         if (speechSupported && recognition) {
@@ -555,17 +747,11 @@
       }
 
       function beginProcessing() {
-        transitionTo(STATE.PROCESSING);
-        stateTimer = setTimeout(() => {
-          beginResponding();
-        }, 2000);
+        /* Voice pipeline handled by jarvis-client.js */
       }
 
       function beginResponding() {
-        transitionTo(STATE.RESPONDING);
-        stateTimer = setTimeout(() => {
-          transitionTo(STATE.STANDBY);
-        }, 3000);
+        /* Voice pipeline handled by jarvis-client.js */
       }
 
       function onCoreActivate() {
@@ -930,5 +1116,6 @@
         onCoreActivate();
       }, { passive: false });
     </script>
+    <script src="/jarvis-client.js"></script>
   </body>
 </html>

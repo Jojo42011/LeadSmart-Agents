@@ -1,11 +1,9 @@
 import { randomUUID } from "crypto";
-import Anthropic from "@anthropic-ai/sdk";
 import { embedText, float32ToBlob } from "./embeddings.js";
 import { getHullDb } from "./store.js";
 import { upsertNode } from "./nodes.js";
 import { broadcastHullEvent } from "../ws.js";
-
-const HAIKU = "claude-haiku-4-5-20251001";
+import { getFastModel, getOpenAIClient } from "../openaiConfig.js";
 
 export interface TranscriptTurn {
   role: string;
@@ -44,10 +42,8 @@ export async function runPostConversationExtraction(
   transcript: TranscriptTurn[],
 ): Promise<void> {
   if (transcript.length < 2) return;
-  const key = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!key) return;
-
-  const client = new Anthropic({ apiKey: key });
+  const client = getOpenAIClient();
+  if (!client) return;
   const lines = transcript.map((t) => `${t.role}: ${t.text}`).join("\n");
 
   const prompt = `Extract structured memory from this conversation transcript. Return ONLY valid JSON with keys:
@@ -61,15 +57,12 @@ Transcript:
 ${lines.slice(0, 12000)}`;
 
   try {
-    const res = await client.messages.create({
-      model: HAIKU,
+    const res = await client.chat.completions.create({
+      model: getFastModel(),
       max_tokens: 1500,
       messages: [{ role: "user", content: prompt }],
     });
-    const text = res.content
-      .filter((b) => b.type === "text")
-      .map((b) => (b as { text: string }).text)
-      .join("");
+    const text = res.choices[0]?.message?.content?.trim() || "";
     const parsed = safeJsonParse(text) as Record<string, unknown> | null;
     if (!parsed) {
       console.warn("[hull/extraction] JSON parse failed");

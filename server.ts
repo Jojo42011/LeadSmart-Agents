@@ -18,7 +18,19 @@ import {
 import http from "http";
 import { handleDeepgramUpgrade } from "./hull/voice/deepgramProxy";
 import { generateTTS } from "./hull/voice/tts";
+import { sanitizeSpeech } from "./hull/voice/sanitizeSpeech";
 import { handleChatCompletions } from "./hull/brain/agent-loop";
+import { runPostConversationExtraction } from "./hull/memory/extraction";
+import {
+  getMemoryOverview,
+  getGraphForEntity,
+  listEpisodes,
+  listFacts,
+  listRules,
+  listSyntheses,
+} from "./hull/memory/readApi";
+import { handleHullEventsUpgrade } from "./hull/ws";
+import { getChatModel, getOpenAIClient } from "./hull/openaiConfig";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const DB_PATH = getDbPath();
@@ -614,7 +626,7 @@ app.get("/api/debug/failed-scrubs", (req, res) => {
 });
 
 app.post("/jarvis/tts", async (req, res) => {
-  const text = (req.body?.text || "").trim();
+  const text = sanitizeSpeech(String(req.body?.text || ""));
   if (!text) return res.status(400).json({ error: "text required" });
   const result = await generateTTS(text);
   if (!result) return res.status(500).json({ error: "TTS failed" });
@@ -627,12 +639,105 @@ app.post("/v1/chat/completions", (req, res) => {
   void handleChatCompletions(req, res);
 });
 
+app.post("/api/jarvis/extract", async (req, res) => {
+  try {
+    const sessionId = String(req.body?.sessionId || "jarvis-" + Date.now());
+    const transcript = Array.isArray(req.body?.transcript) ? req.body.transcript : [];
+    if (transcript.length < 2) {
+      res.status(400).json({ error: "transcript must have at least 2 turns" });
+      return;
+    }
+    await runPostConversationExtraction(sessionId, transcript);
+    res.json({ ok: true, sessionId });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Extraction failed",
+    });
+  }
+});
+
+app.get("/api/memory/overview", (_req, res) => {
+  try {
+    res.json(getMemoryOverview());
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read memory overview",
+    });
+  }
+});
+
+app.get("/api/memory/facts", (req, res) => {
+  try {
+    const limit = parseInt(String(req.query.limit ?? "100"), 10) || 100;
+    const q = typeof req.query.q === "string" ? req.query.q : undefined;
+    res.json({ facts: listFacts(limit, q) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to list facts",
+    });
+  }
+});
+
+app.get("/api/memory/episodes", (req, res) => {
+  try {
+    const limit = parseInt(String(req.query.limit ?? "50"), 10) || 50;
+    res.json({ episodes: listEpisodes(limit) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to list episodes",
+    });
+  }
+});
+
+app.get("/api/memory/rules", (req, res) => {
+  try {
+    const limit = parseInt(String(req.query.limit ?? "100"), 10) || 100;
+    res.json({ rules: listRules(limit) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to list rules",
+    });
+  }
+});
+
+app.get("/api/memory/syntheses", (req, res) => {
+  try {
+    const limit = parseInt(String(req.query.limit ?? "20"), 10) || 20;
+    res.json({ syntheses: listSyntheses(limit) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to list syntheses",
+    });
+  }
+});
+
+app.get("/api/memory/graph", (req, res) => {
+  try {
+    const entity =
+      typeof req.query.entity === "string" ? req.query.entity.trim() : "";
+    if (!entity) {
+      res.status(400).json({ error: "entity query required" });
+      return;
+    }
+    res.json(getGraphForEntity(entity));
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read graph",
+    });
+  }
+});
+
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, model: process.env.AETHON_MODEL || "claude-sonnet-4-6", memory: "initializing" });
+  res.json({
+    ok: true,
+    brain: getOpenAIClient() ? "openai" : "unconfigured",
+    model: getChatModel(),
+    memory: "ready",
+  });
 });
 
 app.get("/memory", (_req, res) => {
-  res.status(501).json({ error: "Memory page pending – UI phase" });
+  res.sendFile(path.join(PUBLIC_DIR, "memory.html"));
 });
 
 app.get("*", (_req, res) => {
@@ -643,6 +748,9 @@ const server = http.createServer(app);
 
 server.on("upgrade", (request, socket, head) => {
   if (handleDeepgramUpgrade(request, socket, head, (_req) => true)) {
+    return;
+  }
+  if (handleHullEventsUpgrade(request, socket, head)) {
     return;
   }
   socket.destroy();

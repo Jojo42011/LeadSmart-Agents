@@ -1,65 +1,63 @@
-import type { Tool } from "@anthropic-ai/sdk/resources/messages";
+import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { randomUUID } from "crypto";
 import { embedText, float32ToBlob } from "../memory/embeddings";
 import { findSimilarNode } from "../memory/nodes";
 import { searchFacts, getMemoryPacket } from "../memory/retrieval";
 import { getHullDb } from "../memory/store";
 
-const MEMORY_TOOLS: Tool[] = [
-  {
-    name: "memory_store",
-    description:
-      "Explicitly store a durable fact about LeadSmart or its operations. Only call when the user says remember, store, or learn — or shares a stable fact worth keeping.",
-    input_schema: {
-      type: "object",
-      properties: {
-        content: { type: "string" },
-        category: { type: "string" },
-        keywords: { type: "string" },
+function tool(
+  name: string,
+  description: string,
+  properties: Record<string, unknown>,
+  required: string[]
+): ChatCompletionTool {
+  return {
+    type: "function",
+    function: {
+      name,
+      description,
+      parameters: {
+        type: "object",
+        properties,
+        required,
       },
-      required: ["content"],
     },
-  },
-  {
-    name: "memory_recall",
-    description:
-      "Semantic search across facts and episodes. Only call when the user asks to recall, remember, or search memory.",
-    input_schema: {
-      type: "object",
-      properties: {
-        query: { type: "string" },
-      },
-      required: ["query"],
+  };
+}
+
+const MEMORY_TOOLS: ChatCompletionTool[] = [
+  tool(
+    "memory_store",
+    "Explicitly store a durable fact about LeadSmart or its operations. Only call when the user says remember, store, or learn — or shares a stable fact worth keeping.",
+    {
+      content: { type: "string" },
+      category: { type: "string" },
+      keywords: { type: "string" },
     },
-  },
-  {
-    name: "memory_graph",
-    description:
-      "Traverse knowledge graph for an entity name. Only call when the user asks about relationships or connections.",
-    input_schema: {
-      type: "object",
-      properties: {
-        entity: { type: "string" },
-      },
-      required: ["entity"],
-    },
-  },
+    ["content"]
+  ),
+  tool(
+    "memory_recall",
+    "Semantic search across facts and episodes. Only call when the user asks to recall, remember, or search memory.",
+    { query: { type: "string" } },
+    ["query"]
+  ),
+  tool(
+    "memory_graph",
+    "Traverse knowledge graph for an entity name. Only call when the user asks about relationships or connections.",
+    { entity: { type: "string" } },
+    ["entity"]
+  ),
 ];
 
-const WEB_SEARCH_TOOL: Tool = {
-  name: "web_search",
-  description:
-    "Search the internet for current external information. Only call when the user explicitly asks about news, prices, or external research.",
-  input_schema: {
-    type: "object",
-    properties: {
-      query: { type: "string" },
-    },
-    required: ["query"],
-  },
-};
+const WEB_SEARCH_TOOL = tool(
+  "web_search",
+  "Search the internet for current external information. Only call when the user explicitly asks about news, prices, or external research.",
+  { query: { type: "string" } },
+  ["query"]
+);
 
-export function getHullToolDefinitions(): Tool[] {
+export function getHullToolDefinitions(): ChatCompletionTool[] {
   const tools = [...MEMORY_TOOLS];
   if (process.env.BRAVE_SEARCH_API_KEY?.trim()) {
     tools.push(WEB_SEARCH_TOOL);

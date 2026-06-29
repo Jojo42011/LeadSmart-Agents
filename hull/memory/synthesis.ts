@@ -1,9 +1,7 @@
 import { randomUUID } from "crypto";
-import Anthropic from "@anthropic-ai/sdk";
 import { getHullDb } from "./store.js";
 import { broadcastHullEvent } from "../ws.js";
-
-const HAIKU = "claude-haiku-4-5-20251001";
+import { getFastModel, getOpenAIClient } from "../openaiConfig.js";
 
 function msUntilNextSunday3am(): number {
   const now = new Date();
@@ -17,8 +15,8 @@ function msUntilNextSunday3am(): number {
 }
 
 export async function runWeeklySynthesis(): Promise<void> {
-  const key = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!key) return;
+  const client = getOpenAIClient();
+  if (!client) return;
 
   const db = getHullDb();
   const episodes = db
@@ -33,20 +31,15 @@ export async function runWeeklySynthesis(): Promise<void> {
     .prepare("SELECT trigger_condition, action, confidence FROM rules WHERE confidence >= 0.6")
     .all() as { trigger_condition: string; action: string; confidence: number }[];
 
-  const client = new Anthropic({ apiKey: key });
-  const prompt = `Write a weekly pattern synthesis for Marco Puga's real estate business. Episodes: ${JSON.stringify(episodes).slice(0, 4000)}. Top facts: ${JSON.stringify(facts).slice(0, 3000)}. Rules: ${JSON.stringify(rules).slice(0, 2000)}. 3-5 paragraphs: patterns, risks, recommendations.`;
+  const prompt = `Write a weekly pattern synthesis for LeadSmart operations (Ringba scrub agent, affiliate payouts, payment portal). Episodes: ${JSON.stringify(episodes).slice(0, 4000)}. Top facts: ${JSON.stringify(facts).slice(0, 3000)}. Rules: ${JSON.stringify(rules).slice(0, 2000)}. 3-5 paragraphs: patterns, risks, recommendations.`;
 
   try {
-    const res = await client.messages.create({
-      model: HAIKU,
+    const res = await client.chat.completions.create({
+      model: getFastModel(),
       max_tokens: 1200,
       messages: [{ role: "user", content: prompt }],
     });
-    const text = res.content
-      .filter((b) => b.type === "text")
-      .map((b) => (b as { text: string }).text)
-      .join("")
-      .trim();
+    const text = res.choices[0]?.message?.content?.trim() || "";
     if (!text) return;
 
     const now = new Date().toISOString();

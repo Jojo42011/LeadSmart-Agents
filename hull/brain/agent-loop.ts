@@ -1,6 +1,12 @@
-import Anthropic from "@anthropic-ai/sdk";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import type { Request, Response } from "express";
+import {
+  getChatModel,
+  getFastModel,
+  getMaxTokens,
+  getOpenAIClient,
+  needsFullModel,
+} from "../openaiConfig";
 import {
   getMemoryPacket,
   getRetrievalConfidence,
@@ -13,42 +19,14 @@ const MAX_TOOL_CHARS = 12000;
 
 const LEADSMART_SYSTEM_PROMPT = `You are JARVIS, the LeadSmart AI assistant. You help with Ringba call scrub operations, affiliate payouts, payment portal questions, and system status. Be concise and accurate.`;
 
-function getAethonModel(): string {
-  return process.env.AETHON_MODEL?.trim() || "claude-sonnet-4-6";
-}
-
-function getHaikuModel(): string {
-  return process.env.AETHON_HAIKU_MODEL?.trim() || "claude-haiku-4-5-20251001";
-}
-
-function getMaxTokens(): number {
-  return 2048;
-}
-
-function needsSonnet(message: string): boolean {
-  return (
-    message.length > 600 ||
-    /\b(analyze|compare|strategy|explain in detail)\b/i.test(message)
-  );
-}
-
 export function serializeToolResult(result: unknown): string {
   const str =
     typeof result === "string" ? result : JSON.stringify(result, null, 2);
   if (str.length <= MAX_TOOL_CHARS) return str;
-  return str.slice(0, MAX_TOOL_CHARS) + `\n\n[TRUNCATED: ${str.length} chars total]`;
-}
-
-function extractAssistantText(
-  content: Anthropic.Messages.Message["content"]
-): string {
-  const parts: string[] = [];
-  for (const block of content) {
-    if (block.type === "text" && block.text.trim()) {
-      parts.push(block.text.trim());
-    }
-  }
-  return parts.join("\n\n").trim();
+  return (
+    str.slice(0, MAX_TOOL_CHARS) +
+    `\n\n[TRUNCATED: ${str.length} chars total]`
+  );
 }
 
 export interface AgentLoopResult {
@@ -60,7 +38,7 @@ export interface AgentLoopResult {
 
 export interface AgentLoopOptions {
   message: string;
-  history?: MessageParam[];
+  history?: ChatCompletionMessageParam[];
   voiceMode?: boolean;
   fastMode?: boolean;
   ownerMode?: boolean;
@@ -101,19 +79,23 @@ function finalizeSpeech(text: string, opts: AgentLoopOptions): string {
   return text;
 }
 
+function pickModel(opts: AgentLoopOptions, message: string): string {
+  if (opts.fastMode || opts.voiceMode) return getFastModel();
+  return needsFullModel(message) ? getChatModel() : getFastModel();
+}
+
 export async function runAgentLoop(
   opts: AgentLoopOptions
 ): Promise<AgentLoopResult> {
-  const key = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!key) {
+  const client = getOpenAIClient();
+  if (!client) {
     return {
-      speech: "Anthropic API key not configured.",
+      speech: "OpenAI API key not configured.",
       toolRounds: 0,
       model: "none",
     };
   }
 
-  const client = new Anthropic({ apiKey: key });
   const factLimit = opts.fastMode ? 4 : 8;
   const facts = await searchFacts(opts.message, factLimit);
   const memoryPacket = getMemoryPacket(opts.message, facts);
@@ -128,14 +110,16 @@ export async function runAgentLoop(
       opts.message
     );
 
+  const model = pickModel(opts, opts.message);
+
   if (
     !opts.voiceMode &&
     confidence < 0.15 &&
     count < 3 &&
     businessSpecific
   ) {
-    const clar = await client.messages.create({
-      model: getHaikuModel(),
+    const clar = await client.chat.completions.create({
+      model: getFastModel(),
       max_tokens: 200,
       messages: [
         {
@@ -144,24 +128,17 @@ export async function runAgentLoop(
         },
       ],
     });
-    const q = extractAssistantText(clar.content);
+    const q = clar.choices[0]?.message?.content?.trim() || "";
     return {
       speech: q,
       toolRounds: 0,
-      model: getHaikuModel(),
+      model: getFastModel(),
       clarification: true,
     };
   }
 
   const system = buildSystemPrompt(memoryPacket, opts);
-  const model = opts.fastMode
-    ? getHaikuModel()
-    : opts.voiceMode
-      ? getHaikuModel()
-      : needsSonnet(opts.message)
-        ? getAethonModel()
-        : getHaikuModel();
-  const messages: MessageParam[] = [
+  const messages: ChatCompletionMessageParam[] = [
     ...(opts.history || []),
     { role: "user", content: opts.message },
   ];
@@ -172,105 +149,138 @@ export async function runAgentLoop(
 
   for (let step = 0; step < MAX_AGENT_STEPS; step++) {
     if (opts.onToken) {
-      const stream = client.messages.stream({
+      const stream = await client.chat.completions.create({
         model,
         max_tokens: maxTokens,
-        system,
-        messages,
+        messages: [{ role: "system", content: system }, ...messages],
         tools: activeTools,
+        stream: true,
       });
 
       let full = "";
-      const finalMsg = await new Promise<Anthropic.Messages.Message>(
-        (resolve, reject) => {
-          stream.on("text", (t) => {
-            full += t;
-            opts.onToken?.(t);
-          });
-          stream
-            .finalMessage()
-            .then(resolve)
-            .catch(reject);
-        }
-      );
+      const toolCallsByIndex = new Map<
+        number,
+        { id: string; name: string; arguments: string }
+      >();
 
-      if (finalMsg.stop_reason !== "tool_use") {
-        const text = full.trim() || extractAssistantText(finalMsg.content);
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta;
+        if (delta?.content) {
+          full += delta.content;
+          opts.onToken(delta.content);
+        }
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            if (!toolCallsByIndex.has(idx)) {
+              toolCallsByIndex.set(idx, {
+                id: tc.id || "",
+                name: tc.function?.name || "",
+                arguments: "",
+              });
+            }
+            const entry = toolCallsByIndex.get(idx)!;
+            if (tc.id) entry.id = tc.id;
+            if (tc.function?.name) entry.name = tc.function.name;
+            if (tc.function?.arguments) entry.arguments += tc.function.arguments;
+          }
+        }
+      }
+
+      const toolCalls = [...toolCallsByIndex.values()].filter((t) => t.id && t.name);
+      if (toolCalls.length === 0) {
         return {
-          speech: finalizeSpeech(text, opts),
+          speech: finalizeSpeech(full.trim(), opts),
           toolRounds,
           model,
         };
       }
 
-      const toolUseBlocks = finalMsg.content.filter((b) => b.type === "tool_use");
-      const toolResults = await Promise.all(
-        toolUseBlocks.map(async (tu) => {
-          const input =
-            tu.input &&
-            typeof tu.input === "object" &&
-            !Array.isArray(tu.input)
-              ? (tu.input as Record<string, unknown>)
-              : {};
-          let result: unknown;
-          try {
-            result = await executeHullTool(tu.name, input);
-          } catch (err) {
-            result = {
-              error: err instanceof Error ? err.message : String(err),
-            };
-          }
-          return {
-            type: "tool_result" as const,
-            tool_use_id: tu.id,
-            content: serializeToolResult(result),
+      const assistantMessage: ChatCompletionMessageParam = {
+        role: "assistant",
+        content: full || null,
+        tool_calls: toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function" as const,
+          function: { name: tc.name, arguments: tc.arguments || "{}" },
+        })),
+      };
+      messages.push(assistantMessage);
+
+      for (const tc of toolCalls) {
+        let input: Record<string, unknown> = {};
+        try {
+          input = JSON.parse(tc.arguments || "{}") as Record<string, unknown>;
+        } catch {
+          input = {};
+        }
+        let result: unknown;
+        try {
+          result = await executeHullTool(tc.name, input);
+        } catch (err) {
+          result = {
+            error: err instanceof Error ? err.message : String(err),
           };
-        })
-      );
-      messages.push({ role: "assistant", content: finalMsg.content });
-      messages.push({ role: "user", content: toolResults });
+        }
+        messages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: serializeToolResult(result),
+        });
+      }
       toolRounds++;
       continue;
     }
 
-    const response = await client.messages.create({
+    const response = await client.chat.completions.create({
       model,
       max_tokens: maxTokens,
-      system,
-      messages,
+      messages: [{ role: "system", content: system }, ...messages],
       tools: activeTools,
     });
 
-    if (response.stop_reason !== "tool_use") {
+    const choice = response.choices[0];
+    const msg = choice?.message;
+    if (!msg) {
       return {
-        speech: finalizeSpeech(extractAssistantText(response.content), opts),
+        speech: "No response from model.",
         toolRounds,
         model,
       };
     }
 
-    const toolUseBlocks = response.content.filter((b) => b.type === "tool_use");
-    const toolResults = await Promise.all(
-      toolUseBlocks.map(async (tu) => {
-        const input =
-          tu.input && typeof tu.input === "object" && !Array.isArray(tu.input)
-            ? (tu.input as Record<string, unknown>)
-            : {};
-        let result: unknown;
-        try {
-          result = await executeHullTool(tu.name, input);
-        } catch (err) {
-          result = { error: err instanceof Error ? err.message : String(err) };
-        }
-        return {
-          type: "tool_result" as const,
-          tool_use_id: tu.id,
-          content: serializeToolResult(result),
-        };
-      })
-    );
-    messages.push({ role: "assistant", content: response.content });
-    messages.push({ role: "user", content: toolResults });
+    if (choice.finish_reason !== "tool_calls" || !msg.tool_calls?.length) {
+      return {
+        speech: finalizeSpeech(msg.content?.trim() || "", opts),
+        toolRounds,
+        model,
+      };
+    }
+
+    messages.push(msg);
+    for (const tc of msg.tool_calls) {
+      if (tc.type !== "function") continue;
+      let input: Record<string, unknown> = {};
+      try {
+        input = JSON.parse(tc.function.arguments || "{}") as Record<
+          string,
+          unknown
+        >;
+      } catch {
+        input = {};
+      }
+      let result: unknown;
+      try {
+        result = await executeHullTool(tc.function.name, input);
+      } catch (err) {
+        result = { error: err instanceof Error ? err.message : String(err) };
+      }
+      messages.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: serializeToolResult(result),
+      });
+    }
     toolRounds++;
   }
 
@@ -310,9 +320,8 @@ export async function handleChatCompletions(
   req: Request,
   res: Response
 ): Promise<void> {
-  const key = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!key) {
-    res.status(503).json({ error: "ANTHROPIC_API_KEY not set" });
+  if (!getOpenAIClient()) {
+    res.status(503).json({ error: "OPENAI_API_KEY not set" });
     return;
   }
 
@@ -325,7 +334,10 @@ export async function handleChatCompletions(
   if (typeof lastUser?.content === "string") {
     message = lastUser.content.trim();
   } else if (Array.isArray(lastUser?.content)) {
-    for (const block of lastUser.content as Array<{ type?: string; text?: string }>) {
+    for (const block of lastUser.content as Array<{
+      type?: string;
+      text?: string;
+    }>) {
       if (block.type === "text") {
         message += (message ? " " : "") + (block.text || "").trim();
       }
@@ -337,12 +349,20 @@ export async function handleChatCompletions(
     return;
   }
 
+  const history: ChatCompletionMessageParam[] = messages
+    .slice(0, -1)
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({
+      role: m.role as "user" | "assistant",
+      content:
+        typeof m.content === "string"
+          ? m.content
+          : JSON.stringify(m.content ?? ""),
+    }));
+
   const result = await runAgentLoop({
     message,
-    history: messages.slice(0, -1).map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content as MessageParam["content"],
-    })),
+    history,
     fastMode: req.body?.fast_mode === true,
     voiceMode: req.body?.voice_mode === true,
     ownerMode: req.body?.owner_mode === true,
