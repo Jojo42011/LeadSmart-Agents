@@ -120,6 +120,16 @@ body {
   background: #111;
 }
 
+.nav-link--hub {
+  color: var(--accent-warn);
+  border-left-color: transparent;
+}
+
+.nav-link--hub:hover {
+  color: var(--accent-warn);
+  background: #111;
+}
+
 .nav-link--active {
   color: var(--accent-ok);
   border-left-color: var(--accent-ok);
