@@ -25,3 +25,4 @@ export {
 export { generateTTS } from "./voice/tts";
 export { getHullDb } from "./memory/store";
 export { registerHullWs, broadcastHullEvent } from "./ws";
+export { handleActivation } from "./briefing";

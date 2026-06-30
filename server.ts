@@ -19,17 +19,20 @@ import http from "http";
 import { handleDeepgramUpgrade } from "./hull/voice/deepgramProxy";
 import { generateTTS } from "./hull/voice/tts";
 import { sanitizeSpeech } from "./hull/voice/sanitizeSpeech";
-import { handleChatCompletions } from "./hull/brain/agent-loop";
+import { handleChatCompletions, handleVoiceCommand } from "./hull/brain/agent-loop";
 import { runPostConversationExtraction } from "./hull/memory/extraction";
+import { buildMemoryPacketForQuery } from "./hull/brain/tools";
+import { handleActivation } from "./hull/briefing";
 import {
   getMemoryOverview,
   getGraphForEntity,
+  getMemoryIdentity,
   listEpisodes,
   listFacts,
   listRules,
   listSyntheses,
 } from "./hull/memory/readApi";
-import { handleHullEventsUpgrade } from "./hull/ws";
+import { handleHullEventsUpgrade, broadcastHullEvent } from "./hull/ws";
 import { getChatModel, getOpenAIClient } from "./hull/openaiConfig";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -635,6 +638,32 @@ app.post("/jarvis/tts", async (req, res) => {
   res.send(result.pcm);
 });
 
+app.post("/api/jarvis/voice", async (req, res) => {
+  const text = sanitizeSpeech(String(req.body?.text || ""));
+  if (!text) return res.status(400).json({ error: "text required" });
+  const result = await generateTTS(text);
+  if (!result) return res.status(500).json({ error: "TTS failed" });
+  res.setHeader("Content-Type", "audio/pcm");
+  res.setHeader("X-Sample-Rate", String(result.sampleRate));
+  res.send(result.pcm);
+});
+
+app.post("/api/jarvis/voice/command", express.json({ limit: "64kb" }), (req, res) => {
+  void handleVoiceCommand(req, res);
+});
+
+app.get("/api/jarvis/activation", async (_req, res) => {
+  try {
+    const packet = await buildMemoryPacketForQuery("activation brief LeadSmart");
+    const text = await handleActivation(packet);
+    res.status(200).json({ text });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 app.post("/v1/chat/completions", (req, res) => {
   void handleChatCompletions(req, res);
 });
@@ -648,6 +677,34 @@ app.post("/api/jarvis/extract", async (req, res) => {
       return;
     }
     await runPostConversationExtraction(sessionId, transcript);
+    broadcastHullEvent({ type: "memory_updated" });
+    res.json({ ok: true, sessionId });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Extraction failed",
+    });
+  }
+});
+
+app.post("/api/memory/extract-voice", express.json({ limit: "512kb" }), async (req, res) => {
+  try {
+    const transcript = Array.isArray(req.body?.transcript) ? req.body.transcript : [];
+    const sessionId =
+      typeof req.body?.sessionId === "string"
+        ? req.body.sessionId
+        : "jarvis-voice-" + Date.now();
+    if (transcript.length < 2) {
+      res.status(400).json({ error: "transcript must have at least 2 turns" });
+      return;
+    }
+    await runPostConversationExtraction(
+      sessionId,
+      transcript.map((t: { role?: string; text?: string }) => ({
+        role: String(t.role || "user"),
+        text: String(t.text || ""),
+      }))
+    );
+    broadcastHullEvent({ type: "memory_updated" });
     res.json({ ok: true, sessionId });
   } catch (err) {
     res.status(500).json({
@@ -727,12 +784,29 @@ app.get("/api/memory/graph", (req, res) => {
   }
 });
 
+app.get("/api/memory/identity", (_req, res) => {
+  try {
+    res.json(getMemoryIdentity());
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read identity",
+    });
+  }
+});
+
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     brain: getOpenAIClient() ? "openai" : "unconfigured",
     model: getChatModel(),
     memory: "ready",
+    jarvis: {
+      voice: {
+        stt: process.env.ELEVENLABS_API_KEY?.trim() ? "elevenlabs-scribe" : "none",
+        tts: process.env.ELEVENLABS_API_KEY?.trim() ? "elevenlabs" : "none",
+        brain: getOpenAIClient() ? "openai" : "none",
+      },
+    },
   });
 });
 

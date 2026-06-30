@@ -3,7 +3,7 @@ import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
 
 /**
- * Harvey voice STT proxy.
+ * JARVIS voice STT proxy.
  *
  * Upstream is ElevenLabs Scribe v2 Realtime (wss://api.elevenlabs.io/v1/speech-to-text/realtime).
  * We keep the public route (/api/jarvis/deepgram/listen) and the exported function name

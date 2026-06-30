@@ -75,6 +75,24 @@ export function listRules(limit = 100) {
     .all(Math.min(Math.max(limit, 1), 200));
 }
 
+export function getMemoryIdentity() {
+  const db = getHullDb();
+  const profile = db
+    .prepare(
+      "SELECT dimension, confidence FROM identity_dimensions ORDER BY dimension"
+    )
+    .all();
+  const recentQuestions = db
+    .prepare(
+      `SELECT dimension, question, asked_at, answered
+       FROM identity_questions
+       ORDER BY asked_at DESC
+       LIMIT 10`
+    )
+    .all();
+  return { profile, recentQuestions };
+}
+
 export function listSyntheses(limit = 20) {
   const db = getHullDb();
   return db

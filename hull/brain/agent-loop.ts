@@ -142,7 +142,7 @@ export async function runAgentLoop(
     ...(opts.history || []),
     { role: "user", content: opts.message },
   ];
-  const activeTools = opts.voiceMode ? undefined : getHullToolDefinitions();
+  const activeTools = getHullToolDefinitions();
   const maxTokens = opts.fastMode ? 512 : opts.voiceMode ? 384 : getMaxTokens();
 
   let toolRounds = 0;
@@ -314,6 +314,106 @@ export function extractSentences(buffer: string): {
   if (lastEnd >= 0) rest = rest.slice(lastEnd + 1);
   else if (sentences.length) rest = "";
   return { sentences, remainder: rest };
+}
+
+function findFirstSentenceBoundary(text: string): number {
+  const match = text.match(/[.!?…]\s/);
+  return match ? match.index! + 1 : -1;
+}
+
+export async function handleVoiceCommand(
+  req: Request,
+  res: Response
+): Promise<void> {
+  if (!getOpenAIClient()) {
+    res.status(503).json({ error: "OPENAI_API_KEY not set" });
+    return;
+  }
+
+  const message =
+    typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) {
+    res.status(400).json({ error: "Missing message" });
+    return;
+  }
+
+  const sessionId =
+    typeof req.body?.sessionId === "string"
+      ? req.body.sessionId.trim()
+      : "jarvis-voice-" + Date.now();
+  const streamMode = req.body?.stream === true;
+
+  const rawHistory = Array.isArray(req.body?.history) ? req.body.history : [];
+  const history: ChatCompletionMessageParam[] = rawHistory
+    .filter(
+      (m: { role?: string; content?: unknown }) =>
+        m.role === "user" || m.role === "assistant"
+    )
+    .map((m: { role: string; content: unknown }) => ({
+      role: m.role as "user" | "assistant",
+      content:
+        typeof m.content === "string"
+          ? m.content
+          : String(m.content ?? ""),
+    }));
+
+  if (streamMode) {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders?.();
+
+    let accumulated = "";
+    let firstChunkSent = false;
+
+    try {
+      const result = await runAgentLoop({
+        message,
+        history,
+        voiceMode: true,
+        onToken: (t) => {
+          accumulated += t;
+          if (!firstChunkSent) {
+            const boundary = findFirstSentenceBoundary(accumulated);
+            if (boundary > 0) {
+              const first = accumulated.slice(0, boundary).trim();
+              if (first.length > 10) {
+                firstChunkSent = true;
+                res.write(
+                  `data: ${JSON.stringify({ type: "speech_chunk", text: first, isFinal: false })}\n\n`
+                );
+              }
+            }
+          }
+        },
+      });
+      res.write(
+        `data: ${JSON.stringify({
+          type: "speech_complete",
+          speech: result.speech,
+          sessionId,
+        })}\n\n`
+      );
+      res.end();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.write(`data: ${JSON.stringify({ type: "error", error: msg })}\n\n`);
+      res.end();
+    }
+    return;
+  }
+
+  try {
+    const result = await runAgentLoop({
+      message,
+      history,
+      voiceMode: true,
+    });
+    res.status(200).json({ speech: result.speech, sessionId });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
 }
 
 export async function handleChatCompletions(

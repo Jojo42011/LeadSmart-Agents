@@ -5,12 +5,12 @@
   const chatInput = document.getElementById("chatInput");
   const chatSendBtn = document.getElementById("chatSendBtn");
   const chatError = document.getElementById("chatError");
-  const sessionId = "jarvis-" + Date.now();
+  const sessionId =
+    sessionStorage.getItem("jarvis_session_id") || "jarvis-" + Date.now();
 
   let chatHistory = [];
   let transcript = [];
   let isBusy = false;
-  let audioCtx = null;
 
   function escapeHtml(str) {
     return String(str)
@@ -43,31 +43,6 @@
 
   function getShell() {
     return window.JarvisShell;
-  }
-
-  async function playTTS(text) {
-    const res = await fetch("/jarvis/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!res.ok) throw new Error("TTS failed");
-    const sampleRate = parseInt(res.headers.get("X-Sample-Rate") || "24000", 10);
-    const buf = await res.arrayBuffer();
-    if (!audioCtx) audioCtx = new AudioContext({ sampleRate });
-    if (audioCtx.state === "suspended") await audioCtx.resume();
-    const int16 = new Int16Array(buf);
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
-    const audioBuf = audioCtx.createBuffer(1, float32.length, sampleRate);
-    audioBuf.copyToChannel(float32, 0);
-    const src = audioCtx.createBufferSource();
-    src.buffer = audioBuf;
-    src.connect(audioCtx.destination);
-    return new Promise((resolve) => {
-      src.onended = resolve;
-      src.start();
-    });
   }
 
   async function askJarvis(userText, voiceMode) {
@@ -106,45 +81,49 @@
     }
   }
 
+  function pushTurn(role, text) {
+    if (!text) return;
+    const content = text.trim();
+    if (!content) return;
+    chatHistory.push({
+      role: role === "assistant" ? "assistant" : "user",
+      content,
+    });
+    transcript.push({ role, text: content });
+  }
+
   async function handleUserMessage(text, voiceMode) {
     if (!text || isBusy) return;
+    if (window.isJarvisVoiceActive?.()) return;
     const shell = getShell();
     if (!shell) return;
 
     isBusy = true;
     setError("");
     appendMessage("user", text);
-
     shell.transitionTo(shell.STATE.PROCESSING);
 
     try {
       const reply = await askJarvis(text, voiceMode);
       appendMessage("assistant", reply);
       shell.transitionTo(shell.STATE.RESPONDING);
-
-      if (voiceMode) {
-        try {
-          await playTTS(reply);
-        } catch {
-          setError("Voice playback failed — text reply shown above.");
-        }
-      } else {
-        await new Promise((r) => setTimeout(r, 600));
-      }
-
+      await new Promise((r) => setTimeout(r, voiceMode ? 400 : 600));
       await maybeExtractMemory();
     } catch (err) {
       setError(err.message || "Request failed");
     } finally {
-      shell.transitionTo(shell.STATE.STANDBY);
       isBusy = false;
+      shell.transitionTo(shell.STATE.STANDBY);
     }
   }
 
-  window.addEventListener("jarvis-transcript", (e) => {
-    const text = (e.detail && e.detail.text) || "";
-    if (text) void handleUserMessage(text, true);
-  });
+  window.JarvisChat = {
+    getHistory: () => chatHistory.slice(),
+    pushTurn,
+    appendMessage,
+    setError,
+    getSessionId: () => sessionId,
+  };
 
   if (chatSendBtn && chatInput) {
     chatSendBtn.addEventListener("click", () => {

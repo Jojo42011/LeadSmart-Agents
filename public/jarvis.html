@@ -486,8 +486,10 @@
             Standby
           </div>
           <div class="core-label" id="coreLabel">Tap Core To Speak</div>
+          <div class="voice-note" id="jarvis-voice-status">Tap orb to start voice</div>
+          <p class="console__error" id="jarvis-voice-error" hidden></p>
         </div>
-        <div class="voice-note" id="voiceNote">Voice Unavailable</div>
+        <div class="voice-note" id="voiceNote" style="display: none">Voice Unavailable</div>
       </main>
 
       <aside class="jarvis-console" aria-label="JARVIS conversation">
@@ -665,47 +667,8 @@
       }
 
       /* =========================================================
-         WEB SPEECH
+         VOICE SESSION (jarvis-voice.js + JarvisShell sync)
          ========================================================= */
-      const SpeechRecognition =
-        window.SpeechRecognition || window.webkitSpeechRecognition;
-      const speechSupported = !!SpeechRecognition;
-      let recognition = null;
-
-      if (!speechSupported) {
-        document.getElementById("voiceNote").style.display = "block";
-      } else {
-        recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        recognition.lang = "en-US";
-
-        recognition.onresult = (event) => {
-          const text =
-            event.results &&
-            event.results[0] &&
-            event.results[0][0] &&
-            event.results[0][0].transcript
-              ? event.results[0][0].transcript.trim()
-              : "";
-          if (text) {
-            window.dispatchEvent(
-              new CustomEvent("jarvis-transcript", { detail: { text } })
-            );
-          }
-        };
-        recognition.onerror = () => {
-          if (currentState === STATE.LISTENING) {
-            transitionTo(STATE.STANDBY);
-          }
-        };
-        recognition.onend = () => {
-          // If listening ended with no result, drift back to standby.
-          if (currentState === STATE.LISTENING) {
-            transitionTo(STATE.STANDBY);
-          }
-        };
-      }
 
       /* =========================================================
          STATE FLOW
@@ -727,44 +690,27 @@
         STATE,
         clearTimer,
         setState,
+        getState: () => currentState,
       };
 
-      function beginListening() {
-        transitionTo(STATE.LISTENING);
-        if (speechSupported && recognition) {
-          try {
-            recognition.start();
-          } catch (e) {
-            // start() can throw if already started; ignore.
-          }
-        } else {
-          // Demo path: no speech support, auto-advance.
-          stateTimer = setTimeout(beginProcessing, 2200);
-        }
-      }
-
-      function beginProcessing() {
-        /* Voice pipeline handled by jarvis-client.js */
-      }
-
-      function beginResponding() {
-        /* Voice pipeline handled by jarvis-client.js */
-      }
-
       function onCoreActivate() {
-        // Clicking the core toggles STANDBY -> LISTENING.
-        if (currentState === STATE.STANDBY) {
-          beginListening();
-        } else if (currentState === STATE.LISTENING) {
-          // Allow user to abort listening back to standby.
-          if (speechSupported && recognition) {
-            try {
-              recognition.stop();
-            } catch (e) {}
-          }
-          transitionTo(STATE.STANDBY);
+        window.unlockJarvisVoiceAudio?.();
+        if (window.isJarvisVoiceActive?.()) {
+          window.stopJarvisVoiceSession?.();
+          return;
         }
+        window.toggleJarvisVoiceSession?.().catch((e) => {
+          const el = document.getElementById("jarvis-voice-error");
+          if (el) {
+            el.textContent = e?.message || String(e);
+            el.hidden = false;
+          }
+        });
       }
+
+      window.onJarvisVoiceSessionEnd = function () {
+        transitionTo(STATE.STANDBY);
+      };
 
       /* =========================================================
          THREE.JS PARTICLE ORB
@@ -1113,6 +1059,8 @@
         onCoreActivate();
       }, { passive: false });
     </script>
+    <script src="/jarvis-streaming-tts.js"></script>
+    <script src="/jarvis-voice.js"></script>
     <script src="/jarvis-client.js"></script>
   </body>
 </html>
