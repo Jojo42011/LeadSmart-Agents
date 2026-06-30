@@ -328,8 +328,10 @@
 
   els.navLinks.forEach(function (link) {
     link.addEventListener("click", function (e) {
+      const page = link.getAttribute("data-page");
+      if (!page) return;
       e.preventDefault();
-      showPage(link.getAttribute("data-page"));
+      showPage(page);
     });
   });
 
