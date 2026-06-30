@@ -60,7 +60,7 @@
       if (shouldCommitTranscript(text, event)) {
         void commitTranscript(text.trim());
       }
-    }, 120);
+    }, 40);
   }
 
   window.isJarvisVoiceActive = function () {
@@ -101,7 +101,6 @@
       el.textContent = msg;
       el.hidden = false;
     }
-    if (window.JarvisChat?.setError) window.JarvisChat.setError(msg);
     console.error("[jarvis-voice]", msg);
   }
 
@@ -111,7 +110,6 @@
       el.textContent = "";
       el.hidden = true;
     }
-    if (window.JarvisChat?.setError) window.JarvisChat.setError("");
   }
 
   function downsampleBuffer(buffer, inputRate, outputRate) {
@@ -177,6 +175,7 @@
   }
 
   async function startCapture() {
+    if (processor && captureCtx) return;
     stopCapture();
     if (!micStream) {
       micStream = await navigator.mediaDevices.getUserMedia({
@@ -188,7 +187,7 @@
       });
     }
 
-    captureCtx = new AudioContext({ sampleRate: 16000 });
+    captureCtx = new AudioContext({ sampleRate: 16000, latencyHint: "interactive" });
     if (captureCtx.state === "suspended") await captureCtx.resume();
 
     const source = captureCtx.createMediaStreamSource(micStream);
@@ -317,9 +316,6 @@
     if (!text || brainBusy) return;
     brainBusy = true;
     sessionTranscript.push({ role: "user", text, ts: Date.now() });
-    if (window.JarvisChat?.appendMessage) {
-      window.JarvisChat.appendMessage("user", text);
-    }
     setVoiceStatus("PROCESSING");
     pauseMicCapture();
 
@@ -378,9 +374,6 @@
             window.JarvisChat.pushTurn("user", text);
             window.JarvisChat.pushTurn("assistant", fullSpeech);
           }
-          if (window.JarvisChat?.appendMessage) {
-            window.JarvisChat.appendMessage("assistant", fullSpeech);
-          }
 
           if (firstChunkStarted) {
             window.JarvisStreamingTts.appendRemainingText(fullSpeech, {
@@ -402,9 +395,6 @@
           if (window.JarvisChat?.pushTurn) {
             window.JarvisChat.pushTurn("user", text);
             window.JarvisChat.pushTurn("assistant", speech);
-          }
-          if (window.JarvisChat?.appendMessage) {
-            window.JarvisChat.appendMessage("assistant", speech);
           }
           await speakText(speech);
         }
@@ -556,59 +546,53 @@
       window.location.origin + "/api/jarvis/deepgram/listen"
     ).replace(/^http/, "ws");
 
-    sttWs = new WebSocket(wsUrl);
-    sttWs.binaryType = "arraybuffer";
+    const micPromise = navigator.mediaDevices
+      .getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      })
+      .then((stream) => {
+        micStream = stream;
+      });
 
-    sttWs.onmessage = (ev) => {
-      handleSttMessage(ev.data);
-    };
+    const wsPromise = new Promise((resolve, reject) => {
+      sttWs = new WebSocket(wsUrl);
+      sttWs.binaryType = "arraybuffer";
 
-    sttWs.onerror = () => {
-      showVoiceError("STT WebSocket error — check ELEVENLABS_API_KEY");
-      setVoiceStatus("ERROR");
-    };
+      sttWs.onmessage = (ev) => {
+        handleSttMessage(ev.data);
+      };
 
-    sttWs.onclose = () => {
-      listening = false;
-      sessionReady = false;
-    };
+      sttWs.onerror = () => {
+        reject(new Error("STT WebSocket error — check ELEVENLABS_API_KEY"));
+      };
 
-    sttWs.onopen = async () => {
-      try {
-        await startCapture();
-      } catch (err) {
-        showVoiceError(
-          err instanceof Error ? err.message : "Microphone access denied"
-        );
-        setVoiceStatus("ERROR");
-      }
-    };
+      sttWs.onclose = () => {
+        listening = false;
+        sessionReady = false;
+      };
+
+      sttWs.onopen = () => resolve();
+    });
 
     try {
-      const act = await fetch("/api/jarvis/activation");
-      if (act.ok) {
-        const { text } = await act.json();
-        if (text) {
-          const waitReady = () =>
-            new Promise((resolve) => {
-              if (sessionReady) return resolve();
-              const t = setInterval(() => {
-                if (sessionReady) {
-                  clearInterval(t);
-                  resolve();
-                }
-              }, 50);
-              setTimeout(() => {
-                clearInterval(t);
-                sessionReady = true;
-                resolve();
-              }, 2000);
-            });
-          await waitReady();
-          await speakText(text);
-        }
+      await Promise.all([micPromise, wsPromise]);
+      await startCapture();
+      setVoiceStatus("LISTENING");
+    } catch (err) {
+      showVoiceError(err instanceof Error ? err.message : String(err));
+      setVoiceStatus("ERROR");
+      voiceActive = false;
+      listening = false;
+      if (sttWs) {
+        sttWs.close();
+        sttWs = null;
       }
-    } catch (_) {}
+      stopMicStream();
+    }
   }
 
   function stopJarvisVoice() {
@@ -682,4 +666,18 @@
       await startJarvisVoice();
     }
   };
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const orb = document.getElementById("orb-canvas");
+    if (orb) {
+      orb.addEventListener(
+        "pointerdown",
+        () => {
+          window.unlockJarvisVoiceAudio?.();
+          window.JarvisStreamingTts?.prewarm?.();
+        },
+        { passive: true }
+      );
+    }
+  });
 })();

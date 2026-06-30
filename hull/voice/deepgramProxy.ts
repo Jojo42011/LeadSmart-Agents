@@ -19,7 +19,7 @@ const ELEVENLABS_STT_BASE = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
 
 export function elevenLabsSttUrl(): string {
   const model = process.env.ELEVENLABS_STT_MODEL?.trim() || "scribe_v2_realtime";
-  const silenceSecs = process.env.ELEVENLABS_STT_SILENCE_SECS?.trim() || "1.0";
+  const silenceSecs = process.env.ELEVENLABS_STT_SILENCE_SECS?.trim() || "0.65";
   const params = new URLSearchParams({
     model_id: model,
     audio_format: "pcm_16000",

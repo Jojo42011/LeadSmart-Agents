@@ -12,8 +12,8 @@
   let speakOnEnd = null;
   let speakSession = null;
 
-  const FIRST_CHUNK_MAX = 85;
-  const CHUNK_MAX = 130;
+  const FIRST_CHUNK_MAX = 72;
+  const CHUNK_MAX = 120;
 
   function stripForSpeech(text) {
     return text
@@ -207,9 +207,11 @@
     const s = speakSession;
     if (!s) return;
 
-    let currentPromise =
-      s.chunks.length > 0 ? generateTtsForSentence(s.chunks[0]) : Promise.resolve(null);
-    let i = 0;
+      let currentPromise =
+        s.chunks.length > 0 ? generateTtsForSentence(s.chunks[0]) : Promise.resolve(null);
+      let prefetchPromise =
+        s.chunks.length > 1 ? generateTtsForSentence(s.chunks[1]) : null;
+      let i = 0;
 
     while (true) {
       if (s.aborted || !ttsIsPlaying) {
@@ -230,9 +232,14 @@
       }
 
       const audioBuffer = await currentPromise;
-      let nextPromise = null;
-      if (i + 1 < s.chunks.length) {
+      let nextPromise = prefetchPromise;
+      if (!nextPromise && i + 1 < s.chunks.length) {
         nextPromise = generateTtsForSentence(s.chunks[i + 1]);
+      }
+      if (i + 2 < s.chunks.length) {
+        prefetchPromise = generateTtsForSentence(s.chunks[i + 2]);
+      } else {
+        prefetchPromise = null;
       }
 
       if (!audioBuffer) {

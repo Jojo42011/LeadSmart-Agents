@@ -321,6 +321,24 @@ function findFirstSentenceBoundary(text: string): number {
   return match ? match.index! + 1 : -1;
 }
 
+function extractFirstSpeechChunk(accumulated: string): string | null {
+  const boundary = findFirstSentenceBoundary(accumulated);
+  if (boundary > 0) {
+    const first = accumulated.slice(0, boundary).trim();
+    if (first.length >= 6) return first;
+  }
+  const comma = accumulated.indexOf(", ");
+  if (comma >= 8 && comma < 90) {
+    return accumulated.slice(0, comma + 1).trim();
+  }
+  const trimmed = accumulated.trim();
+  if (trimmed.length >= 14 && trimmed.includes(" ")) {
+    const words = trimmed.split(/\s+/);
+    if (words.length >= 4) return words.slice(0, 4).join(" ");
+  }
+  return null;
+}
+
 export async function handleVoiceCommand(
   req: Request,
   res: Response
@@ -374,15 +392,12 @@ export async function handleVoiceCommand(
         onToken: (t) => {
           accumulated += t;
           if (!firstChunkSent) {
-            const boundary = findFirstSentenceBoundary(accumulated);
-            if (boundary > 0) {
-              const first = accumulated.slice(0, boundary).trim();
-              if (first.length > 10) {
-                firstChunkSent = true;
-                res.write(
-                  `data: ${JSON.stringify({ type: "speech_chunk", text: first, isFinal: false })}\n\n`
-                );
-              }
+            const first = extractFirstSpeechChunk(accumulated);
+            if (first) {
+              firstChunkSent = true;
+              res.write(
+                `data: ${JSON.stringify({ type: "speech_chunk", text: first, isFinal: false })}\n\n`
+              );
             }
           }
         },
