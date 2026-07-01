@@ -997,3 +997,34 @@ export async function fetchPolyaresPayouts(
 
   return rows;
 }
+
+/** Allowed payment method tags for affiliate metadata (payment portal). */
+export const PAYMENT_METHODS = [
+  "PayPal",
+  "Wise",
+  "Venmo",
+  "Bill.com",
+  "Crypto",
+  "Untagged",
+] as const;
+
+/** Allowed payment terms tags for affiliate metadata (payment portal). */
+export const PAYMENT_TERMS = [
+  "Weekly",
+  "Biweekly",
+  "Monthly",
+  "Untagged",
+] as const;
+
+export type PaymentMethodTag = (typeof PAYMENT_METHODS)[number];
+export type PaymentTermsTag = (typeof PAYMENT_TERMS)[number];
+
+export interface AffiliateMetadata {
+  paymentMethod: string | null;
+  paymentTerms: string | null;
+  isPaid: boolean;
+  paidAt: string | null;
+  updatedAt: string | null;
+}
+
+export type AffiliateMetadataMap = Record<string, AffiliateMetadata>;

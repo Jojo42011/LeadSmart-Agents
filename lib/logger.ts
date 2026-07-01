@@ -77,6 +77,15 @@ function getDb(): Database.Database {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       lastSuccessfulPollAt TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS affiliate_metadata (
+      publisherName TEXT PRIMARY KEY,
+      paymentMethod TEXT,
+      paymentTerms TEXT,
+      isPaid INTEGER DEFAULT 0,
+      paidAt TEXT,
+      updatedAt TEXT
+    );
   `);
 
   const row = db
@@ -199,4 +208,139 @@ export function setLastSuccessfulPollAt(isoTimestamp: string): void {
       "UPDATE poll_state SET lastSuccessfulPollAt = ? WHERE id = 1"
     )
     .run(isoTimestamp);
+}
+
+/** Affiliate payment tagging and paid status (payment portal). */
+export interface AffiliateMetadata {
+  paymentMethod: string | null;
+  paymentTerms: string | null;
+  isPaid: boolean;
+  paidAt: string | null;
+  updatedAt: string | null;
+}
+
+type AffiliateMetadataRow = {
+  publisherName: string;
+  paymentMethod: string | null;
+  paymentTerms: string | null;
+  isPaid: number;
+  paidAt: string | null;
+  updatedAt: string | null;
+};
+
+function rowToAffiliateMetadata(row: AffiliateMetadataRow): AffiliateMetadata {
+  return {
+    paymentMethod: row.paymentMethod,
+    paymentTerms: row.paymentTerms,
+    isPaid: row.isPaid === 1,
+    paidAt: row.paidAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** Returns all affiliate metadata keyed by publisher name. */
+export function getAllAffiliateMetadata(): Record<string, AffiliateMetadata> {
+  const database = getDb();
+  const rows = database
+    .prepare(
+      `SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt
+       FROM affiliate_metadata`
+    )
+    .all() as AffiliateMetadataRow[];
+
+  const map: Record<string, AffiliateMetadata> = {};
+  for (const row of rows) {
+    map[row.publisherName] = rowToAffiliateMetadata(row);
+  }
+  return map;
+}
+
+/** Upserts payment method and terms for one affiliate. */
+export function upsertAffiliateMetadata(
+  publisherName: string,
+  paymentMethod: string | null,
+  paymentTerms: string | null
+): AffiliateMetadata {
+  const database = getDb();
+  const updatedAt = new Date().toISOString();
+  const existing = database
+    .prepare(
+      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt FROM affiliate_metadata WHERE publisherName = ?"
+    )
+    .get(publisherName) as AffiliateMetadataRow | undefined;
+
+  if (existing) {
+    database
+      .prepare(
+        `UPDATE affiliate_metadata
+         SET paymentMethod = ?, paymentTerms = ?, updatedAt = ?
+         WHERE publisherName = ?`
+      )
+      .run(paymentMethod, paymentTerms, updatedAt, publisherName);
+  } else {
+    database
+      .prepare(
+        `INSERT INTO affiliate_metadata (
+          publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt
+        ) VALUES (?, ?, ?, 0, NULL, ?)`
+      )
+      .run(publisherName, paymentMethod, paymentTerms, updatedAt);
+  }
+
+  const row = database
+    .prepare(
+      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt FROM affiliate_metadata WHERE publisherName = ?"
+    )
+    .get(publisherName) as AffiliateMetadataRow;
+
+  return rowToAffiliateMetadata(row);
+}
+
+/** Toggles paid status for one affiliate; sets paidAt when marking paid. */
+export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
+  const database = getDb();
+  const updatedAt = new Date().toISOString();
+  const existing = database
+    .prepare(
+      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt FROM affiliate_metadata WHERE publisherName = ?"
+    )
+    .get(publisherName) as AffiliateMetadataRow | undefined;
+
+  if (!existing) {
+    const paidAt = new Date().toISOString();
+    database
+      .prepare(
+        `INSERT INTO affiliate_metadata (
+          publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt
+        ) VALUES (?, NULL, NULL, 1, ?, ?)`
+      )
+      .run(publisherName, paidAt, updatedAt);
+
+    return {
+      paymentMethod: null,
+      paymentTerms: null,
+      isPaid: true,
+      paidAt,
+      updatedAt,
+    };
+  }
+
+  const nextPaid = existing.isPaid === 1 ? 0 : 1;
+  const paidAt = nextPaid === 1 ? new Date().toISOString() : null;
+
+  database
+    .prepare(
+      `UPDATE affiliate_metadata
+       SET isPaid = ?, paidAt = ?, updatedAt = ?
+       WHERE publisherName = ?`
+    )
+    .run(nextPaid, paidAt, updatedAt, publisherName);
+
+  return {
+    paymentMethod: existing.paymentMethod,
+    paymentTerms: existing.paymentTerms,
+    isPaid: nextPaid === 1,
+    paidAt,
+    updatedAt,
+  };
 }

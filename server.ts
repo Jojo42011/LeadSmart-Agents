@@ -2,7 +2,12 @@ import "dotenv/config";
 import * as path from "path";
 import express from "express";
 import Database from "better-sqlite3";
-import { ensureScrubLogSchema } from "./lib/logger";
+import {
+  ensureScrubLogSchema,
+  getAllAffiliateMetadata,
+  upsertAffiliateMetadata,
+  toggleAffiliatePaid,
+} from "./lib/logger";
 import { getDataDir, getDbPath, getPublicDir } from "./lib/paths";
 import { importDatabaseFile } from "./lib/importDatabase";
 import { triggerPollNow } from "./lib/pollScheduler";
@@ -13,6 +18,8 @@ import {
   mergeAffiliates,
   parseNumbersCSV,
   rentalCostsFromNumberCounts,
+  PAYMENT_METHODS,
+  PAYMENT_TERMS,
 } from "./agents/paymentAgent";
 
 import http from "http";
@@ -591,6 +598,95 @@ app.post(
     }
   }
 );
+
+function decodePublisherParam(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function normalizeMetadataTag(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "Untagged") {
+    return null;
+  }
+  return trimmed;
+}
+
+app.get("/api/payment/metadata", (_req, res) => {
+  try {
+    res.json(getAllAffiliateMetadata());
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : "Failed to fetch affiliate metadata",
+    });
+  }
+});
+
+app.post("/api/payment/metadata/:name", (req, res) => {
+  try {
+    const publisherName = decodePublisherParam(req.params.name).trim();
+    if (!publisherName) {
+      res.status(400).json({ error: "Publisher name is required" });
+      return;
+    }
+
+    const paymentMethod = normalizeMetadataTag(req.body?.paymentMethod);
+    const paymentTerms = normalizeMetadataTag(req.body?.paymentTerms);
+
+    if (
+      paymentMethod !== null &&
+      !(PAYMENT_METHODS as readonly string[]).includes(paymentMethod)
+    ) {
+      res.status(400).json({ error: "Invalid payment method" });
+      return;
+    }
+
+    if (
+      paymentTerms !== null &&
+      !(PAYMENT_TERMS as readonly string[]).includes(paymentTerms)
+    ) {
+      res.status(400).json({ error: "Invalid payment terms" });
+      return;
+    }
+
+    const metadata = upsertAffiliateMetadata(
+      publisherName,
+      paymentMethod,
+      paymentTerms
+    );
+    res.json(metadata);
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : "Failed to save affiliate metadata",
+    });
+  }
+});
+
+app.post("/api/payment/mark-paid/:name", (req, res) => {
+  try {
+    const publisherName = decodePublisherParam(req.params.name).trim();
+    if (!publisherName) {
+      res.status(400).json({ error: "Publisher name is required" });
+      return;
+    }
+
+    const metadata = toggleAffiliatePaid(publisherName);
+    res.json(metadata);
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : "Failed to toggle paid status",
+    });
+  }
+});
 
 app.get("/api/debug/failed-scrubs", (req, res) => {
   try {

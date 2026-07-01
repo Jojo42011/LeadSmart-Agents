@@ -703,6 +703,18 @@
         outline: 1px solid rgba(0, 255, 136, 0.2);
       }
 
+      tbody tr.row--paid {
+        background: rgba(0, 255, 136, 0.05);
+      }
+
+      tbody tr.row--paid:hover {
+        background: rgba(0, 255, 136, 0.08);
+      }
+
+      tbody tr.row--paid.row--selected {
+        background: rgba(0, 255, 136, 0.1);
+      }
+
       .col-rank {
         color: var(--text-dim);
         width: 48px;
@@ -710,6 +722,19 @@
 
       .col-name {
         max-width: 300px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .col-name-inner {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 100%;
+      }
+
+      .col-name-text {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -750,6 +775,138 @@
         background: rgba(255, 176, 0, 0.06);
         cursor: not-allowed;
         opacity: 0.6;
+      }
+
+      .action-cell {
+        position: relative;
+        white-space: nowrap;
+      }
+
+      .action-cell__controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .pay-checkbox {
+        width: 14px;
+        height: 14px;
+        accent-color: var(--green);
+        cursor: pointer;
+      }
+
+      .btn-edit {
+        font-family: var(--font);
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        font-size: 13px;
+        line-height: 1;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: var(--text-dim);
+        background: rgba(255, 255, 255, 0.03);
+        cursor: pointer;
+      }
+
+      .btn-edit:hover {
+        color: var(--text);
+        border-color: rgba(0, 255, 136, 0.35);
+        background: rgba(0, 255, 136, 0.06);
+      }
+
+      .badge-method {
+        display: inline-block;
+        flex-shrink: 0;
+        padding: 2px 6px;
+        font-size: 8px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        border-radius: 2px;
+        border: 1px solid transparent;
+      }
+
+      .badge-method--paypal {
+        color: #6cb6ff;
+        border-color: rgba(108, 182, 255, 0.35);
+        background: rgba(108, 182, 255, 0.1);
+      }
+
+      .badge-method--wise {
+        color: #7ee787;
+        border-color: rgba(126, 231, 135, 0.35);
+        background: rgba(126, 231, 135, 0.1);
+      }
+
+      .badge-method--venmo {
+        color: #58a6ff;
+        border-color: rgba(88, 166, 255, 0.35);
+        background: rgba(88, 166, 255, 0.1);
+      }
+
+      .badge-method--billcom {
+        color: #ffb86c;
+        border-color: rgba(255, 184, 108, 0.35);
+        background: rgba(255, 184, 108, 0.1);
+      }
+
+      .badge-method--crypto {
+        color: #d2a8ff;
+        border-color: rgba(210, 168, 255, 0.35);
+        background: rgba(210, 168, 255, 0.1);
+      }
+
+      .metadata-popover {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        z-index: 20;
+        min-width: 220px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        background: var(--bg-panel);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      }
+
+      .metadata-popover label {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 9px;
+        letter-spacing: 1px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+      }
+
+      .metadata-popover select {
+        width: 100%;
+        margin-bottom: 10px;
+        padding: 6px 8px;
+        font-family: var(--font);
+        font-size: 11px;
+        color: var(--text);
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+      }
+
+      .metadata-popover__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .btn-metadata-save {
+        font-family: var(--font);
+        padding: 6px 10px;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        border: 1px solid rgba(0, 255, 136, 0.4);
+        color: var(--green);
+        background: rgba(0, 255, 136, 0.08);
+        cursor: pointer;
+      }
+
+      .btn-metadata-save:hover {
+        background: rgba(0, 255, 136, 0.14);
       }
 
       .empty-state {
@@ -1059,6 +1216,18 @@
       let pageSize = 100;
       let currentPage = 1;
       let profitDataMonth = null;
+      let affiliateMetadataMap = {};
+      let openEditPopoverPublisher = null;
+
+      const PAYMENT_METHODS = [
+        "PayPal",
+        "Wise",
+        "Venmo",
+        "Bill.com",
+        "Crypto",
+        "Untagged",
+      ];
+      const PAYMENT_TERMS = ["Weekly", "Biweekly", "Monthly", "Untagged"];
 
       function isProfitView() {
         return sourceFilter === "PROFIT";
@@ -1167,7 +1336,217 @@
         loginScreen.classList.add("hidden");
         dashboard.classList.remove("hidden");
         initMonthSelect();
-        fetchStats();
+        void fetchAffiliateMetadata().then(() => {
+          fetchStats();
+        });
+      }
+
+      async function fetchAffiliateMetadata() {
+        try {
+          const res = await fetch("/api/payment/metadata");
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || "Failed to fetch affiliate metadata");
+          }
+          affiliateMetadataMap =
+            data && typeof data === "object" && !Array.isArray(data) ? data : {};
+        } catch (err) {
+          console.warn("Affiliate metadata load failed:", err);
+          affiliateMetadataMap = {};
+        }
+      }
+
+      function getAffiliateMeta(publisherName) {
+        return (
+          affiliateMetadataMap[publisherName] || {
+            paymentMethod: null,
+            paymentTerms: null,
+            isPaid: false,
+            paidAt: null,
+            updatedAt: null,
+          }
+        );
+      }
+
+      function paymentMethodSlug(method) {
+        return String(method || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "");
+      }
+
+      function paymentMethodBadgeHtml(method) {
+        if (!method || method === "Untagged") {
+          return "";
+        }
+        const slug = paymentMethodSlug(method);
+        return (
+          '<span class="badge-method badge-method--' +
+          slug +
+          '" title="Payment: ' +
+          escapeHtml(method) +
+          '">' +
+          escapeHtml(method) +
+          "</span>"
+        );
+      }
+
+      function publisherNameCellHtml(name) {
+        const meta = getAffiliateMeta(name);
+        const badge = paymentMethodBadgeHtml(meta.paymentMethod);
+        return (
+          '<span class="col-name-inner">' +
+          '<span class="col-name-text">' +
+          escapeHtml(name) +
+          "</span>" +
+          badge +
+          "</span>"
+        );
+      }
+
+      function closeEditPopover() {
+        openEditPopoverPublisher = null;
+        document.querySelectorAll(".metadata-popover").forEach((el) => el.remove());
+      }
+
+      function openMetadataPopover(anchorTd, publisherName) {
+        if (openEditPopoverPublisher === publisherName) {
+          closeEditPopover();
+          return;
+        }
+
+        closeEditPopover();
+        openEditPopoverPublisher = publisherName;
+
+        const meta = getAffiliateMeta(publisherName);
+        const popover = document.createElement("div");
+        popover.className = "metadata-popover";
+
+        const methodLabel = document.createElement("label");
+        methodLabel.textContent = "Payment Method";
+        const methodSelect = document.createElement("select");
+        for (const option of PAYMENT_METHODS) {
+          const opt = document.createElement("option");
+          opt.value = option;
+          opt.textContent = option;
+          methodSelect.appendChild(opt);
+        }
+        methodSelect.value = meta.paymentMethod || "Untagged";
+
+        const termsLabel = document.createElement("label");
+        termsLabel.textContent = "Payment Terms";
+        const termsSelect = document.createElement("select");
+        for (const option of PAYMENT_TERMS) {
+          const opt = document.createElement("option");
+          opt.value = option;
+          opt.textContent = option;
+          termsSelect.appendChild(opt);
+        }
+        termsSelect.value = meta.paymentTerms || "Untagged";
+
+        const actions = document.createElement("div");
+        actions.className = "metadata-popover__actions";
+        const saveBtn = document.createElement("button");
+        saveBtn.type = "button";
+        saveBtn.className = "btn-metadata-save";
+        saveBtn.textContent = "Save";
+        saveBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          saveBtn.disabled = true;
+          try {
+            const res = await fetch(
+              "/api/payment/metadata/" + encodeURIComponent(publisherName),
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  paymentMethod: methodSelect.value,
+                  paymentTerms: termsSelect.value,
+                }),
+              }
+            );
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || "Failed to save metadata");
+            }
+            affiliateMetadataMap[publisherName] = data;
+            closeEditPopover();
+            renderTable();
+          } catch (err) {
+            saveBtn.disabled = false;
+            setWarning(err instanceof Error ? err.message : "Failed to save metadata");
+          }
+        });
+
+        actions.appendChild(saveBtn);
+        popover.appendChild(methodLabel);
+        popover.appendChild(methodSelect);
+        popover.appendChild(termsLabel);
+        popover.appendChild(termsSelect);
+        popover.appendChild(actions);
+        popover.addEventListener("click", (e) => e.stopPropagation());
+        anchorTd.appendChild(popover);
+      }
+
+      function buildActionCell(row) {
+        const meta = getAffiliateMeta(row.publisherName);
+        const td = document.createElement("td");
+        td.className = "action-cell";
+
+        const controls = document.createElement("div");
+        controls.className = "action-cell__controls";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "pay-checkbox";
+        checkbox.checked = !!meta.isPaid;
+        checkbox.title =
+          meta.isPaid && meta.paidAt
+            ? "Paid " + formatCstTimestamp(meta.paidAt)
+            : "Mark as paid";
+        checkbox.addEventListener("click", (e) => e.stopPropagation());
+        checkbox.addEventListener("change", async () => {
+          const previous = !!meta.isPaid;
+          try {
+            const res = await fetch(
+              "/api/payment/mark-paid/" + encodeURIComponent(row.publisherName),
+              { method: "POST" }
+            );
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || "Failed to update paid status");
+            }
+            affiliateMetadataMap[row.publisherName] = data;
+            renderTable();
+          } catch (err) {
+            checkbox.checked = previous;
+            setWarning(
+              err instanceof Error ? err.message : "Failed to update paid status"
+            );
+          }
+        });
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "btn-edit";
+        editBtn.title = "Edit payment method and terms";
+        editBtn.textContent = "\u270E";
+        editBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openMetadataPopover(td, row.publisherName);
+        });
+
+        const payBtn = document.createElement("button");
+        payBtn.type = "button";
+        payBtn.className = "btn-pay";
+        payBtn.disabled = true;
+        payBtn.title = "Coming in Phase 2";
+        payBtn.textContent = "PAY";
+
+        controls.appendChild(checkbox);
+        controls.appendChild(editBtn);
+        controls.appendChild(payBtn);
+        td.appendChild(controls);
+        return td;
       }
 
       function setBanner(type, message) {
@@ -1680,8 +2059,12 @@
         pageRows.forEach((row, index) => {
           const globalIndex = globalOffset + index;
           const tr = document.createElement("tr");
+          const meta = getAffiliateMeta(row.publisherName);
           if (globalIndex === selectedRowIndex) {
             tr.classList.add("row--selected");
+          }
+          if (meta.isPaid) {
+            tr.classList.add("row--paid");
           }
 
           const hasCallMetrics =
@@ -1707,7 +2090,7 @@
 
           tr.innerHTML =
             '<td class="col-rank">' + (globalIndex + 1) + "</td>" +
-            '<td class="col-name" title="' + escapeHtml(row.publisherName) + '">' + escapeHtml(row.publisherName) + "</td>" +
+            '<td class="col-name" title="' + escapeHtml(row.publisherName) + '">' + publisherNameCellHtml(row.publisherName) + "</td>" +
             "<td>" + sourceBadgeHtml(row.source) + "</td>" +
             '<td class="col-calls">' + callsHtml + "</td>" +
             '<td class="col-calls">' + convertedHtml + "</td>" +
@@ -1715,11 +2098,12 @@
             "<td>" + ringbaHtml + "</td>" +
             "<td>" + polyaresHtml + "</td>" +
             '<td class="col-payout">' + formatMoney(row.totalAmount) + "</td>" +
-            '<td><span class="badge-active">ACTIVE</span></td>' +
-            '<td><button type="button" class="btn-pay" disabled title="Coming in Phase 2">PAY</button></td>';
+            '<td><span class="badge-active">ACTIVE</span></td>';
+
+          tr.appendChild(buildActionCell(row));
 
           tr.addEventListener("click", (e) => {
-            if (e.target.closest(".btn-pay")) return;
+            if (e.target.closest(".action-cell")) return;
             selectedRowIndex = globalIndex;
             renderTable();
           });
@@ -1890,6 +2274,12 @@
 
       formatCstClock();
       setInterval(formatCstClock, 1000);
+
+      document.addEventListener("click", () => {
+        if (openEditPopoverPublisher) {
+          closeEditPopover();
+        }
+      });
 
       if (sessionStorage.getItem(AUTH_KEY) === "1") {
         showDashboard();
