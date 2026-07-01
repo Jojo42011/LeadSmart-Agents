@@ -1028,3 +1028,96 @@ export interface AffiliateMetadata {
 }
 
 export type AffiliateMetadataMap = Record<string, AffiliateMetadata>;
+
+/** Resolve merged total payout for one publisher in a date range. */
+export async function resolvePublisherPayoutAmount(
+  publisherName: string,
+  startDate: string,
+  endDate: string
+): Promise<number> {
+  const [ringbaPublishers, polyaresPublishers] = await Promise.all([
+    fetchPublisherPayouts(startDate, endDate),
+    fetchPolyaresPayouts(startDate, endDate),
+  ]);
+  const { publishers } = mergeAffiliates(ringbaPublishers, polyaresPublishers);
+  const target = normalizePublisherName(publisherName);
+  const row = publishers.find(
+    (publisher) => normalizePublisherName(publisher.publisherName) === target
+  );
+  if (!row) {
+    throw new Error(`Publisher not found: ${publisherName}`);
+  }
+  if (row.totalAmount <= 0) {
+    throw new Error(`No payout amount for ${publisherName}`);
+  }
+  return row.totalAmount;
+}
+
+export interface PayableRecipientMatch {
+  id: number;
+  accountHolderName: string;
+  currency: string;
+  country: string;
+  email?: string | null;
+}
+
+/** Match a Wise recipient to a publisher by holder name or email. */
+export function matchWiseRecipientByName(
+  recipients: PayableRecipientMatch[],
+  publisherName: string
+): PayableRecipientMatch | null {
+  const target = normalizePublisherName(publisherName);
+
+  for (const recipient of recipients) {
+    if (normalizePublisherName(recipient.accountHolderName) === target) {
+      return recipient;
+    }
+  }
+
+  for (const recipient of recipients) {
+    const holder = normalizePublisherName(recipient.accountHolderName);
+    if (holder.includes(target) || target.includes(holder)) {
+      return recipient;
+    }
+  }
+
+  if (target.includes("@")) {
+    for (const recipient of recipients) {
+      const email = recipient.email?.trim().toLowerCase();
+      if (email && email === target) {
+        return recipient;
+      }
+    }
+  }
+
+  return null;
+}
+
+export interface PayableVendorMatch {
+  id: string;
+  name: string;
+  email?: string | null;
+}
+
+/** Match a Bill.com vendor to a publisher by name. */
+export function matchBillcomVendorByName(
+  vendors: PayableVendorMatch[],
+  publisherName: string
+): PayableVendorMatch | null {
+  const target = normalizePublisherName(publisherName);
+
+  for (const vendor of vendors) {
+    if (normalizePublisherName(vendor.name) === target) {
+      return vendor;
+    }
+  }
+
+  for (const vendor of vendors) {
+    const name = normalizePublisherName(vendor.name);
+    if (name.includes(target) || target.includes(name)) {
+      return vendor;
+    }
+  }
+
+  return null;
+}
