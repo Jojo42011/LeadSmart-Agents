@@ -81,6 +81,10 @@ function bankAccountId(): string {
   return id;
 }
 
+function optionalBankAccountId(): string | null {
+  return process.env.BILLCOM_BANK_ACCOUNT_ID?.trim() ?? null;
+}
+
 function optionalMfaDeviceId(): string | null {
   return process.env.BILLCOM_DEVICE_ID?.trim() ?? null;
 }
@@ -328,20 +332,25 @@ export async function payBill(
   amount: number
 ): Promise<BillcomPayment> {
   const processDate = todayYmd();
+  const bac = optionalBankAccountId();
   console.log("[BillCom] PayBills request:", {
     billId,
     vendorId,
     amount,
     processDate,
-    bankAccountId: bankAccountId(),
+    bankAccountId: bac ?? "(org primary)",
   });
 
-  const row = await v2Request("PayBills.json", {
+  const payload: Record<string, unknown> = {
     vendorId,
-    bankAccountId: bankAccountId(),
     processDate,
     billPays: [{ billId, amount }],
-  });
+  };
+  if (bac) {
+    payload.bankAccountId = bac;
+  }
+
+  const row = await v2Request("PayBills.json", payload);
 
   const data = asRecord(row.response_data);
   const sentPays =
