@@ -135,16 +135,16 @@ function assertBillcomOk(payload: unknown, context: string): Record<string, unkn
 async function login(): Promise<string> {
   let res;
   try {
-    res = await axios.post(
-      `${BILLCOM_V2_BASE}/Login.json`,
-      {
-        devKey: devKey(),
-        userName: billcomEmail(),
-        password: billcomPassword(),
-        orgId: billcomOrgId(),
-      },
-      { timeout: 60_000 }
-    );
+    const params = new URLSearchParams();
+    params.append("devKey", devKey());
+    params.append("userName", billcomEmail());
+    params.append("password", billcomPassword());
+    params.append("orgId", billcomOrgId());
+
+    res = await axios.post(`${BILLCOM_V2_BASE}/Login.json`, params, {
+      timeout: 60_000,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
   } catch (err: any) {
     if (err.response?.data) {
       console.error(
@@ -180,21 +180,15 @@ async function v2Request(
   data: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const sessionId = await getSession();
-  const res = await axios.post(
-    `${BILLCOM_V2_BASE}/${endpoint}`,
-    {
-      devKey: devKey(),
-      sessionId,
-      data,
-    },
-    {
-      timeout: 60_000,
-      headers: {
-        devKey: devKey(),
-        sessionId,
-      },
-    }
-  );
+  const params = new URLSearchParams();
+  params.append("devKey", devKey());
+  params.append("sessionId", sessionId);
+  params.append("data", JSON.stringify(data));
+
+  const res = await axios.post(`${BILLCOM_V2_BASE}/${endpoint}`, params, {
+    timeout: 60_000,
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
 
   cachedSession = cachedSession
     ? { ...cachedSession, lastUsedAt: Date.now() }
