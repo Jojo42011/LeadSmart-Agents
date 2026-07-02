@@ -468,82 +468,62 @@ export async function listVendors(): Promise<BillcomVendor[]> {
   return vendors;
 }
 
-/** Create a US vendor with full ACH + address via Bill.com v3 API. */
+/** Create a US vendor with full ACH + address via Bill.com v2 API. */
 export async function createVendorV3WithAch(
   vendorName: string,
   ach: BillcomAchDetails,
   email?: string | null
 ): Promise<BillcomVendor> {
-  const sessionId = await getSession();
-  const payload = {
-    name: vendorName.trim(),
-    accountType: "PERSON",
-    email: email?.trim() || `${vendorName.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20) || "vendor"}@leadsmart.local`,
-    address: {
-      line1: ach.addressLine1.trim(),
-      city: ach.city.trim(),
-      stateOrProvince: ach.state.trim().toUpperCase(),
-      zipOrPostalCode: ach.zip.trim(),
-      country: "US",
-    },
-    paymentInformation: {
-      payeeName: ach.payeeName.trim(),
-      bankAccount: {
-        nameOnAccount: ach.accountHolderName.trim(),
-        accountNumber: ach.accountNumber.trim(),
-        routingNumber: ach.routingNumber.trim(),
-      },
-    },
-    billCurrency: "USD",
-  };
-
   console.log(
-    "[BillCom] POST /v3/vendors for %s (routing=%s, account=%s)",
+    "[BillCom] v2 vendor create for %s (routing=%s, account=%s)",
     vendorName,
     ach.routingNumber.trim(),
     maskAccountNumber(ach.accountNumber)
   );
 
-  let res;
-  try {
-    res = await axios.post(`${BILLCOM_GATEWAY_BASE}/vendors`, payload, {
-      timeout: 60_000,
-      headers: {
-        devKey: devKey(),
-        sessionId,
-        "Content-Type": "application/json",
-      },
-    });
-  } catch (err: unknown) {
-    const axiosErr = err as { response?: { data?: unknown; status?: number } };
-    const body = axiosErr.response?.data;
-    console.error(
-      "[BillCom] v3 vendor create failed (status=%s): %s",
-      axiosErr.response?.status ?? "unknown",
-      JSON.stringify(body)
-    );
-    const row = asRecord(body);
-    const message =
-      readString(row ?? {}, "message") ??
-      readString(row ?? {}, "error") ??
-      (err instanceof Error ? err.message : "Bill.com vendor create failed");
-    const code = readString(row ?? {}, "errorCode") ?? readString(row ?? {}, "code");
-    throw new BillcomApiError(message, code);
+  const vendorRow = await v2Request("Crud/Create/Vendor.json", {
+    obj: {
+      entity: "Vendor",
+      name: vendorName.trim(),
+      nameOnCheck: ach.payeeName.trim(),
+      email: email ?? "",
+      isActive: "1",
+      address1: ach.addressLine1.trim(),
+      addressCity: ach.city.trim(),
+      addressState: ach.state.trim().toUpperCase(),
+      addressZip: ach.zip.trim(),
+      addressCountry: "USA",
+    },
+  });
+
+  const vendorData = asRecord(vendorRow.response_data);
+  const vendorId = vendorData ? readString(vendorData, "id") : null;
+  const name = vendorData ? readString(vendorData, "name") : null;
+  if (!vendorId || !name) {
+    throw new Error("Bill.com vendor create response missing id");
   }
 
-  cachedSession = cachedSession
-    ? { ...cachedSession, lastUsedAt: Date.now() }
-    : { sessionId, lastUsedAt: Date.now() };
+  console.log("[BillCom] v2 vendor created: id=%s name=%s", vendorId, name);
 
-  const row = asRecord(res.data);
-  const id = row ? readString(row, "id") : null;
-  const name = row ? readString(row, "name") : null;
-  if (!id || !name) {
-    throw new Error("Bill.com v3 vendor create response missing id");
-  }
+  await v2Request("Crud/Create/VendorBankAccount.json", {
+    obj: {
+      entity: "VendorBankAccount",
+      vendorId,
+      accountNumber: ach.accountNumber.trim(),
+      routingNumber: ach.routingNumber.trim(),
+      isActive: "1",
+      isPersonalAcct: true,
+      isSavings: false,
+    },
+  });
 
-  console.log("[BillCom] v3 vendor created: id=%s name=%s", id, name);
-  return { id, name, email: email ?? null };
+  console.log(
+    "[BillCom] v2 vendor bank account added for %s (vendorId=%s)",
+    vendorName,
+    vendorId
+  );
+
+  return { id: vendorId, name, email: email ?? null };
 }
 
 /** Create a vendor if it does not already exist. */
