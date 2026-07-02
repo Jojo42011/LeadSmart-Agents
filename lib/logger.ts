@@ -86,6 +86,13 @@ function getDb(): Database.Database {
       paidAt TEXT,
       updatedAt TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS billcom_mfa (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      deviceId TEXT NOT NULL,
+      mfaId TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    );
   `);
 
   const row = db
@@ -343,4 +350,43 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     paidAt,
     updatedAt,
   };
+}
+
+export interface BillcomMfaCredentials {
+  deviceId: string;
+  mfaId: string;
+  updatedAt: string;
+}
+
+/** Returns persisted Bill.com MFA trust (30-day rememberMe), if any. */
+export function getBillcomMfaCredentials(): BillcomMfaCredentials | null {
+  const database = getDb();
+  const row = database
+    .prepare("SELECT deviceId, mfaId, updatedAt FROM billcom_mfa WHERE id = 1")
+    .get() as { deviceId: string; mfaId: string; updatedAt: string } | undefined;
+  if (!row?.deviceId || !row.mfaId) {
+    return null;
+  }
+  return row;
+}
+
+/** Saves Bill.com MFA trust after successful MFAAuthenticate (rememberMe). */
+export function saveBillcomMfaCredentials(deviceId: string, mfaId: string): void {
+  const database = getDb();
+  const updatedAt = new Date().toISOString();
+  database
+    .prepare(
+      `INSERT INTO billcom_mfa (id, deviceId, mfaId, updatedAt)
+       VALUES (1, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         deviceId = excluded.deviceId,
+         mfaId = excluded.mfaId,
+         updatedAt = excluded.updatedAt`
+    )
+    .run(deviceId, mfaId, updatedAt);
+  console.log(
+    "[BillCom] Saved MFA trust to database (deviceId=%s, updatedAt=%s)",
+    deviceId,
+    updatedAt
+  );
 }

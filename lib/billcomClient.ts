@@ -1,7 +1,26 @@
 import axios from "axios";
+import {
+  getBillcomMfaCredentials,
+  saveBillcomMfaCredentials,
+} from "./logger";
 
 const BILLCOM_V2_BASE = "https://api.bill.com/api/v2";
 const BILLCOM_GATEWAY_BASE = "https://gateway.bill.com/connect/v3";
+export const BILLCOM_DEFAULT_DEVICE_ID = "leadsmart-fly-prod";
+
+export class BillcomApiError extends Error {
+  constructor(
+    message: string,
+    public readonly errorCode: string | null = null
+  ) {
+    super(message);
+    this.name = "BillcomApiError";
+  }
+}
+
+export function isBillcomUntrustedSession(err: unknown): boolean {
+  return err instanceof BillcomApiError && err.errorCode === "BDC_1361";
+}
 
 export interface BillcomVendor {
   id: string;
@@ -85,12 +104,41 @@ function optionalBankAccountId(): string | null {
   return process.env.BILLCOM_BANK_ACCOUNT_ID?.trim() ?? null;
 }
 
-function optionalMfaDeviceId(): string | null {
+function optionalMfaDeviceIdFromEnv(): string | null {
   return process.env.BILLCOM_DEVICE_ID?.trim() ?? null;
 }
 
-function optionalMfaId(): string | null {
+function optionalMfaIdFromEnv(): string | null {
   return process.env.BILLCOM_MFA_ID?.trim() ?? null;
+}
+
+export function getBillcomDeviceId(): string {
+  const stored = getBillcomMfaCredentials();
+  if (stored?.deviceId) {
+    return stored.deviceId;
+  }
+  return optionalMfaDeviceIdFromEnv() ?? BILLCOM_DEFAULT_DEVICE_ID;
+}
+
+function resolveMfaForLogin(): { deviceId: string; mfaId: string | null } {
+  const stored = getBillcomMfaCredentials();
+  if (stored?.mfaId) {
+    console.log(
+      "[BillCom] login using stored MFA trust (deviceId=%s, saved %s)",
+      stored.deviceId,
+      stored.updatedAt
+    );
+    return { deviceId: stored.deviceId, mfaId: stored.mfaId };
+  }
+
+  const deviceId = optionalMfaDeviceIdFromEnv() ?? BILLCOM_DEFAULT_DEVICE_ID;
+  const mfaId = optionalMfaIdFromEnv();
+  if (mfaId) {
+    console.log("[BillCom] login using MFA trust from env (deviceId=%s)", deviceId);
+  } else {
+    console.log("[BillCom] login without MFA trust — pay may require MFA code");
+  }
+  return { deviceId, mfaId };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -124,24 +172,57 @@ function sessionExpired(session: BillcomSession): boolean {
   return Date.now() - session.lastUsedAt >= SESSION_IDLE_MS;
 }
 
+function extractBillcomError(row: Record<string, unknown>): {
+  code: string | null;
+  message: string;
+} {
+  const data = asRecord(row.response_data);
+  const code =
+    (data ? readString(data, "error_code") : null) ??
+    readString(row, "error_code");
+  const message =
+    (data ? readString(data, "error_message") : null) ??
+    readString(row, "error_message") ??
+    readString(row, "response_message") ??
+    "Bill.com request failed";
+  return { code, message };
+}
+
 function assertBillcomOk(payload: unknown, context: string): Record<string, unknown> {
   const row = asRecord(payload);
   if (!row) {
     console.error("[BillCom] assertBillcomOk failed:", JSON.stringify(payload));
-    throw new Error(`${context}: empty response`);
+    throw new BillcomApiError(`${context}: empty response`);
   }
 
   const status = readNumber(row, "response_status");
   if (status !== null && status !== 0) {
-    console.error("[BillCom] assertBillcomOk failed:", JSON.stringify(payload));
-    const message =
-      readString(row, "response_message") ??
-      readString(row, "error_message") ??
-      "Bill.com request failed";
-    throw new Error(`${context}: ${message}`);
+    const { code, message } = extractBillcomError(row);
+    console.error(
+      "[BillCom] API error on %s: code=%s message=%s payload=%s",
+      context,
+      code ?? "unknown",
+      message,
+      JSON.stringify(payload)
+    );
+    throw new BillcomApiError(`${context}: ${message}`, code);
   }
 
   return row;
+}
+
+export function clearBillcomSession(): void {
+  cachedSession = null;
+  console.log("[BillCom] Cleared cached session");
+}
+
+export function setBillcomSession(sessionId: string): void {
+  cachedSession = { sessionId, lastUsedAt: Date.now() };
+  console.log("[BillCom] Set cached session");
+}
+
+export async function getBillcomSessionId(): Promise<string> {
+  return getSession();
 }
 
 async function login(): Promise<string> {
@@ -153,13 +234,13 @@ async function login(): Promise<string> {
     params.append("password", billcomPassword());
     params.append("orgId", billcomOrgId());
 
-    const deviceId = optionalMfaDeviceId();
-    const mfaId = optionalMfaId();
-    if (deviceId && mfaId) {
+    const { deviceId, mfaId } = resolveMfaForLogin();
+    if (mfaId) {
       params.append("deviceId", deviceId);
       params.append("mfaId", mfaId);
-      console.log("[BillCom] login with MFA-trusted deviceId");
     }
+
+    console.log("[BillCom] Login.json request (user=%s, mfaTrusted=%s)", billcomEmail(), !!mfaId);
 
     res = await axios.post(`${BILLCOM_V2_BASE}/Login.json`, params, {
       timeout: 60_000,
@@ -182,6 +263,7 @@ async function login(): Promise<string> {
     throw new Error("Bill.com login did not return sessionId");
   }
 
+  console.log("[BillCom] Login success, session established");
   cachedSession = { sessionId, lastUsedAt: Date.now() };
   return sessionId;
 }
@@ -197,24 +279,90 @@ export async function getSession(): Promise<string> {
 
 async function v2Request(
   endpoint: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  sessionIdOverride?: string
 ): Promise<Record<string, unknown>> {
-  const sessionId = await getSession();
+  const sessionId = sessionIdOverride ?? (await getSession());
   const params = new URLSearchParams();
   params.append("devKey", devKey());
   params.append("sessionId", sessionId);
   params.append("data", JSON.stringify(data));
+
+  console.log("[BillCom] POST %s", endpoint);
 
   const res = await axios.post(`${BILLCOM_V2_BASE}/${endpoint}`, params, {
     timeout: 60_000,
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
   });
 
-  cachedSession = cachedSession
-    ? { ...cachedSession, lastUsedAt: Date.now() }
-    : { sessionId, lastUsedAt: Date.now() };
+  if (!sessionIdOverride) {
+    cachedSession = cachedSession
+      ? { ...cachedSession, lastUsedAt: Date.now() }
+      : { sessionId, lastUsedAt: Date.now() };
+  } else {
+    setBillcomSession(sessionId);
+  }
 
   return assertBillcomOk(res.data, endpoint);
+}
+
+/** Send MFA token to registered Bill.com device; returns challengeId. */
+export async function mfaChallenge(
+  sessionIdOverride?: string
+): Promise<{ challengeId: string; sessionId: string }> {
+  const sessionId = sessionIdOverride ?? (await getSession());
+  console.log("[BillCom] MFAChallenge.json — sending token to registered device");
+  const row = await v2Request("MFAChallenge.json", {}, sessionId);
+  const data = asRecord(row.response_data);
+  const challengeId = data ? readString(data, "challengeId") : null;
+  if (!challengeId) {
+    throw new Error("Bill.com MFAChallenge did not return challengeId");
+  }
+  console.log("[BillCom] MFAChallenge success, challengeId=%s", challengeId);
+  return { challengeId, sessionId };
+}
+
+/** Verify MFA code, save trust for 30 days, and mark session trusted. */
+export async function mfaAuthenticateAndSave(
+  challengeId: string,
+  token: string,
+  sessionId: string
+): Promise<string> {
+  const deviceId = getBillcomDeviceId();
+  const maskedToken =
+    token.length <= 2 ? "***" : `${token.slice(0, 1)}***${token.slice(-1)}`;
+  console.log(
+    "[BillCom] MFAAuthenticate.json request (deviceId=%s, token=%s, rememberMe=true)",
+    deviceId,
+    maskedToken
+  );
+
+  const row = await v2Request(
+    "MFAAuthenticate.json",
+    {
+      challengeId,
+      token,
+      deviceId,
+      machineName: "LeadSmart Payment Portal",
+      rememberMe: true,
+    },
+    sessionId
+  );
+
+  const data = asRecord(row.response_data);
+  const mfaId = data ? readString(data, "mfaId") : null;
+  if (!mfaId) {
+    console.error(
+      "[BillCom] MFAAuthenticate response missing mfaId:",
+      JSON.stringify(row.response_data)
+    );
+    throw new Error("Bill.com MFAAuthenticate did not return mfaId");
+  }
+
+  saveBillcomMfaCredentials(deviceId, mfaId);
+  setBillcomSession(sessionId);
+  console.log("[BillCom] MFAAuthenticate success — session trusted, mfaId saved");
+  return mfaId;
 }
 
 function mapVendor(row: Record<string, unknown>): BillcomVendor | null {
@@ -317,6 +465,8 @@ export async function createBill(
     throw new Error("Bill.com bill create response missing id");
   }
 
+  console.log("[BillCom] Bill created: id=%s vendorId=%s amount=%s", id, vendorId, amount);
+
   return {
     id,
     vendorId,
@@ -370,6 +520,40 @@ export async function payBill(
     billId,
     amount,
     status,
+  };
+}
+
+/** Create vendor + bill without paying (used when MFA may be required). */
+export async function prepareBillcomPayout(
+  publisherName: string,
+  amount: number,
+  existingVendors?: BillcomVendor[]
+): Promise<{ billId: string; vendorId: string; amount: number }> {
+  const vendors = existingVendors ?? (await listVendors());
+  let vendor =
+    vendors.find(
+      (v) => v.name.trim().toLowerCase() === publisherName.trim().toLowerCase()
+    ) ?? null;
+
+  if (!vendor) {
+    const slug = publisherName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ".")
+      .replace(/^\.+|\.+$/g, "");
+    const email = `${slug || "affiliate"}@leadsmart.payout`;
+    vendor = await createVendor(publisherName, email);
+  }
+
+  const bill = await createBill(
+    vendor.id,
+    amount,
+    `LeadSmart affiliate payout — ${publisherName}`
+  );
+
+  return {
+    billId: bill.id,
+    vendorId: vendor.id,
+    amount,
   };
 }
 
@@ -459,31 +643,12 @@ export async function executeBillcomPayout(
   amount: number,
   existingVendors?: BillcomVendor[]
 ): Promise<{ paymentId: string; billId: string; vendorId: string }> {
-  const vendors = existingVendors ?? (await listVendors());
-  let vendor =
-    vendors.find(
-      (v) => v.name.trim().toLowerCase() === publisherName.trim().toLowerCase()
-    ) ?? null;
-
-  if (!vendor) {
-    const slug = publisherName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ".")
-      .replace(/^\.+|\.+$/g, "");
-    const email = `${slug || "affiliate"}@leadsmart.payout`;
-    vendor = await createVendor(publisherName, email);
-  }
-
-  const bill = await createBill(
-    vendor.id,
-    amount,
-    `LeadSmart affiliate payout — ${publisherName}`
-  );
-  const payment = await payBill(bill.id, vendor.id, amount);
+  const prepared = await prepareBillcomPayout(publisherName, amount, existingVendors);
+  const payment = await payBill(prepared.billId, prepared.vendorId, amount);
 
   return {
     paymentId: payment.id,
-    billId: bill.id,
-    vendorId: vendor.id,
+    billId: prepared.billId,
+    vendorId: prepared.vendorId,
   };
 }

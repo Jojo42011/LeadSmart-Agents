@@ -37,8 +37,14 @@ import {
   createVendor,
   createBill,
   bulkPayBills,
-  executeBillcomPayout,
+  prepareBillcomPayout,
+  payBill,
+  mfaChallenge,
+  mfaAuthenticateAndSave,
+  isBillcomUntrustedSession,
+  getBillcomSessionId,
 } from "./lib/billcomClient";
+import { storePendingBillcomPay, takePendingBillcomPay } from "./lib/billcomPendingPay";
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
 
 import http from "http";
@@ -879,21 +885,55 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
     }
 
     const { amount } = await resolvePayAmount(publisherName, req);
+    const prepared = await prepareBillcomPayout(publisherName, amount);
 
-    const result = await executeBillcomPayout(publisherName, amount);
-    markAffiliatePaidIfUnpaid(publisherName);
+    try {
+      const payment = await payBill(prepared.billId, prepared.vendorId, amount);
+      markAffiliatePaidIfUnpaid(publisherName);
 
-    console.log(
-      `[Payment] Bill.com pay success: ${publisherName} paymentId=${result.paymentId} amount=${amount}`
-    );
+      console.log(
+        `[Payment] Bill.com pay success: ${publisherName} paymentId=${payment.id} amount=${amount}`
+      );
 
-    res.json({
-      success: true,
-      paymentId: result.paymentId,
-      billId: result.billId,
-      amount,
-      publisherName,
-    });
+      res.json({
+        success: true,
+        paymentId: payment.id,
+        billId: prepared.billId,
+        amount,
+        publisherName,
+      });
+      return;
+    } catch (payErr) {
+      if (!isBillcomUntrustedSession(payErr)) {
+        throw payErr;
+      }
+
+      console.log(
+        `[Payment] Bill.com untrusted session for ${publisherName} — initiating MFA challenge`
+      );
+      const sessionId = await getBillcomSessionId();
+      const { challengeId } = await mfaChallenge(sessionId);
+      const mfaToken = storePendingBillcomPay({
+        challengeId,
+        sessionId,
+        billId: prepared.billId,
+        vendorId: prepared.vendorId,
+        amount,
+        publisherName,
+      });
+
+      console.log(
+        `[Payment] Bill.com MFA challenge sent for ${publisherName} (mfaToken=${mfaToken}, billId=${prepared.billId})`
+      );
+
+      res.status(403).json({
+        requiresMfa: true,
+        mfaToken,
+        billId: prepared.billId,
+        message:
+          "Bill.com MFA code required. Check the Bill.com app on Seth's phone and enter the code below.",
+      });
+    }
   } catch (err) {
     console.error(
       `[Payment] Bill.com pay failed: ${req.params.name}`,
@@ -901,6 +941,69 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
     );
     res.status(500).json({
       error: err instanceof Error ? err.message : "Bill.com payout failed",
+    });
+  }
+});
+
+app.post("/api/payment/billcom/mfa/verify", async (req, res) => {
+  try {
+    const mfaToken =
+      typeof req.body?.mfaToken === "string" ? req.body.mfaToken.trim() : "";
+    const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
+
+    if (!mfaToken) {
+      res.status(400).json({ error: "mfaToken is required" });
+      return;
+    }
+    if (!token) {
+      res.status(400).json({ error: "MFA code is required" });
+      return;
+    }
+
+    const pending = takePendingBillcomPay(mfaToken);
+    if (!pending) {
+      console.warn("[Payment] Bill.com MFA verify: invalid or expired mfaToken");
+      res.status(400).json({
+        error: "MFA session expired. Close the modal and try paying again.",
+      });
+      return;
+    }
+
+    console.log(
+      `[Payment] Bill.com MFA verify request: publisher=${pending.publisherName} billId=${pending.billId} challengeId=${pending.challengeId}`
+    );
+
+    await mfaAuthenticateAndSave(pending.challengeId, token, pending.sessionId);
+
+    console.log(
+      `[Payment] Bill.com MFA verified for ${pending.publisherName} — completing pay`
+    );
+
+    const payment = await payBill(
+      pending.billId,
+      pending.vendorId,
+      pending.amount
+    );
+    markAffiliatePaidIfUnpaid(pending.publisherName);
+
+    console.log(
+      `[Payment] Bill.com pay success after MFA: ${pending.publisherName} paymentId=${payment.id} amount=${pending.amount}`
+    );
+
+    res.json({
+      success: true,
+      paymentId: payment.id,
+      billId: pending.billId,
+      amount: pending.amount,
+      publisherName: pending.publisherName,
+    });
+  } catch (err) {
+    console.error(
+      "[Payment] Bill.com MFA verify failed:",
+      err instanceof Error ? err.message : err
+    );
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Bill.com MFA verification failed",
     });
   }
 });
