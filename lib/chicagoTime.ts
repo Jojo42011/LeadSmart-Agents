@@ -93,6 +93,22 @@ export function chicagoNextBusinessDayYmd(from: Date = new Date()): string {
   return chicagoTodayYmd(cursor);
 }
 
+/** N business days forward from today in Central Time (skip Sat/Sun). */
+export function chicagoAddBusinessDaysYmd(
+  businessDays: number,
+  from: Date = new Date()
+): string {
+  let cursor = from;
+  let remaining = businessDays;
+  while (remaining > 0) {
+    cursor = addDays(cursor, 1);
+    if (!isChicagoWeekend(cursor)) {
+      remaining -= 1;
+    }
+  }
+  return chicagoTodayYmd(cursor);
+}
+
 /**
  * Process date for Bill.com PayBills — Central Time, next business day after cutoff.
  * Bill.com rejects same-day processDate after the ACH cutoff (BDC_1152).

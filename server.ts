@@ -1144,7 +1144,9 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
     }
 
     try {
-      const payment = await payBill(prepared.billId, prepared.vendorId, amount);
+      const payment = await payBill(prepared.billId, prepared.vendorId, amount, {
+        newBankAccount: prepared.vendorCreated,
+      });
       markAffiliatePaidIfUnpaid(publisherName);
 
       console.log(
@@ -1176,6 +1178,7 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
         vendorId: prepared.vendorId,
         amount,
         publisherName,
+        newBankAccount: prepared.vendorCreated,
       });
 
       console.log(
@@ -1238,7 +1241,8 @@ app.post("/api/payment/billcom/mfa/verify", async (req, res) => {
     const payment = await payBill(
       pending.billId,
       pending.vendorId,
-      pending.amount
+      pending.amount,
+      { newBankAccount: pending.newBankAccount }
     );
     markAffiliatePaidIfUnpaid(pending.publisherName);
 

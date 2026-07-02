@@ -8,6 +8,7 @@ export interface PendingBillcomPay {
   vendorId: string;
   amount: number;
   publisherName: string;
+  newBankAccount: boolean;
   createdAt: number;
 }
 

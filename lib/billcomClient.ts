@@ -5,6 +5,7 @@ import {
 } from "./logger";
 import {
   chicagoBillcomProcessDateYmd,
+  chicagoAddBusinessDaysYmd,
   chicagoDateParts,
   chicagoTodayYmd,
 } from "./chicagoTime";
@@ -210,16 +211,19 @@ function todayYmd(): string {
   return chicagoTodayYmd();
 }
 
-function billcomProcessDateYmd(): string {
+function billcomProcessDateYmd(newBankAccount = false): string {
   const at = new Date();
   const parts = chicagoDateParts(at);
-  const processDate = chicagoBillcomProcessDateYmd(at);
+  const processDate = newBankAccount
+    ? chicagoAddBusinessDaysYmd(2, at)
+    : chicagoBillcomProcessDateYmd(at);
   console.log(
-    "[BillCom] Process date (America/Chicago): %s (local %02d:%02d CT, weekday=%s)",
+    "[BillCom] Process date (America/Chicago): %s (local %s:%s CT, weekday=%s%s)",
     processDate,
-    parts.hour,
-    parts.minute,
-    parts.weekday
+    String(parts.hour).padStart(2, "0"),
+    String(parts.minute).padStart(2, "0"),
+    parts.weekday,
+    newBankAccount ? ", new bank account +2 biz days" : ""
   );
   return processDate;
 }
@@ -593,28 +597,53 @@ export async function createBill(
 export async function payBill(
   billId: string,
   vendorId: string,
-  amount: number
+  amount: number,
+  options?: { newBankAccount?: boolean }
 ): Promise<BillcomPayment> {
-  const processDate = billcomProcessDateYmd();
+  const newBankAccount = options?.newBankAccount ?? false;
+  let processDate = billcomProcessDateYmd(newBankAccount);
   const bac = optionalBankAccountId();
-  console.log("[BillCom] PayBills request:", {
-    billId,
-    vendorId,
-    amount,
-    processDate,
-    bankAccountId: bac ?? "(org primary)",
-  });
 
-  const payload: Record<string, unknown> = {
-    vendorId,
-    processDate,
-    billPays: [{ billId, amount }],
+  const runPay = async (date: string) => {
+    console.log("[BillCom] PayBills request:", {
+      billId,
+      vendorId,
+      amount,
+      processDate: date,
+      bankAccountId: bac ?? "(org primary)",
+    });
+
+    const payload: Record<string, unknown> = {
+      vendorId,
+      processDate: date,
+      billPays: [{ billId, amount }],
+    };
+    if (bac) {
+      payload.bankAccountId = bac;
+    }
+
+    return v2Request("PayBills.json", payload);
   };
-  if (bac) {
-    payload.bankAccountId = bac;
-  }
 
-  const row = await v2Request("PayBills.json", payload);
+  let row: Record<string, unknown>;
+  try {
+    row = await runPay(processDate);
+  } catch (err) {
+    if (
+      !newBankAccount &&
+      err instanceof BillcomApiError &&
+      err.errorCode === "BDC_1402"
+    ) {
+      processDate = chicagoAddBusinessDaysYmd(2);
+      console.log(
+        "[BillCom] BDC_1402 — retrying PayBills with processDate=%s (2 business days out)",
+        processDate
+      );
+      row = await runPay(processDate);
+    } else {
+      throw err;
+    }
+  }
 
   const data = asRecord(row.response_data);
   const sentPays =
