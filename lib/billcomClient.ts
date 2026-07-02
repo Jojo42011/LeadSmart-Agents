@@ -3,6 +3,11 @@ import {
   getBillcomMfaCredentials,
   saveBillcomMfaCredentials,
 } from "./logger";
+import {
+  chicagoBillcomProcessDateYmd,
+  chicagoDateParts,
+  chicagoTodayYmd,
+} from "./chicagoTime";
 
 const BILLCOM_V2_BASE = "https://api.bill.com/api/v2";
 const BILLCOM_GATEWAY_BASE = "https://gateway.bill.com/connect/v3";
@@ -165,7 +170,21 @@ function readNumber(obj: Record<string, unknown>, key: string): number | null {
 }
 
 function todayYmd(): string {
-  return new Date().toISOString().slice(0, 10);
+  return chicagoTodayYmd();
+}
+
+function billcomProcessDateYmd(): string {
+  const at = new Date();
+  const parts = chicagoDateParts(at);
+  const processDate = chicagoBillcomProcessDateYmd(at);
+  console.log(
+    "[BillCom] Process date (America/Chicago): %s (local %02d:%02d CT, weekday=%s)",
+    processDate,
+    parts.hour,
+    parts.minute,
+    parts.weekday
+  );
+  return processDate;
 }
 
 function sessionExpired(session: BillcomSession): boolean {
@@ -481,7 +500,7 @@ export async function payBill(
   vendorId: string,
   amount: number
 ): Promise<BillcomPayment> {
-  const processDate = todayYmd();
+  const processDate = billcomProcessDateYmd();
   const bac = optionalBankAccountId();
   console.log("[BillCom] PayBills request:", {
     billId,
@@ -575,7 +594,7 @@ export async function bulkPayBills(
       const res = await axios.post(
         `${BILLCOM_GATEWAY_BASE}/payments/bulk`,
         {
-          processDate: todayYmd(),
+          processDate: billcomProcessDateYmd(),
           fundingAccount: {
             type: "BANK_ACCOUNT",
             id: bankAccountId(),
