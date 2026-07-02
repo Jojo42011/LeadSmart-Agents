@@ -33,6 +33,43 @@ export interface BillcomVendor {
   email?: string | null;
 }
 
+export interface BillcomAchDetails {
+  payeeName: string;
+  accountHolderName: string;
+  routingNumber: string;
+  accountNumber: string;
+  addressLine1: string;
+  city: string;
+  state: string;
+  zip: string;
+}
+
+export function maskAccountNumber(accountNumber: string): string {
+  const trimmed = accountNumber.trim();
+  if (trimmed.length <= 4) {
+    return "****";
+  }
+  return `****${trimmed.slice(-4)}`;
+}
+
+export function isBillcomAchComplete(
+  ach: Partial<BillcomAchDetails> | null | undefined
+): ach is BillcomAchDetails {
+  if (!ach) {
+    return false;
+  }
+  return Boolean(
+    ach.payeeName?.trim() &&
+      ach.accountHolderName?.trim() &&
+      ach.routingNumber?.trim() &&
+      ach.accountNumber?.trim() &&
+      ach.addressLine1?.trim() &&
+      ach.city?.trim() &&
+      ach.state?.trim() &&
+      ach.zip?.trim()
+  );
+}
+
 export interface BillcomBill {
   id: string;
   vendorId: string;
@@ -431,6 +468,84 @@ export async function listVendors(): Promise<BillcomVendor[]> {
   return vendors;
 }
 
+/** Create a US vendor with full ACH + address via Bill.com v3 API. */
+export async function createVendorV3WithAch(
+  vendorName: string,
+  ach: BillcomAchDetails,
+  email?: string | null
+): Promise<BillcomVendor> {
+  const sessionId = await getSession();
+  const payload = {
+    name: vendorName.trim(),
+    accountType: "PERSON",
+    email: email?.trim() || `${vendorName.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20) || "vendor"}@leadsmart.local`,
+    address: {
+      line1: ach.addressLine1.trim(),
+      city: ach.city.trim(),
+      stateOrProvince: ach.state.trim().toUpperCase(),
+      zipOrPostalCode: ach.zip.trim(),
+      country: "US",
+    },
+    paymentInformation: {
+      payeeName: ach.payeeName.trim(),
+      bankAccount: {
+        nameOnAccount: ach.accountHolderName.trim(),
+        accountNumber: ach.accountNumber.trim(),
+        routingNumber: ach.routingNumber.trim(),
+      },
+    },
+    billCurrency: "USD",
+  };
+
+  console.log(
+    "[BillCom] POST /v3/vendors for %s (routing=%s, account=%s)",
+    vendorName,
+    ach.routingNumber.trim(),
+    maskAccountNumber(ach.accountNumber)
+  );
+
+  let res;
+  try {
+    res = await axios.post(`${BILLCOM_GATEWAY_BASE}/vendors`, payload, {
+      timeout: 60_000,
+      headers: {
+        devKey: devKey(),
+        sessionId,
+        "Content-Type": "application/json",
+      },
+    });
+  } catch (err: unknown) {
+    const axiosErr = err as { response?: { data?: unknown; status?: number } };
+    const body = axiosErr.response?.data;
+    console.error(
+      "[BillCom] v3 vendor create failed (status=%s): %s",
+      axiosErr.response?.status ?? "unknown",
+      JSON.stringify(body)
+    );
+    const row = asRecord(body);
+    const message =
+      readString(row ?? {}, "message") ??
+      readString(row ?? {}, "error") ??
+      (err instanceof Error ? err.message : "Bill.com vendor create failed");
+    const code = readString(row ?? {}, "errorCode") ?? readString(row ?? {}, "code");
+    throw new BillcomApiError(message, code);
+  }
+
+  cachedSession = cachedSession
+    ? { ...cachedSession, lastUsedAt: Date.now() }
+    : { sessionId, lastUsedAt: Date.now() };
+
+  const row = asRecord(res.data);
+  const id = row ? readString(row, "id") : null;
+  const name = row ? readString(row, "name") : null;
+  if (!id || !name) {
+    throw new Error("Bill.com v3 vendor create response missing id");
+  }
+
+  console.log("[BillCom] v3 vendor created: id=%s name=%s", id, name);
+  return { id, name, email: email ?? null };
+}
+
 /** Create a vendor if it does not already exist. */
 export async function createVendor(
   name: string,
@@ -546,10 +661,19 @@ export async function payBill(
 export async function prepareBillcomPayout(
   publisherName: string,
   amount: number,
-  options?: { billcomVendorId?: string | null; existingVendors?: BillcomVendor[] }
-): Promise<{ billId: string; vendorId: string; amount: number }> {
+  options?: {
+    billcomVendorId?: string | null;
+    achDetails?: BillcomAchDetails | null;
+  }
+): Promise<{
+  billId: string;
+  vendorId: string;
+  amount: number;
+  vendorCreated: boolean;
+}> {
   const storedId = options?.billcomVendorId?.trim() ?? "";
   let vendorId: string;
+  let vendorCreated = false;
 
   if (storedId) {
     if (!/^009[0-9A-Za-z]+$/.test(storedId)) {
@@ -563,26 +687,21 @@ export async function prepareBillcomPayout(
       storedId
     );
     vendorId = storedId;
-  } else {
-    const vendors = options?.existingVendors ?? (await listVendors());
-    const vendor =
-      vendors.find(
-        (v) => v.name.trim().toLowerCase() === publisherName.trim().toLowerCase()
-      ) ?? null;
-
-    if (!vendor) {
-      throw new Error(
-        `No Bill.com vendor ID mapped for "${publisherName}". ` +
-          "Add the vendor ID (starts with 009) in the edit popup or pay modal."
-      );
-    }
-
+  } else if (isBillcomAchComplete(options?.achDetails)) {
+    const ach = options.achDetails;
+    const vendor = await createVendorV3WithAch(publisherName, ach);
     vendorId = vendor.id;
+    vendorCreated = true;
     console.log(
-      "[BillCom] Matched vendor by name for %s: %s (%s)",
+      "[BillCom] Created v3 vendor for %s: %s (payee=%s)",
       publisherName,
       vendorId,
-      vendor.name
+      ach.payeeName
+    );
+  } else {
+    throw new Error(
+      `No Bill.com vendor ID or ACH details for "${publisherName}". ` +
+        "Open the edit popup and add a vendor ID (009...) or fill in ACH + address, then try again."
     );
   }
 
@@ -596,6 +715,7 @@ export async function prepareBillcomPayout(
     billId: bill.id,
     vendorId,
     amount,
+    vendorCreated,
   };
 }
 
@@ -683,11 +803,12 @@ export async function bulkPayBills(
 export async function executeBillcomPayout(
   publisherName: string,
   amount: number,
-  existingVendors?: BillcomVendor[]
+  options?: {
+    billcomVendorId?: string | null;
+    achDetails?: BillcomAchDetails | null;
+  }
 ): Promise<{ paymentId: string; billId: string; vendorId: string }> {
-  const prepared = await prepareBillcomPayout(publisherName, amount, {
-    existingVendors,
-  });
+  const prepared = await prepareBillcomPayout(publisherName, amount, options);
   const payment = await payBill(prepared.billId, prepared.vendorId, amount);
 
   return {

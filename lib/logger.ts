@@ -24,6 +24,17 @@ export interface ScrubLogEntry {
 
 let db: Database.Database | null = null;
 
+const BILLCOM_ACH_COLUMNS = [
+  "billcomPayeeName",
+  "billcomAccountHolderName",
+  "billcomRoutingNumber",
+  "billcomAccountNumber",
+  "billcomAddressLine1",
+  "billcomAddressCity",
+  "billcomAddressState",
+  "billcomAddressZip",
+] as const;
+
 function migrateAffiliateMetadataSchema(database: Database.Database): void {
   const columns = database
     .prepare("PRAGMA table_info(affiliate_metadata)")
@@ -32,6 +43,11 @@ function migrateAffiliateMetadataSchema(database: Database.Database): void {
 
   if (!names.has("billcomVendorId")) {
     database.exec("ALTER TABLE affiliate_metadata ADD COLUMN billcomVendorId TEXT");
+  }
+  for (const column of BILLCOM_ACH_COLUMNS) {
+    if (!names.has(column)) {
+      database.exec(`ALTER TABLE affiliate_metadata ADD COLUMN ${column} TEXT`);
+    }
   }
 }
 
@@ -238,7 +254,26 @@ export interface AffiliateMetadata {
   paidAt: string | null;
   updatedAt: string | null;
   billcomVendorId: string | null;
+  billcomPayeeName: string | null;
+  billcomAccountHolderName: string | null;
+  billcomRoutingNumber: string | null;
+  billcomAccountNumber: string | null;
+  billcomAddressLine1: string | null;
+  billcomAddressCity: string | null;
+  billcomAddressState: string | null;
+  billcomAddressZip: string | null;
 }
+
+export type BillcomAchFieldUpdates = {
+  billcomPayeeName?: string | null;
+  billcomAccountHolderName?: string | null;
+  billcomRoutingNumber?: string | null;
+  billcomAccountNumber?: string | null;
+  billcomAddressLine1?: string | null;
+  billcomAddressCity?: string | null;
+  billcomAddressState?: string | null;
+  billcomAddressZip?: string | null;
+};
 
 type AffiliateMetadataRow = {
   publisherName: string;
@@ -248,7 +283,22 @@ type AffiliateMetadataRow = {
   paidAt: string | null;
   updatedAt: string | null;
   billcomVendorId: string | null;
+  billcomPayeeName: string | null;
+  billcomAccountHolderName: string | null;
+  billcomRoutingNumber: string | null;
+  billcomAccountNumber: string | null;
+  billcomAddressLine1: string | null;
+  billcomAddressCity: string | null;
+  billcomAddressState: string | null;
+  billcomAddressZip: string | null;
 };
+
+const AFFILIATE_METADATA_SELECT =
+  `SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt,
+          billcomVendorId, billcomPayeeName, billcomAccountHolderName,
+          billcomRoutingNumber, billcomAccountNumber, billcomAddressLine1,
+          billcomAddressCity, billcomAddressState, billcomAddressZip
+   FROM affiliate_metadata`;
 
 function rowToAffiliateMetadata(row: AffiliateMetadataRow): AffiliateMetadata {
   return {
@@ -258,6 +308,14 @@ function rowToAffiliateMetadata(row: AffiliateMetadataRow): AffiliateMetadata {
     paidAt: row.paidAt,
     updatedAt: row.updatedAt,
     billcomVendorId: row.billcomVendorId,
+    billcomPayeeName: row.billcomPayeeName,
+    billcomAccountHolderName: row.billcomAccountHolderName,
+    billcomRoutingNumber: row.billcomRoutingNumber,
+    billcomAccountNumber: row.billcomAccountNumber,
+    billcomAddressLine1: row.billcomAddressLine1,
+    billcomAddressCity: row.billcomAddressCity,
+    billcomAddressState: row.billcomAddressState,
+    billcomAddressZip: row.billcomAddressZip,
   };
 }
 
@@ -265,10 +323,7 @@ function rowToAffiliateMetadata(row: AffiliateMetadataRow): AffiliateMetadata {
 export function getAllAffiliateMetadata(): Record<string, AffiliateMetadata> {
   const database = getDb();
   const rows = database
-    .prepare(
-      `SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId
-       FROM affiliate_metadata`
-    )
+    .prepare(`${AFFILIATE_METADATA_SELECT}`)
     .all() as AffiliateMetadataRow[];
 
   const map: Record<string, AffiliateMetadata> = {};
@@ -278,43 +333,156 @@ export function getAllAffiliateMetadata(): Record<string, AffiliateMetadata> {
   return map;
 }
 
-/** Upserts payment method, terms, and Bill.com vendor ID for one affiliate. */
+/** Upserts payment method, terms, Bill.com vendor ID, and optional ACH fields. */
 export function upsertAffiliateMetadata(
   publisherName: string,
   paymentMethod: string | null,
   paymentTerms: string | null,
-  billcomVendorId: string | null = null
+  billcomVendorId: string | null = null,
+  billcomAch: BillcomAchFieldUpdates | null = null
 ): AffiliateMetadata {
   const database = getDb();
   const updatedAt = new Date().toISOString();
   const existing = database
-    .prepare(
-      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId FROM affiliate_metadata WHERE publisherName = ?"
-    )
+    .prepare(`${AFFILIATE_METADATA_SELECT} WHERE publisherName = ?`)
     .get(publisherName) as AffiliateMetadataRow | undefined;
+
+  const nextAch = billcomAch
+    ? {
+        billcomPayeeName:
+          billcomAch.billcomPayeeName !== undefined
+            ? billcomAch.billcomPayeeName
+            : existing?.billcomPayeeName ?? null,
+        billcomAccountHolderName:
+          billcomAch.billcomAccountHolderName !== undefined
+            ? billcomAch.billcomAccountHolderName
+            : existing?.billcomAccountHolderName ?? null,
+        billcomRoutingNumber:
+          billcomAch.billcomRoutingNumber !== undefined
+            ? billcomAch.billcomRoutingNumber
+            : existing?.billcomRoutingNumber ?? null,
+        billcomAccountNumber:
+          billcomAch.billcomAccountNumber !== undefined
+            ? billcomAch.billcomAccountNumber
+            : existing?.billcomAccountNumber ?? null,
+        billcomAddressLine1:
+          billcomAch.billcomAddressLine1 !== undefined
+            ? billcomAch.billcomAddressLine1
+            : existing?.billcomAddressLine1 ?? null,
+        billcomAddressCity:
+          billcomAch.billcomAddressCity !== undefined
+            ? billcomAch.billcomAddressCity
+            : existing?.billcomAddressCity ?? null,
+        billcomAddressState:
+          billcomAch.billcomAddressState !== undefined
+            ? billcomAch.billcomAddressState
+            : existing?.billcomAddressState ?? null,
+        billcomAddressZip:
+          billcomAch.billcomAddressZip !== undefined
+            ? billcomAch.billcomAddressZip
+            : existing?.billcomAddressZip ?? null,
+      }
+    : {
+        billcomPayeeName: existing?.billcomPayeeName ?? null,
+        billcomAccountHolderName: existing?.billcomAccountHolderName ?? null,
+        billcomRoutingNumber: existing?.billcomRoutingNumber ?? null,
+        billcomAccountNumber: existing?.billcomAccountNumber ?? null,
+        billcomAddressLine1: existing?.billcomAddressLine1 ?? null,
+        billcomAddressCity: existing?.billcomAddressCity ?? null,
+        billcomAddressState: existing?.billcomAddressState ?? null,
+        billcomAddressZip: existing?.billcomAddressZip ?? null,
+      };
 
   if (existing) {
     database
       .prepare(
         `UPDATE affiliate_metadata
-         SET paymentMethod = ?, paymentTerms = ?, billcomVendorId = ?, updatedAt = ?
+         SET paymentMethod = ?, paymentTerms = ?, billcomVendorId = ?,
+             billcomPayeeName = ?, billcomAccountHolderName = ?,
+             billcomRoutingNumber = ?, billcomAccountNumber = ?,
+             billcomAddressLine1 = ?, billcomAddressCity = ?,
+             billcomAddressState = ?, billcomAddressZip = ?,
+             updatedAt = ?
          WHERE publisherName = ?`
       )
-      .run(paymentMethod, paymentTerms, billcomVendorId, updatedAt, publisherName);
+      .run(
+        paymentMethod,
+        paymentTerms,
+        billcomVendorId,
+        nextAch.billcomPayeeName,
+        nextAch.billcomAccountHolderName,
+        nextAch.billcomRoutingNumber,
+        nextAch.billcomAccountNumber,
+        nextAch.billcomAddressLine1,
+        nextAch.billcomAddressCity,
+        nextAch.billcomAddressState,
+        nextAch.billcomAddressZip,
+        updatedAt,
+        publisherName
+      );
+  } else {
+    database
+      .prepare(
+        `INSERT INTO affiliate_metadata (
+          publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt,
+          billcomVendorId, billcomPayeeName, billcomAccountHolderName,
+          billcomRoutingNumber, billcomAccountNumber, billcomAddressLine1,
+          billcomAddressCity, billcomAddressState, billcomAddressZip
+        ) VALUES (?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        publisherName,
+        paymentMethod,
+        paymentTerms,
+        updatedAt,
+        billcomVendorId,
+        nextAch.billcomPayeeName,
+        nextAch.billcomAccountHolderName,
+        nextAch.billcomRoutingNumber,
+        nextAch.billcomAccountNumber,
+        nextAch.billcomAddressLine1,
+        nextAch.billcomAddressCity,
+        nextAch.billcomAddressState,
+        nextAch.billcomAddressZip
+      );
+  }
+
+  const row = database
+    .prepare(`${AFFILIATE_METADATA_SELECT} WHERE publisherName = ?`)
+    .get(publisherName) as AffiliateMetadataRow;
+
+  return rowToAffiliateMetadata(row);
+}
+
+/** Updates only the Bill.com vendor ID, preserving other metadata. */
+export function setAffiliateBillcomVendorId(
+  publisherName: string,
+  billcomVendorId: string
+): AffiliateMetadata {
+  const database = getDb();
+  const updatedAt = new Date().toISOString();
+  const existing = database
+    .prepare(`${AFFILIATE_METADATA_SELECT} WHERE publisherName = ?`)
+    .get(publisherName) as AffiliateMetadataRow | undefined;
+
+  if (existing) {
+    database
+      .prepare(
+        `UPDATE affiliate_metadata SET billcomVendorId = ?, updatedAt = ? WHERE publisherName = ?`
+      )
+      .run(billcomVendorId, updatedAt, publisherName);
   } else {
     database
       .prepare(
         `INSERT INTO affiliate_metadata (
           publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId
-        ) VALUES (?, ?, ?, 0, NULL, ?, ?)`
+        ) VALUES (?, 'Bill.com', NULL, 0, NULL, ?, ?)`
       )
-      .run(publisherName, paymentMethod, paymentTerms, updatedAt, billcomVendorId);
+      .run(publisherName, updatedAt, billcomVendorId);
   }
 
   const row = database
-    .prepare(
-      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId FROM affiliate_metadata WHERE publisherName = ?"
-    )
+    .prepare(`${AFFILIATE_METADATA_SELECT} WHERE publisherName = ?`)
     .get(publisherName) as AffiliateMetadataRow;
 
   return rowToAffiliateMetadata(row);
@@ -325,9 +493,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
   const database = getDb();
   const updatedAt = new Date().toISOString();
   const existing = database
-    .prepare(
-      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId FROM affiliate_metadata WHERE publisherName = ?"
-    )
+    .prepare(`${AFFILIATE_METADATA_SELECT} WHERE publisherName = ?`)
     .get(publisherName) as AffiliateMetadataRow | undefined;
 
   if (!existing) {
@@ -347,6 +513,14 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
       paidAt,
       updatedAt,
       billcomVendorId: null,
+      billcomPayeeName: null,
+      billcomAccountHolderName: null,
+      billcomRoutingNumber: null,
+      billcomAccountNumber: null,
+      billcomAddressLine1: null,
+      billcomAddressCity: null,
+      billcomAddressState: null,
+      billcomAddressZip: null,
     };
   }
 
@@ -368,6 +542,14 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     paidAt,
     updatedAt,
     billcomVendorId: existing.billcomVendorId,
+    billcomPayeeName: existing.billcomPayeeName,
+    billcomAccountHolderName: existing.billcomAccountHolderName,
+    billcomRoutingNumber: existing.billcomRoutingNumber,
+    billcomAccountNumber: existing.billcomAccountNumber,
+    billcomAddressLine1: existing.billcomAddressLine1,
+    billcomAddressCity: existing.billcomAddressCity,
+    billcomAddressState: existing.billcomAddressState,
+    billcomAddressZip: existing.billcomAddressZip,
   };
 }
 

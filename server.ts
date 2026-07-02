@@ -7,6 +7,9 @@ import {
   getAllAffiliateMetadata,
   upsertAffiliateMetadata,
   toggleAffiliatePaid,
+  setAffiliateBillcomVendorId,
+  type AffiliateMetadata,
+  type BillcomAchFieldUpdates,
 } from "./lib/logger";
 import { getDataDir, getDbPath, getPublicDir } from "./lib/paths";
 import { importDatabaseFile } from "./lib/importDatabase";
@@ -32,7 +35,6 @@ import {
   fundTransfer,
 } from "./lib/wiseClient";
 import {
-  listVendors,
   bulkPayBills,
   prepareBillcomPayout,
   payBill,
@@ -40,6 +42,8 @@ import {
   mfaAuthenticateAndSave,
   isBillcomUntrustedSession,
   getBillcomSessionId,
+  isBillcomAchComplete,
+  type BillcomAchDetails,
 } from "./lib/billcomClient";
 import { storePendingBillcomPay, takePendingBillcomPay } from "./lib/billcomPendingPay";
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
@@ -660,6 +664,174 @@ function normalizeBillcomVendorId(value: unknown): string | null {
   return trimmed;
 }
 
+function readOptionalString(body: unknown, key: string): string | undefined {
+  if (!body || typeof body !== "object") {
+    return undefined;
+  }
+  const value = (body as Record<string, unknown>)[key];
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function isMaskedAccountNumber(value: string): boolean {
+  return /^\*+\d{0,4}$/.test(value.trim());
+}
+
+function normalizeRoutingNumber(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  if (digits.length !== 9) {
+    throw new Error("Routing number must be 9 digits");
+  }
+  return digits;
+}
+
+function normalizeState(value: string): string {
+  const state = value.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(state)) {
+    throw new Error("State must be a 2-letter US code (e.g. TX)");
+  }
+  return state;
+}
+
+function normalizeZip(value: string): string {
+  const zip = value.trim();
+  if (!/^\d{5}(-\d{4})?$/.test(zip)) {
+    throw new Error("ZIP must be 5 digits or ZIP+4 (12345 or 12345-6789)");
+  }
+  return zip;
+}
+
+function achDetailsFromMetadata(meta: AffiliateMetadata | null): Partial<BillcomAchDetails> {
+  if (!meta) {
+    return {};
+  }
+  return {
+    payeeName: meta.billcomPayeeName ?? undefined,
+    accountHolderName: meta.billcomAccountHolderName ?? undefined,
+    routingNumber: meta.billcomRoutingNumber ?? undefined,
+    accountNumber: meta.billcomAccountNumber ?? undefined,
+    addressLine1: meta.billcomAddressLine1 ?? undefined,
+    city: meta.billcomAddressCity ?? undefined,
+    state: meta.billcomAddressState ?? undefined,
+    zip: meta.billcomAddressZip ?? undefined,
+  };
+}
+
+function parseBillcomAchUpdates(
+  body: unknown,
+  existing: AffiliateMetadata | null
+): BillcomAchFieldUpdates | null {
+  if (!body || typeof body !== "object") {
+    return null;
+  }
+
+  const updates: BillcomAchFieldUpdates = {};
+  let hasUpdate = false;
+
+  const payeeName = readOptionalString(body, "billcomPayeeName");
+  if (payeeName !== undefined) {
+    updates.billcomPayeeName = payeeName;
+    hasUpdate = true;
+  }
+
+  const accountHolder = readOptionalString(body, "billcomAccountHolderName");
+  if (accountHolder !== undefined) {
+    updates.billcomAccountHolderName = accountHolder;
+    hasUpdate = true;
+  }
+
+  const routingRaw = readOptionalString(body, "billcomRoutingNumber");
+  if (routingRaw !== undefined) {
+    updates.billcomRoutingNumber = routingRaw ? normalizeRoutingNumber(routingRaw) : null;
+    hasUpdate = true;
+  }
+
+  const accountRaw = readOptionalString(body, "billcomAccountNumber");
+  if (accountRaw !== undefined) {
+    if (!accountRaw || isMaskedAccountNumber(accountRaw)) {
+      updates.billcomAccountNumber = existing?.billcomAccountNumber ?? null;
+    } else if (accountRaw.replace(/\D/g, "").length < 4) {
+      throw new Error("Account number must be at least 4 digits");
+    } else {
+      updates.billcomAccountNumber = accountRaw.replace(/\s/g, "");
+    }
+    hasUpdate = true;
+  }
+
+  const line1 = readOptionalString(body, "billcomAddressLine1");
+  if (line1 !== undefined) {
+    updates.billcomAddressLine1 = line1;
+    hasUpdate = true;
+  }
+
+  const city = readOptionalString(body, "billcomAddressCity");
+  if (city !== undefined) {
+    updates.billcomAddressCity = city;
+    hasUpdate = true;
+  }
+
+  const stateRaw = readOptionalString(body, "billcomAddressState");
+  if (stateRaw !== undefined) {
+    updates.billcomAddressState = stateRaw ? normalizeState(stateRaw) : null;
+    hasUpdate = true;
+  }
+
+  const zipRaw = readOptionalString(body, "billcomAddressZip");
+  if (zipRaw !== undefined) {
+    updates.billcomAddressZip = zipRaw ? normalizeZip(zipRaw) : null;
+    hasUpdate = true;
+  }
+
+  return hasUpdate ? updates : null;
+}
+
+function resolveBillcomAchForPay(
+  meta: AffiliateMetadata | null,
+  body: unknown
+): BillcomAchDetails | null {
+  const merged: Partial<BillcomAchDetails> = {
+    ...achDetailsFromMetadata(meta),
+  };
+
+  const payeeName = readOptionalString(body, "billcomPayeeName");
+  if (payeeName) {
+    merged.payeeName = payeeName;
+  }
+  const accountHolder = readOptionalString(body, "billcomAccountHolderName");
+  if (accountHolder) {
+    merged.accountHolderName = accountHolder;
+  }
+  const routing = readOptionalString(body, "billcomRoutingNumber");
+  if (routing) {
+    merged.routingNumber = normalizeRoutingNumber(routing);
+  }
+  const account = readOptionalString(body, "billcomAccountNumber");
+  if (account && !isMaskedAccountNumber(account)) {
+    merged.accountNumber = account.replace(/\s/g, "");
+  }
+  const line1 = readOptionalString(body, "billcomAddressLine1");
+  if (line1) {
+    merged.addressLine1 = line1;
+  }
+  const city = readOptionalString(body, "billcomAddressCity");
+  if (city) {
+    merged.city = city;
+  }
+  const state = readOptionalString(body, "billcomAddressState");
+  if (state) {
+    merged.state = normalizeState(state);
+  }
+  const zip = readOptionalString(body, "billcomAddressZip");
+  if (zip) {
+    merged.zip = normalizeZip(zip);
+  }
+
+  return isBillcomAchComplete(merged) ? merged : null;
+}
+
 app.get("/api/payment/metadata", (_req, res) => {
   try {
     res.json(getAllAffiliateMetadata());
@@ -689,6 +861,16 @@ app.post("/api/payment/metadata/:name", (req, res) => {
       );
     }
 
+    let billcomAch: BillcomAchFieldUpdates | null = null;
+    try {
+      billcomAch = parseBillcomAchUpdates(req.body, existingMeta);
+    } catch (achErr) {
+      res.status(400).json({
+        error: achErr instanceof Error ? achErr.message : "Invalid ACH details",
+      });
+      return;
+    }
+
     if (
       paymentMethod !== null &&
       !(PAYMENT_METHODS as readonly string[]).includes(paymentMethod)
@@ -709,7 +891,8 @@ app.post("/api/payment/metadata/:name", (req, res) => {
       publisherName,
       paymentMethod,
       paymentTerms,
-      billcomVendorId
+      billcomVendorId,
+      billcomAch
     );
     res.json(metadata);
   } catch (err) {
@@ -915,21 +1098,50 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
     if (typeof req.body?.billcomVendorId === "string" && req.body.billcomVendorId.trim()) {
       billcomVendorId = normalizeBillcomVendorId(req.body.billcomVendorId) ?? "";
       if (billcomVendorId !== (meta.billcomVendorId?.trim() ?? "")) {
-        upsertAffiliateMetadata(
-          publisherName,
-          meta.paymentMethod,
-          meta.paymentTerms,
-          billcomVendorId || null
-        );
+        setAffiliateBillcomVendorId(publisherName, billcomVendorId);
         console.log(
           `[Payment] Saved Bill.com vendor ID for ${publisherName}: ${billcomVendorId}`
         );
       }
     }
 
+    const achDetails = resolveBillcomAchForPay(meta, req.body);
+    if (!billcomVendorId && !achDetails) {
+      res.status(400).json({
+        error:
+          `No Bill.com vendor ID or ACH details for "${publisherName}". ` +
+          "Open the edit popup and add a vendor ID (009...) or fill in ACH + address.",
+      });
+      return;
+    }
+
     const prepared = await prepareBillcomPayout(publisherName, amount, {
       billcomVendorId: billcomVendorId || null,
+      achDetails,
     });
+
+    if (prepared.vendorCreated) {
+      setAffiliateBillcomVendorId(publisherName, prepared.vendorId);
+      console.log(
+        `[Payment] Saved new Bill.com vendor ID for ${publisherName}: ${prepared.vendorId}`
+      );
+    }
+
+    let achUpdates: BillcomAchFieldUpdates | null = null;
+    try {
+      achUpdates = parseBillcomAchUpdates(req.body, meta);
+    } catch {
+      achUpdates = null;
+    }
+    if (achUpdates) {
+      upsertAffiliateMetadata(
+        publisherName,
+        meta.paymentMethod,
+        meta.paymentTerms,
+        prepared.vendorId,
+        achUpdates
+      );
+    }
 
     try {
       const payment = await payBill(prepared.billId, prepared.vendorId, amount);
@@ -1134,7 +1346,6 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
 
   const succeeded: string[] = [];
   const failed: Array<{ publisherName: string; error: string }> = [];
-  const vendors = await listVendors();
   const billPayments: Array<{ publisherName: string; billId: string; amount: number }> =
     [];
 
@@ -1148,11 +1359,26 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
         throw new Error("Affiliate is already marked paid");
       }
 
+      const billcomVendorId = meta.billcomVendorId?.trim() ?? "";
+      const achDetails = resolveBillcomAchForPay(meta, null);
+      if (!billcomVendorId && !achDetails) {
+        throw new Error(
+          "No Bill.com vendor ID or ACH details — fill in the edit popup first"
+        );
+      }
+
       const { amount } = await resolvePayAmount(publisherName, req);
       const prepared = await prepareBillcomPayout(publisherName, amount, {
-        billcomVendorId: meta.billcomVendorId,
-        existingVendors: vendors,
+        billcomVendorId: billcomVendorId || null,
+        achDetails,
       });
+
+      if (prepared.vendorCreated) {
+        setAffiliateBillcomVendorId(publisherName, prepared.vendorId);
+        console.log(
+          `[Payment] Saved new Bill.com vendor ID for ${publisherName}: ${prepared.vendorId}`
+        );
+      }
 
       billPayments.push({
         publisherName,

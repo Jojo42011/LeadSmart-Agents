@@ -947,8 +947,36 @@
         display: none;
       }
 
+      .pay-modal__vendor-input,
+      .pay-modal__ach-input {
+        width: 100%;
+        margin-bottom: 8px;
+        padding: 8px 10px;
+        font-family: var(--font);
+        font-size: 13px;
+        color: var(--text);
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+        box-sizing: border-box;
+      }
+
+      .pay-modal__ach-grid {
+        display: grid;
+        grid-template-columns: 1fr 72px 96px;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .pay-modal__ach-hint {
+        margin: 0 0 10px;
+        font-size: 10px;
+        line-height: 1.45;
+        color: var(--text-dim);
+      }
+
       .pay-modal__vendor-input {
         width: 100%;
+        margin-bottom: 8px;
         padding: 8px 10px;
         font-family: var(--font);
         font-size: 13px;
@@ -1089,7 +1117,8 @@
         right: 0;
         top: calc(100% + 6px);
         z-index: 20;
-        min-width: 220px;
+        min-width: 300px;
+        max-width: 340px;
         padding: 12px;
         border: 1px solid var(--border);
         background: var(--bg-panel);
@@ -1140,6 +1169,26 @@
 
       .metadata-popover__billcom-id.hidden {
         display: none;
+      }
+
+      .metadata-popover__billcom-section.hidden {
+        display: none;
+      }
+
+      .metadata-popover__billcom-hint {
+        margin: 0 0 10px;
+        font-size: 9px;
+        line-height: 1.45;
+        color: var(--text-dim);
+      }
+
+      .metadata-popover__row {
+        display: flex;
+        gap: 8px;
+      }
+
+      .metadata-popover__row > * {
+        flex: 1;
       }
 
       .metadata-popover__actions {
@@ -1333,15 +1382,43 @@
               <input class="pay-modal__amount" type="number" id="payModalAmount" min="0.01" step="0.01" />
             </div>
             <div class="pay-modal__vendor-section hidden" id="payModalVendorSection">
+              <p class="pay-modal__ach-hint">
+                Verify Bill.com details before paying. Use vendor ID if already in Bill.com, or ACH fields to create on first pay.
+                Same bank for multiple affiliates? Paste the same vendor ID on each.
+              </p>
               <label class="pay-modal__section-label" for="payModalBillcomVendorId">Bill.com Vendor ID</label>
               <input
                 class="pay-modal__vendor-input"
                 type="text"
                 id="payModalBillcomVendorId"
-                placeholder="009... (from Bill.com vendor page)"
+                placeholder="009... (optional if ACH filled)"
                 autocomplete="off"
                 spellcheck="false"
               />
+              <label class="pay-modal__section-label" for="payModalBillcomPayeeName">Payee name (on ACH)</label>
+              <input class="pay-modal__ach-input" type="text" id="payModalBillcomPayeeName" autocomplete="off" />
+              <label class="pay-modal__section-label" for="payModalBillcomAccountHolder">Account holder name</label>
+              <input class="pay-modal__ach-input" type="text" id="payModalBillcomAccountHolder" autocomplete="off" />
+              <label class="pay-modal__section-label" for="payModalBillcomRouting">Routing number</label>
+              <input class="pay-modal__ach-input" type="text" id="payModalBillcomRouting" inputmode="numeric" autocomplete="off" />
+              <label class="pay-modal__section-label" for="payModalBillcomAccount">Account number</label>
+              <input class="pay-modal__ach-input" type="text" id="payModalBillcomAccount" inputmode="numeric" autocomplete="off" />
+              <label class="pay-modal__section-label" for="payModalBillcomAddress">Street address</label>
+              <input class="pay-modal__ach-input" type="text" id="payModalBillcomAddress" autocomplete="off" />
+              <div class="pay-modal__ach-grid">
+                <div>
+                  <label class="pay-modal__section-label" for="payModalBillcomCity">City</label>
+                  <input class="pay-modal__ach-input" type="text" id="payModalBillcomCity" autocomplete="off" />
+                </div>
+                <div>
+                  <label class="pay-modal__section-label" for="payModalBillcomState">State</label>
+                  <input class="pay-modal__ach-input" type="text" id="payModalBillcomState" maxlength="2" autocomplete="off" />
+                </div>
+                <div>
+                  <label class="pay-modal__section-label" for="payModalBillcomZip">ZIP</label>
+                  <input class="pay-modal__ach-input" type="text" id="payModalBillcomZip" autocomplete="off" />
+                </div>
+              </div>
             </div>
             <p class="pay-modal__hint" id="payModalHint"></p>
             <div class="pay-modal__mfa-section hidden" id="payModalMfaSection">
@@ -1498,6 +1575,14 @@
       const payModalMfaCode = document.getElementById("payModalMfaCode");
       const payModalVendorSection = document.getElementById("payModalVendorSection");
       const payModalBillcomVendorId = document.getElementById("payModalBillcomVendorId");
+      const payModalBillcomPayeeName = document.getElementById("payModalBillcomPayeeName");
+      const payModalBillcomAccountHolder = document.getElementById("payModalBillcomAccountHolder");
+      const payModalBillcomRouting = document.getElementById("payModalBillcomRouting");
+      const payModalBillcomAccount = document.getElementById("payModalBillcomAccount");
+      const payModalBillcomAddress = document.getElementById("payModalBillcomAddress");
+      const payModalBillcomCity = document.getElementById("payModalBillcomCity");
+      const payModalBillcomState = document.getElementById("payModalBillcomState");
+      const payModalBillcomZip = document.getElementById("payModalBillcomZip");
       const pageSizeControls = document.getElementById("pageSizeControls");
       const paginationInfo = document.getElementById("paginationInfo");
       const prevBtn = document.getElementById("prevBtn");
@@ -1689,8 +1774,66 @@
             paidAt: null,
             updatedAt: null,
             billcomVendorId: null,
+            billcomPayeeName: null,
+            billcomAccountHolderName: null,
+            billcomRoutingNumber: null,
+            billcomAccountNumber: null,
+            billcomAddressLine1: null,
+            billcomAddressCity: null,
+            billcomAddressState: null,
+            billcomAddressZip: null,
           }
         );
+      }
+
+      function isBillcomAchCompleteClient(ach) {
+        return Boolean(
+          ach.billcomPayeeName &&
+            ach.billcomAccountHolderName &&
+            ach.billcomRoutingNumber &&
+            ach.billcomAccountNumber &&
+            ach.billcomAddressLine1 &&
+            ach.billcomAddressCity &&
+            ach.billcomAddressState &&
+            ach.billcomAddressZip
+        );
+      }
+
+      function collectBillcomAchPayload(source) {
+        return {
+          billcomPayeeName: String(source.payeeName || "").trim(),
+          billcomAccountHolderName: String(source.accountHolder || "").trim(),
+          billcomRoutingNumber: String(source.routing || "").trim(),
+          billcomAccountNumber: String(source.account || "").trim(),
+          billcomAddressLine1: String(source.address || "").trim(),
+          billcomAddressCity: String(source.city || "").trim(),
+          billcomAddressState: String(source.state || "").trim().toUpperCase(),
+          billcomAddressZip: String(source.zip || "").trim(),
+        };
+      }
+
+      function fillPayModalBillcomFields(meta) {
+        payModalBillcomVendorId.value = meta.billcomVendorId || "";
+        payModalBillcomPayeeName.value = meta.billcomPayeeName || "";
+        payModalBillcomAccountHolder.value = meta.billcomAccountHolderName || "";
+        payModalBillcomRouting.value = meta.billcomRoutingNumber || "";
+        payModalBillcomAccount.value = meta.billcomAccountNumber || "";
+        payModalBillcomAddress.value = meta.billcomAddressLine1 || "";
+        payModalBillcomCity.value = meta.billcomAddressCity || "";
+        payModalBillcomState.value = meta.billcomAddressState || "";
+        payModalBillcomZip.value = meta.billcomAddressZip || "";
+      }
+
+      function clearPayModalBillcomFields() {
+        payModalBillcomVendorId.value = "";
+        payModalBillcomPayeeName.value = "";
+        payModalBillcomAccountHolder.value = "";
+        payModalBillcomRouting.value = "";
+        payModalBillcomAccount.value = "";
+        payModalBillcomAddress.value = "";
+        payModalBillcomCity.value = "";
+        payModalBillcomState.value = "";
+        payModalBillcomZip.value = "";
       }
 
       function normalizeBillcomVendorIdInput(value) {
@@ -1708,7 +1851,8 @@
         publisherName,
         paymentMethod,
         paymentTerms,
-        billcomVendorId
+        billcomVendorId,
+        billcomAch
       ) {
         const payload = {
           paymentMethod: paymentMethod || "Untagged",
@@ -1716,6 +1860,9 @@
         };
         if (billcomVendorId !== undefined) {
           payload.billcomVendorId = billcomVendorId || "";
+        }
+        if (billcomAch) {
+          Object.assign(payload, billcomAch);
         }
         const res = await fetch(
           "/api/payment/metadata/" + encodeURIComponent(publisherName),
@@ -1824,20 +1971,90 @@
         termsSelect.value = meta.paymentTerms || "Untagged";
 
         const vendorIdWrap = document.createElement("div");
-        vendorIdWrap.className = "metadata-popover__billcom-id";
+        vendorIdWrap.className = "metadata-popover__billcom-section";
         if ((meta.paymentMethod || "Untagged") !== "Bill.com") {
           vendorIdWrap.classList.add("hidden");
         }
+
+        const billcomHint = document.createElement("p");
+        billcomHint.className = "metadata-popover__billcom-hint";
+        billcomHint.textContent =
+          "Vendor ID OR full ACH + address required. Same bank for multiple affiliates? Paste the same 009... ID on each.";
+
         const vendorIdLabel = document.createElement("label");
         vendorIdLabel.textContent = "Bill.com Vendor ID";
         const vendorIdInput = document.createElement("input");
         vendorIdInput.type = "text";
-        vendorIdInput.placeholder = "009... (paste from Bill.com)";
+        vendorIdInput.placeholder = "009... (optional if ACH filled)";
         vendorIdInput.value = meta.billcomVendorId || "";
         vendorIdInput.autocomplete = "off";
         vendorIdInput.spellcheck = false;
+
+        function addAchField(labelText, placeholder, value) {
+          const label = document.createElement("label");
+          label.textContent = labelText;
+          const input = document.createElement("input");
+          input.type = "text";
+          input.placeholder = placeholder || "";
+          input.value = value || "";
+          input.autocomplete = "off";
+          vendorIdWrap.appendChild(label);
+          vendorIdWrap.appendChild(input);
+          return input;
+        }
+
+        vendorIdWrap.appendChild(billcomHint);
         vendorIdWrap.appendChild(vendorIdLabel);
         vendorIdWrap.appendChild(vendorIdInput);
+
+        const payeeInput = addAchField("Payee name (on ACH)", "Name on payment", meta.billcomPayeeName);
+        const holderInput = addAchField(
+          "Account holder name",
+          "Name on bank account",
+          meta.billcomAccountHolderName
+        );
+        const routingInput = addAchField("Routing number", "9 digits", meta.billcomRoutingNumber);
+        const accountInput = addAchField("Account number", "", meta.billcomAccountNumber);
+        const addressInput = addAchField("Street address", "", meta.billcomAddressLine1);
+
+        const cityStateZipRow = document.createElement("div");
+        cityStateZipRow.className = "metadata-popover__row";
+
+        const cityWrap = document.createElement("div");
+        const cityLabel = document.createElement("label");
+        cityLabel.textContent = "City";
+        const cityInput = document.createElement("input");
+        cityInput.type = "text";
+        cityInput.value = meta.billcomAddressCity || "";
+        cityInput.autocomplete = "off";
+        cityWrap.appendChild(cityLabel);
+        cityWrap.appendChild(cityInput);
+
+        const stateWrap = document.createElement("div");
+        const stateLabel = document.createElement("label");
+        stateLabel.textContent = "State";
+        const stateInput = document.createElement("input");
+        stateInput.type = "text";
+        stateInput.maxLength = 2;
+        stateInput.value = meta.billcomAddressState || "";
+        stateInput.autocomplete = "off";
+        stateWrap.appendChild(stateLabel);
+        stateWrap.appendChild(stateInput);
+
+        const zipWrap = document.createElement("div");
+        const zipLabel = document.createElement("label");
+        zipLabel.textContent = "ZIP";
+        const zipInput = document.createElement("input");
+        zipInput.type = "text";
+        zipInput.value = meta.billcomAddressZip || "";
+        zipInput.autocomplete = "off";
+        zipWrap.appendChild(zipLabel);
+        zipWrap.appendChild(zipInput);
+
+        cityStateZipRow.appendChild(cityWrap);
+        cityStateZipRow.appendChild(stateWrap);
+        cityStateZipRow.appendChild(zipWrap);
+        vendorIdWrap.appendChild(cityStateZipRow);
 
         methodSelect.addEventListener("change", () => {
           if (methodSelect.value === "Bill.com") {
@@ -1858,18 +2075,35 @@
           saveBtn.disabled = true;
           try {
             let billcomVendorId;
+            let billcomAch;
             if (methodSelect.value === "Bill.com") {
               const parsed = normalizeBillcomVendorIdInput(vendorIdInput.value);
               if (parsed === null) {
                 throw new Error("Bill.com vendor ID must start with 009");
               }
               billcomVendorId = parsed;
+              billcomAch = collectBillcomAchPayload({
+                payeeName: payeeInput.value,
+                accountHolder: holderInput.value,
+                routing: routingInput.value,
+                account: accountInput.value,
+                address: addressInput.value,
+                city: cityInput.value,
+                state: stateInput.value,
+                zip: zipInput.value,
+              });
+              if (!billcomVendorId && !isBillcomAchCompleteClient(billcomAch)) {
+                throw new Error(
+                  "Add a Bill.com vendor ID (009...) or fill in all ACH + address fields"
+                );
+              }
             }
             const data = await saveAffiliateMetadata(
               publisherName,
               methodSelect.value,
               termsSelect.value,
-              billcomVendorId
+              billcomVendorId,
+              billcomAch
             );
             affiliateMetadataMap[publisherName] = data;
             closeEditPopover();
@@ -2165,16 +2399,16 @@
         payModalConfirm.disabled = false;
         resetPayModalMfaState();
         payModalVendorSection.classList.add("hidden");
-        payModalBillcomVendorId.value = "";
+        clearPayModalBillcomFields();
       }
 
       function syncPayModalBillcomVendorField(method, meta) {
         if (method === "Bill.com") {
           payModalVendorSection.classList.remove("hidden");
-          payModalBillcomVendorId.value = meta.billcomVendorId || "";
+          fillPayModalBillcomFields(meta);
         } else {
           payModalVendorSection.classList.add("hidden");
-          payModalBillcomVendorId.value = "";
+          clearPayModalBillcomFields();
         }
       }
 
@@ -2235,13 +2469,18 @@
         return Math.round(parsed * 100) / 100;
       }
 
-      function buildPayPayload(months, amount, billcomVendorId) {
+      function buildPayPayload(months, amount, billcomExtras) {
         const payload = { months };
         if (amount !== undefined && amount !== null) {
           payload.amount = amount;
         }
-        if (billcomVendorId) {
-          payload.billcomVendorId = billcomVendorId;
+        if (billcomExtras) {
+          if (billcomExtras.billcomVendorId) {
+            payload.billcomVendorId = billcomExtras.billcomVendorId;
+          }
+          if (billcomExtras.billcomAch) {
+            Object.assign(payload, billcomExtras.billcomAch);
+          }
         }
         return payload;
       }
@@ -2317,19 +2556,30 @@
           }
 
           let billcomVendorId = "";
+          let billcomAch = null;
           if (method === "Bill.com") {
             const parsed = normalizeBillcomVendorIdInput(payModalBillcomVendorId.value);
             if (parsed === null) {
               payModalHint.textContent =
-                "Enter a valid Bill.com vendor ID (starts with 009).";
-              return;
-            }
-            if (!parsed) {
-              payModalHint.textContent =
-                "Bill.com vendor ID is required. Paste the 009... ID from Bill.com.";
+                "Enter a valid Bill.com vendor ID (starts with 009) or leave blank if ACH is filled.";
               return;
             }
             billcomVendorId = parsed;
+            billcomAch = collectBillcomAchPayload({
+              payeeName: payModalBillcomPayeeName.value,
+              accountHolder: payModalBillcomAccountHolder.value,
+              routing: payModalBillcomRouting.value,
+              account: payModalBillcomAccount.value,
+              address: payModalBillcomAddress.value,
+              city: payModalBillcomCity.value,
+              state: payModalBillcomState.value,
+              zip: payModalBillcomZip.value,
+            });
+            if (!billcomVendorId && !isBillcomAchCompleteClient(billcomAch)) {
+              payModalHint.textContent =
+                "Bill.com vendor ID or full ACH + address required. Fill in the edit popup or verify fields here.";
+              return;
+            }
           }
 
           if (method === "Bill.com" && payModalMfaToken) {
@@ -2362,7 +2612,12 @@
             const res = await fetch(endpoint, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(buildPayPayload(months, amount, billcomVendorId)),
+              body: JSON.stringify(
+                buildPayPayload(months, amount, {
+                  billcomVendorId,
+                  billcomAch,
+                })
+              ),
             });
             const data = await res.json();
 
