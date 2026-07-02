@@ -936,6 +936,11 @@
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
       }
 
+      .metadata-popover.opens-up {
+        top: auto;
+        bottom: calc(100% + 6px);
+      }
+
       .metadata-popover label {
         display: block;
         margin-bottom: 4px;
@@ -1489,6 +1494,21 @@
         document.querySelectorAll(".metadata-popover").forEach((el) => el.remove());
       }
 
+      function positionMetadataPopover(anchorTd, popover) {
+        const editBtn = anchorTd.querySelector(".btn-edit");
+        if (!editBtn) {
+          return;
+        }
+
+        const gap = 6;
+        const buttonRect = editBtn.getBoundingClientRect();
+        const popoverHeight = popover.offsetHeight;
+
+        if (buttonRect.bottom + gap + popoverHeight > window.innerHeight) {
+          popover.classList.add("opens-up");
+        }
+      }
+
       function openMetadataPopover(anchorTd, publisherName) {
         if (openEditPopoverPublisher === publisherName) {
           closeEditPopover();
@@ -1567,6 +1587,7 @@
         popover.appendChild(actions);
         popover.addEventListener("click", (e) => e.stopPropagation());
         anchorTd.appendChild(popover);
+        positionMetadataPopover(anchorTd, popover);
       }
 
       function showPaymentToast(message, isError) {

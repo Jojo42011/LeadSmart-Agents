@@ -115,11 +115,13 @@ function sessionExpired(session: BillcomSession): boolean {
 function assertBillcomOk(payload: unknown, context: string): Record<string, unknown> {
   const row = asRecord(payload);
   if (!row) {
+    console.error("[BillCom] assertBillcomOk failed:", JSON.stringify(payload));
     throw new Error(`${context}: empty response`);
   }
 
   const status = readNumber(row, "response_status");
   if (status !== null && status !== 0) {
+    console.error("[BillCom] assertBillcomOk failed:", JSON.stringify(payload));
     const message =
       readString(row, "response_message") ??
       readString(row, "error_message") ??
@@ -131,16 +133,27 @@ function assertBillcomOk(payload: unknown, context: string): Record<string, unkn
 }
 
 async function login(): Promise<string> {
-  const res = await axios.post(
-    `${BILLCOM_V2_BASE}/Login.json`,
-    {
-      devKey: devKey(),
-      userName: billcomEmail(),
-      password: billcomPassword(),
-      orgId: billcomOrgId(),
-    },
-    { timeout: 60_000 }
-  );
+  let res;
+  try {
+    res = await axios.post(
+      `${BILLCOM_V2_BASE}/Login.json`,
+      {
+        devKey: devKey(),
+        userName: billcomEmail(),
+        password: billcomPassword(),
+        orgId: billcomOrgId(),
+      },
+      { timeout: 60_000 }
+    );
+  } catch (err: any) {
+    if (err.response?.data) {
+      console.error(
+        "[BillCom] login HTTP error body:",
+        JSON.stringify(err.response.data)
+      );
+    }
+    throw err;
+  }
 
   const row = assertBillcomOk(res.data, "Bill.com login");
   const data = asRecord(row.response_data);
