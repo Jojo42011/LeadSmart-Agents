@@ -795,6 +795,12 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       return;
     }
 
+    const months = parsePayMonths(req);
+    const override = parsePayAmountOverride(req);
+    console.log(
+      `[Payment] Wise pay request: ${publisherName} months=${months.join(",")} amount=${override ?? "auto"}`
+    );
+
     const meta = affiliateMetadataFor(publisherName);
     if (!meta || meta.paymentMethod !== "Wise") {
       res.status(400).json({ error: "Affiliate is not tagged for Wise payments" });
@@ -825,6 +831,10 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
     );
     markAffiliatePaidIfUnpaid(publisherName);
 
+    console.log(
+      `[Payment] Wise pay success: ${publisherName} transferId=${payout.transferId} amount=${amount}`
+    );
+
     res.json({
       success: true,
       transferId: payout.transferId,
@@ -832,6 +842,10 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       publisherName,
     });
   } catch (err) {
+    console.error(
+      `[Payment] Wise pay failed: ${req.params.name}`,
+      err instanceof Error ? err.message : err
+    );
     res.status(500).json({
       error: err instanceof Error ? err.message : "Wise payout failed",
     });
@@ -845,6 +859,12 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       res.status(400).json({ error: "Publisher name is required" });
       return;
     }
+
+    const months = parsePayMonths(req);
+    const override = parsePayAmountOverride(req);
+    console.log(
+      `[Payment] Bill.com pay request: ${publisherName} months=${months.join(",")} amount=${override ?? "auto"}`
+    );
 
     const meta = affiliateMetadataFor(publisherName);
     if (!meta || meta.paymentMethod !== "Bill.com") {
@@ -863,6 +883,10 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
     const result = await executeBillcomPayout(publisherName, amount);
     markAffiliatePaidIfUnpaid(publisherName);
 
+    console.log(
+      `[Payment] Bill.com pay success: ${publisherName} paymentId=${result.paymentId} amount=${amount}`
+    );
+
     res.json({
       success: true,
       paymentId: result.paymentId,
@@ -871,6 +895,10 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       publisherName,
     });
   } catch (err) {
+    console.error(
+      `[Payment] Bill.com pay failed: ${req.params.name}`,
+      err instanceof Error ? err.message : err
+    );
     res.status(500).json({
       error: err instanceof Error ? err.message : "Bill.com payout failed",
     });
@@ -883,6 +911,11 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
     res.status(400).json({ error: "publisherNames array is required" });
     return;
   }
+
+  const months = parsePayMonths(req);
+  console.log(
+    `[Payment] Wise bulk pay request: ${publisherNames.length} affiliate(s) months=${months.join(",")}`
+  );
 
   const succeeded: string[] = [];
   const failed: Array<{ publisherName: string; error: string }> = [];
@@ -934,6 +967,9 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
     }
   }
 
+  console.log(
+    `[Payment] Wise bulk pay complete: succeeded=${succeeded.length} failed=${failed.length}`
+  );
   res.json({ succeeded, failed });
 });
 
@@ -943,6 +979,11 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
     res.status(400).json({ error: "publisherNames array is required" });
     return;
   }
+
+  const months = parsePayMonths(req);
+  console.log(
+    `[Payment] Bill.com bulk pay request: ${publisherNames.length} affiliate(s) months=${months.join(",")}`
+  );
 
   const succeeded: string[] = [];
   const failed: Array<{ publisherName: string; error: string }> = [];
@@ -1024,6 +1065,9 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
     }
   }
 
+  console.log(
+    `[Payment] Bill.com bulk pay complete: succeeded=${succeeded.length} failed=${failed.length}`
+  );
   res.json({ succeeded, failed });
 });
 

@@ -81,6 +81,14 @@ function bankAccountId(): string {
   return id;
 }
 
+function optionalMfaDeviceId(): string | null {
+  return process.env.BILLCOM_DEVICE_ID?.trim() ?? null;
+}
+
+function optionalMfaId(): string | null {
+  return process.env.BILLCOM_MFA_ID?.trim() ?? null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object"
     ? (value as Record<string, unknown>)
@@ -140,6 +148,14 @@ async function login(): Promise<string> {
     params.append("userName", billcomEmail());
     params.append("password", billcomPassword());
     params.append("orgId", billcomOrgId());
+
+    const deviceId = optionalMfaDeviceId();
+    const mfaId = optionalMfaId();
+    if (deviceId && mfaId) {
+      params.append("deviceId", deviceId);
+      params.append("mfaId", mfaId);
+      console.log("[BillCom] login with MFA-trusted deviceId");
+    }
 
     res = await axios.post(`${BILLCOM_V2_BASE}/Login.json`, params, {
       timeout: 60_000,
@@ -311,23 +327,40 @@ export async function payBill(
   vendorId: string,
   amount: number
 ): Promise<BillcomPayment> {
-  const row = await v2Request("SendPay.json", {
-    obj: {
-      entity: "BillPay",
-      billId,
-      vendorId,
-      amount,
-      processDate: todayYmd(),
-    },
+  const processDate = todayYmd();
+  console.log("[BillCom] PayBills request:", {
+    billId,
+    vendorId,
+    amount,
+    processDate,
+    bankAccountId: bankAccountId(),
+  });
+
+  const row = await v2Request("PayBills.json", {
+    vendorId,
+    bankAccountId: bankAccountId(),
+    processDate,
+    billPays: [{ billId, amount }],
   });
 
   const data = asRecord(row.response_data);
-  const id = data ? readString(data, "id") ?? billId : billId;
+  const sentPays =
+    data && Array.isArray(data.sentPays)
+      ? data.sentPays
+      : data && Array.isArray(data)
+        ? data
+        : [];
+  const sentPay = sentPays.length > 0 ? asRecord(sentPays[0]) : null;
+  const id = sentPay ? readString(sentPay, "id") ?? billId : billId;
+  const status = sentPay ? readString(sentPay, "status") ?? "submitted" : "submitted";
+
+  console.log("[BillCom] PayBills success:", { paymentId: id, billId, amount, status });
+
   return {
     id,
     billId,
     amount,
-    status: data ? readString(data, "status") ?? "submitted" : "submitted",
+    status,
   };
 }
 

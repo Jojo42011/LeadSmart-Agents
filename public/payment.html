@@ -1838,7 +1838,8 @@
           checkbox.value = month.value;
           checkbox.checked = month.value === defaultMonth;
           checkbox.addEventListener("change", () => {
-            void refreshPayModalCalculatedAmount();
+            payAmountUserEdited = false;
+            syncPayModalAmountPreview();
           });
 
           const text = document.createElement("span");
@@ -1852,10 +1853,24 @@
 
       async function calculatePublisherTotalForMonths(publisherName, months) {
         const target = normalizePublisherNameKey(publisherName);
+        const viewMonth = monthSelect.value;
         let total = 0;
         let monthsWithPayout = 0;
 
         for (const month of months) {
+          if (
+            month === viewMonth &&
+            payModalRow &&
+            normalizePublisherNameKey(payModalRow.publisherName) === target
+          ) {
+            const viewAmount = Number(payModalRow.totalAmount || 0);
+            if (viewAmount > 0) {
+              total += viewAmount;
+              monthsWithPayout += 1;
+            }
+            continue;
+          }
+
           const res = await fetch(
             "/api/payment/stats/all?month=" + encodeURIComponent(month)
           );
@@ -1877,7 +1892,49 @@
         return { total, monthsWithPayout };
       }
 
-      async function refreshPayModalCalculatedAmount() {
+      function monthLabel(value) {
+        const found = MONTHS.find((month) => month.value === value);
+        return found ? found.label : value;
+      }
+
+      function syncPayModalAmountPreview() {
+        const months = getSelectedPayMonths();
+        if (months.length === 0) {
+          payModalHint.textContent = "Select at least one month.";
+          payModalConfirm.disabled = true;
+          return;
+        }
+
+        payModalConfirm.disabled = false;
+
+        if (payModalMode === "bulk") {
+          payModalHint.textContent =
+            months.length +
+            " month(s) selected. Each affiliate will be paid their combined total for those months.";
+          return;
+        }
+
+        if (!payModalRow) {
+          return;
+        }
+
+        if (
+          months.length === 1 &&
+          months[0] === monthSelect.value &&
+          !payAmountUserEdited
+        ) {
+          payModalAmount.value = Number(payModalRow.totalAmount || 0).toFixed(2);
+          payModalHint.textContent =
+            "Using dashboard total for " +
+            monthLabel(months[0]) +
+            ". Edit amount or select more months to recalculate.";
+          return;
+        }
+
+        void refreshPayModalCalculatedAmountFromApi();
+      }
+
+      async function refreshPayModalCalculatedAmountFromApi() {
         const months = getSelectedPayMonths();
         if (months.length === 0) {
           payModalHint.textContent = "Select at least one month.";
@@ -1966,7 +2023,7 @@
         payModalAmount.value = Number(row.totalAmount || 0).toFixed(2);
         payModalHint.textContent = "";
         payModal.classList.remove("hidden");
-        void refreshPayModalCalculatedAmount();
+        syncPayModalAmountPreview();
       }
 
       function openPayModalForBulk() {
@@ -1991,7 +2048,7 @@
         renderPayModalMonthOptions(monthSelect.value);
         payModalHint.textContent = "";
         payModal.classList.remove("hidden");
-        void refreshPayModalCalculatedAmount();
+        syncPayModalAmountPreview();
       }
 
       function parsePayModalAmount() {
@@ -2022,7 +2079,8 @@
             return;
           }
 
-          const meta = getAffiliateMeta(payModalRow.publisherName);
+          const publisherName = payModalRow.publisherName;
+          const meta = getAffiliateMeta(publisherName);
           const method = meta.paymentMethod;
           const amount = parsePayModalAmount();
           if (amount === null) {
@@ -2033,16 +2091,14 @@
           closePayModal();
           isPayingAffiliate = true;
           updatePayAllButton();
-          setBanner("loading", "Paying " + payModalRow.publisherName + "...");
+          setBanner("loading", "Paying " + publisherName + "...");
           setWarning(null);
 
           try {
             const endpoint =
               method === "Wise"
-                ? "/api/payment/pay/wise/" +
-                  encodeURIComponent(payModalRow.publisherName)
-                : "/api/payment/pay/billcom/" +
-                  encodeURIComponent(payModalRow.publisherName);
+                ? "/api/payment/pay/wise/" + encodeURIComponent(publisherName)
+                : "/api/payment/pay/billcom/" + encodeURIComponent(publisherName);
             const res = await fetch(endpoint, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -2056,7 +2112,7 @@
             await fetchAffiliateMetadata();
             setBanner(null, null);
             showPaymentToast(
-              "Paid " + payModalRow.publisherName + " " + formatMoney(amount),
+              "Paid " + publisherName + " " + formatMoney(amount),
               false
             );
             renderTable();
@@ -2074,6 +2130,8 @@
         }
 
         if (payModalMode === "bulk") {
+          const wiseNames = payModalBulkWiseNames.slice();
+          const billNames = payModalBulkBillNames.slice();
           closePayModal();
           isBulkPaying = true;
           updatePayAllButton();
@@ -2083,13 +2141,13 @@
           const summary = { succeeded: [], failed: [] };
 
           try {
-            if (payModalBulkWiseNames.length > 0) {
+            if (wiseNames.length > 0) {
               const wiseRes = await fetch("/api/payment/pay/bulk/wise", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   months,
-                  publisherNames: payModalBulkWiseNames,
+                  publisherNames: wiseNames,
                 }),
               });
               const wiseData = await wiseRes.json();
@@ -2100,13 +2158,13 @@
               summary.failed = summary.failed.concat(wiseData.failed || []);
             }
 
-            if (payModalBulkBillNames.length > 0) {
+            if (billNames.length > 0) {
               const billRes = await fetch("/api/payment/pay/bulk/billcom", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   months,
-                  publisherNames: payModalBulkBillNames,
+                  publisherNames: billNames,
                 }),
               });
               const billData = await billRes.json();
