@@ -1113,12 +1113,12 @@
       }
 
       .metadata-popover {
-        position: absolute;
-        right: 0;
-        top: calc(100% + 6px);
-        z-index: 20;
+        position: fixed;
+        z-index: 1000;
         min-width: 300px;
         max-width: 340px;
+        max-height: calc(100vh - 16px);
+        overflow-y: auto;
         padding: 12px;
         border: 1px solid var(--border);
         background: var(--bg-panel);
@@ -1126,8 +1126,7 @@
       }
 
       .metadata-popover.opens-up {
-        top: auto;
-        bottom: calc(100% + 6px);
+        /* placement handled in JS */
       }
 
       .metadata-popover label {
@@ -1917,7 +1916,12 @@
 
       function closeEditPopover() {
         openEditPopoverPublisher = null;
-        document.querySelectorAll(".metadata-popover").forEach((el) => el.remove());
+        document.querySelectorAll(".metadata-popover").forEach((el) => {
+          if (typeof el._metadataPopoverCleanup === "function") {
+            el._metadataPopoverCleanup();
+          }
+          el.remove();
+        });
       }
 
       function positionMetadataPopover(anchorTd, popover) {
@@ -1927,12 +1931,45 @@
         }
 
         const gap = 6;
+        const margin = 8;
         const buttonRect = editBtn.getBoundingClientRect();
+        const popoverWidth = popover.offsetWidth;
         const popoverHeight = popover.offsetHeight;
 
-        if (buttonRect.bottom + gap + popoverHeight > window.innerHeight) {
-          popover.classList.add("opens-up");
+        let top = buttonRect.bottom + gap;
+        let left = buttonRect.right - popoverWidth;
+
+        if (left < margin) {
+          left = margin;
         }
+        if (left + popoverWidth > window.innerWidth - margin) {
+          left = window.innerWidth - popoverWidth - margin;
+        }
+
+        if (top + popoverHeight > window.innerHeight - margin) {
+          top = buttonRect.top - gap - popoverHeight;
+          popover.classList.add("opens-up");
+        } else {
+          popover.classList.remove("opens-up");
+        }
+
+        if (top < margin) {
+          top = margin;
+        }
+
+        popover.style.top = top + "px";
+        popover.style.left = left + "px";
+      }
+
+      function bindMetadataPopoverListeners(anchorTd, popover) {
+        const reposition = () => positionMetadataPopover(anchorTd, popover);
+        const closeOnScroll = () => closeEditPopover();
+        window.addEventListener("resize", reposition);
+        window.addEventListener("scroll", closeOnScroll, true);
+        popover._metadataPopoverCleanup = () => {
+          window.removeEventListener("resize", reposition);
+          window.removeEventListener("scroll", closeOnScroll, true);
+        };
       }
 
       function openMetadataPopover(anchorTd, publisherName) {
@@ -2062,6 +2099,7 @@
           } else {
             vendorIdWrap.classList.add("hidden");
           }
+          requestAnimationFrame(() => positionMetadataPopover(anchorTd, popover));
         });
 
         const actions = document.createElement("div");
@@ -2123,8 +2161,9 @@
         popover.appendChild(vendorIdWrap);
         popover.appendChild(actions);
         popover.addEventListener("click", (e) => e.stopPropagation());
-        anchorTd.appendChild(popover);
+        document.body.appendChild(popover);
         positionMetadataPopover(anchorTd, popover);
+        bindMetadataPopoverListeners(anchorTd, popover);
       }
 
       function showPaymentToast(message, isError) {
