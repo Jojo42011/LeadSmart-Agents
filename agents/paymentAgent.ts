@@ -1053,6 +1053,43 @@ export async function resolvePublisherPayoutAmount(
   return row.totalAmount;
 }
 
+/** Sum merged payout totals for one publisher across multiple date ranges. */
+export async function sumPublisherPayoutAcrossMonths(
+  publisherName: string,
+  ranges: Array<{ startDate: string; endDate: string }>
+): Promise<number> {
+  let total = 0;
+
+  for (const range of ranges) {
+    try {
+      total += await resolvePublisherPayoutAmount(
+        publisherName,
+        range.startDate,
+        range.endDate
+      );
+    } catch (err) {
+      if (err instanceof Error) {
+        const message = err.message;
+        if (
+          message.includes("Publisher not found") ||
+          message.includes("No payout amount")
+        ) {
+          continue;
+        }
+      }
+      throw err;
+    }
+  }
+
+  if (total <= 0) {
+    throw new Error(
+      `No payout amount for ${publisherName} across selected months`
+    );
+  }
+
+  return total;
+}
+
 export interface PayableRecipientMatch {
   id: number;
   accountHolderName: string;

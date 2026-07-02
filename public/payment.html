@@ -846,6 +846,131 @@
         opacity: 0.55;
       }
 
+      .pay-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .pay-modal.hidden {
+        display: none;
+      }
+
+      .pay-modal__backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.65);
+      }
+
+      .pay-modal__panel {
+        position: relative;
+        z-index: 1;
+        width: min(420px, 100%);
+        max-height: min(85vh, 640px);
+        overflow: auto;
+        padding: 20px;
+        border: 1px solid var(--border);
+        background: var(--bg-panel);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      }
+
+      .pay-modal__title {
+        margin: 0 0 6px;
+        font-size: 12px;
+        letter-spacing: 2px;
+        color: var(--green);
+        text-transform: uppercase;
+      }
+
+      .pay-modal__subtitle {
+        margin: 0 0 16px;
+        font-size: 13px;
+        color: var(--text);
+      }
+
+      .pay-modal__section-label {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 9px;
+        letter-spacing: 1px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+      }
+
+      .pay-modal__months {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 16px;
+        max-height: 180px;
+        overflow: auto;
+        padding: 2px;
+      }
+
+      .pay-modal__month-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      .pay-modal__month-option input {
+        accent-color: var(--green);
+      }
+
+      .pay-modal__amount {
+        width: 100%;
+        margin-bottom: 8px;
+        padding: 8px 10px;
+        font-family: var(--font);
+        font-size: 14px;
+        color: var(--text);
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+      }
+
+      .pay-modal__hint {
+        margin: 0 0 16px;
+        font-size: 11px;
+        color: var(--text-dim);
+        min-height: 16px;
+      }
+
+      .pay-modal__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+      }
+
+      .pay-modal__btn {
+        font-family: var(--font);
+        padding: 8px 14px;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      .pay-modal__btn--primary {
+        border-color: rgba(0, 255, 136, 0.45);
+        color: var(--green);
+        background: rgba(0, 255, 136, 0.1);
+      }
+
+      .pay-modal__btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
       .action-cell {
         position: relative;
         white-space: nowrap;
@@ -1145,6 +1270,25 @@
         <div class="status-banner status-banner--warning hidden" id="warningBanner"></div>
         <div class="payment-toast hidden" id="paymentToast" role="status"></div>
 
+        <div class="pay-modal hidden" id="payModal" role="dialog" aria-modal="true" aria-labelledby="payModalTitle">
+          <div class="pay-modal__backdrop" id="payModalBackdrop"></div>
+          <div class="pay-modal__panel">
+            <h2 class="pay-modal__title" id="payModalTitle">Confirm payment</h2>
+            <p class="pay-modal__subtitle" id="payModalSubtitle"></p>
+            <label class="pay-modal__section-label">Months to include</label>
+            <div class="pay-modal__months" id="payModalMonths"></div>
+            <div id="payModalAmountSection">
+              <label class="pay-modal__section-label" for="payModalAmount">Amount to pay (USD)</label>
+              <input class="pay-modal__amount" type="number" id="payModalAmount" min="0.01" step="0.01" />
+            </div>
+            <p class="pay-modal__hint" id="payModalHint"></p>
+            <div class="pay-modal__actions">
+              <button type="button" class="pay-modal__btn" id="payModalCancel">Cancel</button>
+              <button type="button" class="pay-modal__btn pay-modal__btn--primary" id="payModalConfirm">Confirm pay</button>
+            </div>
+          </div>
+        </div>
+
         <div id="affiliatesPanel">
           <div class="table-wrap" id="affiliatesTableWrap">
             <table>
@@ -1267,6 +1411,16 @@
       const sourceFilters = document.getElementById("sourceFilters");
       const payAllBtn = document.getElementById("payAllBtn");
       const paymentToast = document.getElementById("paymentToast");
+      const payModal = document.getElementById("payModal");
+      const payModalBackdrop = document.getElementById("payModalBackdrop");
+      const payModalTitle = document.getElementById("payModalTitle");
+      const payModalSubtitle = document.getElementById("payModalSubtitle");
+      const payModalMonths = document.getElementById("payModalMonths");
+      const payModalAmountSection = document.getElementById("payModalAmountSection");
+      const payModalAmount = document.getElementById("payModalAmount");
+      const payModalHint = document.getElementById("payModalHint");
+      const payModalCancel = document.getElementById("payModalCancel");
+      const payModalConfirm = document.getElementById("payModalConfirm");
       const pageSizeControls = document.getElementById("pageSizeControls");
       const paginationInfo = document.getElementById("paginationInfo");
       const prevBtn = document.getElementById("prevBtn");
@@ -1304,6 +1458,12 @@
       let isPayingAffiliate = false;
       let isBulkPaying = false;
       let paymentToastTimer = null;
+      let payModalMode = null;
+      let payModalRow = null;
+      let payModalBulkWiseNames = [];
+      let payModalBulkBillNames = [];
+      let payAmountUserEdited = false;
+      let payModalRecalcToken = 0;
 
       const PAYMENT_METHODS = [
         "PayPal",
@@ -1661,159 +1821,345 @@
         payAllBtn.disabled = isBulkPaying || isPayingAffiliate;
       }
 
-      async function payAffiliate(row) {
+      function getSelectedPayMonths() {
+        return Array.from(
+          payModalMonths.querySelectorAll('input[type="checkbox"]:checked')
+        ).map((input) => input.value);
+      }
+
+      function renderPayModalMonthOptions(defaultMonth) {
+        payModalMonths.innerHTML = "";
+        for (const month of MONTHS) {
+          const label = document.createElement("label");
+          label.className = "pay-modal__month-option";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.value = month.value;
+          checkbox.checked = month.value === defaultMonth;
+          checkbox.addEventListener("change", () => {
+            void refreshPayModalCalculatedAmount();
+          });
+
+          const text = document.createElement("span");
+          text.textContent = month.label;
+
+          label.appendChild(checkbox);
+          label.appendChild(text);
+          payModalMonths.appendChild(label);
+        }
+      }
+
+      async function calculatePublisherTotalForMonths(publisherName, months) {
+        const target = normalizePublisherNameKey(publisherName);
+        let total = 0;
+        let monthsWithPayout = 0;
+
+        for (const month of months) {
+          const res = await fetch(
+            "/api/payment/stats/all?month=" + encodeURIComponent(month)
+          );
+          const data = await res.json();
+          if (!res.ok) {
+            continue;
+          }
+          const publishers = Array.isArray(data.publishers) ? data.publishers : [];
+          const row = publishers.find(
+            (publisher) =>
+              normalizePublisherNameKey(publisher.publisherName) === target
+          );
+          if (row && Number(row.totalAmount) > 0) {
+            total += Number(row.totalAmount);
+            monthsWithPayout += 1;
+          }
+        }
+
+        return { total, monthsWithPayout };
+      }
+
+      async function refreshPayModalCalculatedAmount() {
+        const months = getSelectedPayMonths();
+        if (months.length === 0) {
+          payModalHint.textContent = "Select at least one month.";
+          payModalConfirm.disabled = true;
+          return;
+        }
+
+        payModalConfirm.disabled = false;
+
+        if (payModalMode === "bulk") {
+          payModalHint.textContent =
+            months.length +
+            " month(s) selected. Each affiliate will be paid their combined total for those months.";
+          return;
+        }
+
+        if (!payModalRow) {
+          return;
+        }
+
+        const token = ++payModalRecalcToken;
+        payModalHint.textContent = "Calculating total for selected months...";
+
+        try {
+          const result = await calculatePublisherTotalForMonths(
+            payModalRow.publisherName,
+            months
+          );
+          if (token !== payModalRecalcToken) {
+            return;
+          }
+
+          if (result.monthsWithPayout === 0) {
+            payModalHint.textContent =
+              "No payout found for this affiliate in the selected months. You can enter a custom amount.";
+            if (!payAmountUserEdited) {
+              payModalAmount.value = "";
+            }
+            return;
+          }
+
+          if (!payAmountUserEdited) {
+            payModalAmount.value = result.total.toFixed(2);
+          }
+
+          payModalHint.textContent =
+            result.monthsWithPayout +
+            " month(s) with payout — calculated total " +
+            formatMoney(result.total) +
+            (payAmountUserEdited ? " (amount manually overridden)" : "");
+        } catch (err) {
+          if (token !== payModalRecalcToken) {
+            return;
+          }
+          payModalHint.textContent =
+            err instanceof Error ? err.message : "Failed to calculate total";
+        }
+      }
+
+      function closePayModal() {
+        payModal.classList.add("hidden");
+        payModalMode = null;
+        payModalRow = null;
+        payModalBulkWiseNames = [];
+        payModalBulkBillNames = [];
+        payAmountUserEdited = false;
+        payModalRecalcToken += 1;
+        payModalConfirm.disabled = false;
+      }
+
+      function openPayModalForRow(row) {
         const meta = getAffiliateMeta(row.publisherName);
         const method = meta.paymentMethod;
         if (meta.isPaid || !isAutoPayMethod(method)) {
           return;
         }
 
-        const confirmed = window.confirm(
-          "Pay " +
-            row.publisherName +
-            " " +
-            formatMoney(row.totalAmount) +
-            " via " +
-            method +
-            "?"
-        );
-        if (!confirmed) {
-          return;
-        }
-
-        isPayingAffiliate = true;
-        updatePayAllButton();
-        setBanner("loading", "Paying " + row.publisherName + "...");
-        setWarning(null);
-
-        try {
-          const endpoint =
-            method === "Wise"
-              ? "/api/payment/pay/wise/" + encodeURIComponent(row.publisherName)
-              : "/api/payment/pay/billcom/" + encodeURIComponent(row.publisherName);
-          const res = await fetch(endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ month: monthSelect.value }),
-          });
-          const data = await res.json();
-          if (!res.ok) {
-            throw new Error(data.error || "Payment failed");
-          }
-
-          await fetchAffiliateMetadata();
-          setBanner(null, null);
-          showPaymentToast("Paid " + row.publisherName + " successfully", false);
-          renderTable();
-          updatePayAllButton();
-        } catch (err) {
-          setBanner(null, null);
-          const message = err instanceof Error ? err.message : "Payment failed";
-          setWarning(message);
-          showPaymentToast(message, true);
-        } finally {
-          isPayingAffiliate = false;
-          updatePayAllButton();
-        }
+        payModalMode = "single";
+        payModalRow = row;
+        payAmountUserEdited = false;
+        payModalTitle.textContent = "Confirm payment";
+        payModalSubtitle.textContent =
+          row.publisherName + " via " + method;
+        payModalAmountSection.classList.remove("hidden");
+        renderPayModalMonthOptions(monthSelect.value);
+        payModalAmount.value = Number(row.totalAmount || 0).toFixed(2);
+        payModalHint.textContent = "";
+        payModal.classList.remove("hidden");
+        void refreshPayModalCalculatedAmount();
       }
 
-      async function payAllAffiliates() {
+      function openPayModalForBulk() {
         const wiseNames = JSON.parse(payAllBtn.dataset.wiseNames || "[]");
         const billNames = JSON.parse(payAllBtn.dataset.billNames || "[]");
         if (wiseNames.length + billNames.length === 0) {
           return;
         }
 
-        const confirmed = window.confirm(
-          "Pay " +
-            wiseNames.length +
-            " affiliate(s) via Wise and " +
-            billNames.length +
-            " via Bill.com?"
-        );
-        if (!confirmed) {
+        payModalMode = "bulk";
+        payModalRow = null;
+        payModalBulkWiseNames = wiseNames;
+        payModalBulkBillNames = billNames;
+        payAmountUserEdited = false;
+        payModalTitle.textContent = "Confirm bulk payment";
+        payModalSubtitle.textContent =
+          wiseNames.length +
+          " Wise and " +
+          billNames.length +
+          " Bill.com affiliate(s)";
+        payModalAmountSection.classList.add("hidden");
+        renderPayModalMonthOptions(monthSelect.value);
+        payModalHint.textContent = "";
+        payModal.classList.remove("hidden");
+        void refreshPayModalCalculatedAmount();
+      }
+
+      function parsePayModalAmount() {
+        const parsed = parseFloat(String(payModalAmount.value || "").trim());
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          return null;
+        }
+        return Math.round(parsed * 100) / 100;
+      }
+
+      function buildPayPayload(months, amount) {
+        const payload = { months };
+        if (amount !== undefined && amount !== null) {
+          payload.amount = amount;
+        }
+        return payload;
+      }
+
+      async function confirmPayModal() {
+        const months = getSelectedPayMonths();
+        if (months.length === 0) {
+          payModalHint.textContent = "Select at least one month.";
           return;
         }
 
-        isBulkPaying = true;
-        updatePayAllButton();
-        setBanner("loading", "Processing bulk payments...");
-        setWarning(null);
-
-        const summary = {
-          succeeded: [],
-          failed: [],
-        };
-
-        try {
-          if (wiseNames.length > 0) {
-            const wiseRes = await fetch("/api/payment/pay/bulk/wise", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                month: monthSelect.value,
-                publisherNames: wiseNames,
-              }),
-            });
-            const wiseData = await wiseRes.json();
-            if (!wiseRes.ok) {
-              throw new Error(wiseData.error || "Wise bulk payment failed");
-            }
-            summary.succeeded = summary.succeeded.concat(wiseData.succeeded || []);
-            summary.failed = summary.failed.concat(wiseData.failed || []);
+        if (payModalMode === "single") {
+          if (!payModalRow) {
+            return;
           }
 
-          if (billNames.length > 0) {
-            const billRes = await fetch("/api/payment/pay/bulk/billcom", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                month: monthSelect.value,
-                publisherNames: billNames,
-              }),
-            });
-            const billData = await billRes.json();
-            if (!billRes.ok) {
-              throw new Error(billData.error || "Bill.com bulk payment failed");
-            }
-            summary.succeeded = summary.succeeded.concat(billData.succeeded || []);
-            summary.failed = summary.failed.concat(billData.failed || []);
+          const meta = getAffiliateMeta(payModalRow.publisherName);
+          const method = meta.paymentMethod;
+          const amount = parsePayModalAmount();
+          if (amount === null) {
+            payModalHint.textContent = "Enter a valid amount greater than zero.";
+            return;
           }
 
-          await fetchAffiliateMetadata();
-          setBanner(null, null);
-          renderTable();
+          closePayModal();
+          isPayingAffiliate = true;
           updatePayAllButton();
+          setBanner("loading", "Paying " + payModalRow.publisherName + "...");
+          setWarning(null);
 
-          if (summary.failed.length === 0) {
+          try {
+            const endpoint =
+              method === "Wise"
+                ? "/api/payment/pay/wise/" +
+                  encodeURIComponent(payModalRow.publisherName)
+                : "/api/payment/pay/billcom/" +
+                  encodeURIComponent(payModalRow.publisherName);
+            const res = await fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(buildPayPayload(months, amount)),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || "Payment failed");
+            }
+
+            await fetchAffiliateMetadata();
+            setBanner(null, null);
             showPaymentToast(
-              "Paid " + summary.succeeded.length + " affiliate(s) successfully",
+              "Paid " + payModalRow.publisherName + " " + formatMoney(amount),
               false
             );
-          } else {
-            const failLines = summary.failed
-              .slice(0, 3)
-              .map((item) => item.publisherName + ": " + item.error)
-              .join("; ");
-            const message =
-              "Paid " +
-              summary.succeeded.length +
-              ", failed " +
-              summary.failed.length +
-              (failLines ? " — " + failLines : "");
+            renderTable();
+            updatePayAllButton();
+          } catch (err) {
+            setBanner(null, null);
+            const message = err instanceof Error ? err.message : "Payment failed";
             setWarning(message);
             showPaymentToast(message, true);
+          } finally {
+            isPayingAffiliate = false;
+            updatePayAllButton();
           }
-        } catch (err) {
-          setBanner(null, null);
-          const message =
-            err instanceof Error ? err.message : "Bulk payment failed";
-          setWarning(message);
-          showPaymentToast(message, true);
-        } finally {
-          isBulkPaying = false;
-          updatePayAllButton();
+          return;
         }
+
+        if (payModalMode === "bulk") {
+          closePayModal();
+          isBulkPaying = true;
+          updatePayAllButton();
+          setBanner("loading", "Processing bulk payments...");
+          setWarning(null);
+
+          const summary = { succeeded: [], failed: [] };
+
+          try {
+            if (payModalBulkWiseNames.length > 0) {
+              const wiseRes = await fetch("/api/payment/pay/bulk/wise", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  months,
+                  publisherNames: payModalBulkWiseNames,
+                }),
+              });
+              const wiseData = await wiseRes.json();
+              if (!wiseRes.ok) {
+                throw new Error(wiseData.error || "Wise bulk payment failed");
+              }
+              summary.succeeded = summary.succeeded.concat(wiseData.succeeded || []);
+              summary.failed = summary.failed.concat(wiseData.failed || []);
+            }
+
+            if (payModalBulkBillNames.length > 0) {
+              const billRes = await fetch("/api/payment/pay/bulk/billcom", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  months,
+                  publisherNames: payModalBulkBillNames,
+                }),
+              });
+              const billData = await billRes.json();
+              if (!billRes.ok) {
+                throw new Error(billData.error || "Bill.com bulk payment failed");
+              }
+              summary.succeeded = summary.succeeded.concat(billData.succeeded || []);
+              summary.failed = summary.failed.concat(billData.failed || []);
+            }
+
+            await fetchAffiliateMetadata();
+            setBanner(null, null);
+            renderTable();
+            updatePayAllButton();
+
+            if (summary.failed.length === 0) {
+              showPaymentToast(
+                "Paid " + summary.succeeded.length + " affiliate(s) successfully",
+                false
+              );
+            } else {
+              const failLines = summary.failed
+                .slice(0, 3)
+                .map((item) => item.publisherName + ": " + item.error)
+                .join("; ");
+              const message =
+                "Paid " +
+                summary.succeeded.length +
+                ", failed " +
+                summary.failed.length +
+                (failLines ? " — " + failLines : "");
+              setWarning(message);
+              showPaymentToast(message, true);
+            }
+          } catch (err) {
+            setBanner(null, null);
+            const message =
+              err instanceof Error ? err.message : "Bulk payment failed";
+            setWarning(message);
+            showPaymentToast(message, true);
+          } finally {
+            isBulkPaying = false;
+            updatePayAllButton();
+          }
+        }
+      }
+
+      async function payAffiliate(row) {
+        openPayModalForRow(row);
+      }
+
+      function payAllAffiliates() {
+        openPayModalForBulk();
       }
 
       function buildActionCell(row) {
@@ -2512,6 +2858,20 @@
       });
       payAllBtn.addEventListener("click", () => {
         void payAllAffiliates();
+      });
+      payModalCancel.addEventListener("click", closePayModal);
+      payModalBackdrop.addEventListener("click", closePayModal);
+      payModalConfirm.addEventListener("click", () => {
+        void confirmPayModal();
+      });
+      payModalAmount.addEventListener("input", () => {
+        payAmountUserEdited = true;
+        const months = getSelectedPayMonths();
+        if (months.length > 0 && payModalMode === "single") {
+          payModalHint.textContent =
+            months.length +
+            " month(s) selected — amount manually overridden";
+        }
       });
       monthSelect.addEventListener("change", async () => {
         profitDataMonth = null;

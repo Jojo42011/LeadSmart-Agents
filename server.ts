@@ -20,7 +20,7 @@ import {
   rentalCostsFromNumberCounts,
   PAYMENT_METHODS,
   PAYMENT_TERMS,
-  resolvePublisherPayoutAmount,
+  sumPublisherPayoutAcrossMonths,
   matchWiseRecipientByName,
   matchBillcomVendorByName,
 } from "./agents/paymentAgent";
@@ -742,6 +742,51 @@ function parsePublisherNames(body: unknown): string[] {
     .filter(Boolean);
 }
 
+function parsePayMonths(req: express.Request): string[] {
+  const body = req.body;
+  if (body && typeof body === "object" && Array.isArray((body as { months?: unknown }).months)) {
+    const months = (body as { months: unknown[] }).months
+      .filter((month): month is string => typeof month === "string")
+      .map((month) => month.trim())
+      .filter((month) => /^\d{4}-\d{2}$/.test(month));
+    if (months.length > 0) {
+      return months;
+    }
+  }
+
+  const single = monthFromPayRequest(req);
+  return [single ?? monthToDateRange().month];
+}
+
+function parsePayAmountOverride(req: express.Request): number | undefined {
+  const raw = (req.body as { amount?: unknown } | undefined)?.amount;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.round(raw * 100) / 100;
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = parseFloat(raw.replace(/[$,\s]/g, ""));
+    if (!Number.isNaN(parsed) && parsed > 0) {
+      return Math.round(parsed * 100) / 100;
+    }
+  }
+  return undefined;
+}
+
+async function resolvePayAmount(
+  publisherName: string,
+  req: express.Request
+): Promise<{ amount: number; months: string[] }> {
+  const months = parsePayMonths(req);
+  const override = parsePayAmountOverride(req);
+  if (override !== undefined) {
+    return { amount: override, months };
+  }
+
+  const ranges = months.map((month) => monthToDateRange(month));
+  const amount = await sumPublisherPayoutAcrossMonths(publisherName, ranges);
+  return { amount, months };
+}
+
 app.post("/api/payment/pay/wise/:name", async (req, res) => {
   try {
     const publisherName = decodePublisherParam(req.params.name).trim();
@@ -760,12 +805,7 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       return;
     }
 
-    const range = monthToDateRange(monthFromPayRequest(req));
-    const amount = await resolvePublisherPayoutAmount(
-      publisherName,
-      range.startDate,
-      range.endDate
-    );
+    const { amount } = await resolvePayAmount(publisherName, req);
 
     const profileId = getWiseProfileIdFromEnv();
     const recipients = await getRecipients(profileId);
@@ -818,12 +858,7 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       return;
     }
 
-    const range = monthToDateRange(monthFromPayRequest(req));
-    const amount = await resolvePublisherPayoutAmount(
-      publisherName,
-      range.startDate,
-      range.endDate
-    );
+    const { amount } = await resolvePayAmount(publisherName, req);
 
     const result = await executeBillcomPayout(publisherName, amount);
     markAffiliatePaidIfUnpaid(publisherName);
@@ -851,7 +886,6 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
 
   const succeeded: string[] = [];
   const failed: Array<{ publisherName: string; error: string }> = [];
-  const range = monthToDateRange(monthFromPayRequest(req));
   const profileId = getWiseProfileIdFromEnv();
   const recipients = await getRecipients(profileId);
   const pendingFunds: Array<{ publisherName: string; transferId: number }> = [];
@@ -866,11 +900,7 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
         throw new Error("Affiliate is already marked paid");
       }
 
-      const amount = await resolvePublisherPayoutAmount(
-        publisherName,
-        range.startDate,
-        range.endDate
-      );
+      const { amount } = await resolvePayAmount(publisherName, req);
       const recipient = matchWiseRecipientByName(recipients, publisherName);
       if (!recipient) {
         throw new Error(`No Wise recipient found for ${publisherName}`);
@@ -916,7 +946,6 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
 
   const succeeded: string[] = [];
   const failed: Array<{ publisherName: string; error: string }> = [];
-  const range = monthToDateRange(monthFromPayRequest(req));
   const vendors = await listVendors();
   const billPayments: Array<{ publisherName: string; billId: string; amount: number }> =
     [];
@@ -931,11 +960,7 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
         throw new Error("Affiliate is already marked paid");
       }
 
-      const amount = await resolvePublisherPayoutAmount(
-        publisherName,
-        range.startDate,
-        range.endDate
-      );
+      const { amount } = await resolvePayAmount(publisherName, req);
 
       let vendor = matchBillcomVendorByName(vendors, publisherName);
       if (!vendor) {
