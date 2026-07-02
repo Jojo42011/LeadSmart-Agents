@@ -546,32 +546,55 @@ export async function payBill(
 export async function prepareBillcomPayout(
   publisherName: string,
   amount: number,
-  existingVendors?: BillcomVendor[]
+  options?: { billcomVendorId?: string | null; existingVendors?: BillcomVendor[] }
 ): Promise<{ billId: string; vendorId: string; amount: number }> {
-  const vendors = existingVendors ?? (await listVendors());
-  let vendor =
-    vendors.find(
-      (v) => v.name.trim().toLowerCase() === publisherName.trim().toLowerCase()
-    ) ?? null;
+  const storedId = options?.billcomVendorId?.trim() ?? "";
+  let vendorId: string;
 
-  if (!vendor) {
-    const slug = publisherName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ".")
-      .replace(/^\.+|\.+$/g, "");
-    const email = `${slug || "affiliate"}@leadsmart.payout`;
-    vendor = await createVendor(publisherName, email);
+  if (storedId) {
+    if (!/^009[0-9A-Za-z]+$/.test(storedId)) {
+      throw new Error(
+        `Invalid Bill.com vendor ID for ${publisherName}. IDs start with 009.`
+      );
+    }
+    console.log(
+      "[BillCom] Using stored vendor ID for %s: %s",
+      publisherName,
+      storedId
+    );
+    vendorId = storedId;
+  } else {
+    const vendors = options?.existingVendors ?? (await listVendors());
+    const vendor =
+      vendors.find(
+        (v) => v.name.trim().toLowerCase() === publisherName.trim().toLowerCase()
+      ) ?? null;
+
+    if (!vendor) {
+      throw new Error(
+        `No Bill.com vendor ID mapped for "${publisherName}". ` +
+          "Add the vendor ID (starts with 009) in the edit popup or pay modal."
+      );
+    }
+
+    vendorId = vendor.id;
+    console.log(
+      "[BillCom] Matched vendor by name for %s: %s (%s)",
+      publisherName,
+      vendorId,
+      vendor.name
+    );
   }
 
   const bill = await createBill(
-    vendor.id,
+    vendorId,
     amount,
     `LeadSmart affiliate payout — ${publisherName}`
   );
 
   return {
     billId: bill.id,
-    vendorId: vendor.id,
+    vendorId,
     amount,
   };
 }
@@ -662,7 +685,9 @@ export async function executeBillcomPayout(
   amount: number,
   existingVendors?: BillcomVendor[]
 ): Promise<{ paymentId: string; billId: string; vendorId: string }> {
-  const prepared = await prepareBillcomPayout(publisherName, amount, existingVendors);
+  const prepared = await prepareBillcomPayout(publisherName, amount, {
+    existingVendors,
+  });
   const payment = await payBill(prepared.billId, prepared.vendorId, amount);
 
   return {

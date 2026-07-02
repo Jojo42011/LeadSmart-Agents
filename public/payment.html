@@ -943,6 +943,21 @@
         display: none;
       }
 
+      .pay-modal__vendor-section.hidden {
+        display: none;
+      }
+
+      .pay-modal__vendor-input {
+        width: 100%;
+        padding: 8px 10px;
+        font-family: var(--font);
+        font-size: 13px;
+        color: var(--text);
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.25);
+        box-sizing: border-box;
+      }
+
       .pay-modal__mfa-input {
         width: 100%;
         padding: 10px 12px;
@@ -1109,6 +1124,22 @@
       .metadata-popover select option {
         color: #111;
         background: #fff;
+      }
+
+      .metadata-popover input[type="text"] {
+        width: 100%;
+        margin-bottom: 10px;
+        padding: 6px 8px;
+        font-family: var(--font);
+        font-size: 12px;
+        color: #111;
+        border: 1px solid var(--border);
+        background: #fff;
+        box-sizing: border-box;
+      }
+
+      .metadata-popover__billcom-id.hidden {
+        display: none;
       }
 
       .metadata-popover__actions {
@@ -1301,6 +1332,17 @@
               <label class="pay-modal__section-label" for="payModalAmount">Amount to pay (USD)</label>
               <input class="pay-modal__amount" type="number" id="payModalAmount" min="0.01" step="0.01" />
             </div>
+            <div class="pay-modal__vendor-section hidden" id="payModalVendorSection">
+              <label class="pay-modal__section-label" for="payModalBillcomVendorId">Bill.com Vendor ID</label>
+              <input
+                class="pay-modal__vendor-input"
+                type="text"
+                id="payModalBillcomVendorId"
+                placeholder="009... (from Bill.com vendor page)"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </div>
             <p class="pay-modal__hint" id="payModalHint"></p>
             <div class="pay-modal__mfa-section hidden" id="payModalMfaSection">
               <label class="pay-modal__section-label" for="payModalMfaCode">Bill.com MFA code</label>
@@ -1454,6 +1496,8 @@
       const payModalConfirm = document.getElementById("payModalConfirm");
       const payModalMfaSection = document.getElementById("payModalMfaSection");
       const payModalMfaCode = document.getElementById("payModalMfaCode");
+      const payModalVendorSection = document.getElementById("payModalVendorSection");
+      const payModalBillcomVendorId = document.getElementById("payModalBillcomVendorId");
       const pageSizeControls = document.getElementById("pageSizeControls");
       const paginationInfo = document.getElementById("paginationInfo");
       const prevBtn = document.getElementById("prevBtn");
@@ -1644,8 +1688,49 @@
             isPaid: false,
             paidAt: null,
             updatedAt: null,
+            billcomVendorId: null,
           }
         );
+      }
+
+      function normalizeBillcomVendorIdInput(value) {
+        const trimmed = String(value || "").trim();
+        if (!trimmed) {
+          return "";
+        }
+        if (!/^009[0-9A-Za-z]+$/.test(trimmed)) {
+          return null;
+        }
+        return trimmed;
+      }
+
+      async function saveAffiliateMetadata(
+        publisherName,
+        paymentMethod,
+        paymentTerms,
+        billcomVendorId
+      ) {
+        const payload = {
+          paymentMethod: paymentMethod || "Untagged",
+          paymentTerms: paymentTerms || "Untagged",
+        };
+        if (billcomVendorId !== undefined) {
+          payload.billcomVendorId = billcomVendorId || "";
+        }
+        const res = await fetch(
+          "/api/payment/metadata/" + encodeURIComponent(publisherName),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }
+        );
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to save affiliate metadata");
+        }
+        affiliateMetadataMap[publisherName] = data;
+        return data;
       }
 
       function paymentMethodSlug(method) {
@@ -1738,6 +1823,30 @@
         }
         termsSelect.value = meta.paymentTerms || "Untagged";
 
+        const vendorIdWrap = document.createElement("div");
+        vendorIdWrap.className = "metadata-popover__billcom-id";
+        if ((meta.paymentMethod || "Untagged") !== "Bill.com") {
+          vendorIdWrap.classList.add("hidden");
+        }
+        const vendorIdLabel = document.createElement("label");
+        vendorIdLabel.textContent = "Bill.com Vendor ID";
+        const vendorIdInput = document.createElement("input");
+        vendorIdInput.type = "text";
+        vendorIdInput.placeholder = "009... (paste from Bill.com)";
+        vendorIdInput.value = meta.billcomVendorId || "";
+        vendorIdInput.autocomplete = "off";
+        vendorIdInput.spellcheck = false;
+        vendorIdWrap.appendChild(vendorIdLabel);
+        vendorIdWrap.appendChild(vendorIdInput);
+
+        methodSelect.addEventListener("change", () => {
+          if (methodSelect.value === "Bill.com") {
+            vendorIdWrap.classList.remove("hidden");
+          } else {
+            vendorIdWrap.classList.add("hidden");
+          }
+        });
+
         const actions = document.createElement("div");
         actions.className = "metadata-popover__actions";
         const saveBtn = document.createElement("button");
@@ -1748,21 +1857,20 @@
           e.stopPropagation();
           saveBtn.disabled = true;
           try {
-            const res = await fetch(
-              "/api/payment/metadata/" + encodeURIComponent(publisherName),
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  paymentMethod: methodSelect.value,
-                  paymentTerms: termsSelect.value,
-                }),
+            let billcomVendorId;
+            if (methodSelect.value === "Bill.com") {
+              const parsed = normalizeBillcomVendorIdInput(vendorIdInput.value);
+              if (parsed === null) {
+                throw new Error("Bill.com vendor ID must start with 009");
               }
-            );
-            const data = await res.json();
-            if (!res.ok) {
-              throw new Error(data.error || "Failed to save metadata");
+              billcomVendorId = parsed;
             }
+            const data = await saveAffiliateMetadata(
+              publisherName,
+              methodSelect.value,
+              termsSelect.value,
+              billcomVendorId
+            );
             affiliateMetadataMap[publisherName] = data;
             closeEditPopover();
             renderTable();
@@ -1778,6 +1886,7 @@
         popover.appendChild(methodSelect);
         popover.appendChild(termsLabel);
         popover.appendChild(termsSelect);
+        popover.appendChild(vendorIdWrap);
         popover.appendChild(actions);
         popover.addEventListener("click", (e) => e.stopPropagation());
         anchorTd.appendChild(popover);
@@ -2055,6 +2164,18 @@
         payModalRecalcToken += 1;
         payModalConfirm.disabled = false;
         resetPayModalMfaState();
+        payModalVendorSection.classList.add("hidden");
+        payModalBillcomVendorId.value = "";
+      }
+
+      function syncPayModalBillcomVendorField(method, meta) {
+        if (method === "Bill.com") {
+          payModalVendorSection.classList.remove("hidden");
+          payModalBillcomVendorId.value = meta.billcomVendorId || "";
+        } else {
+          payModalVendorSection.classList.add("hidden");
+          payModalBillcomVendorId.value = "";
+        }
       }
 
       function openPayModalForRow(row) {
@@ -2072,6 +2193,7 @@
         payModalSubtitle.textContent =
           row.publisherName + " via " + method;
         payModalAmountSection.classList.remove("hidden");
+        syncPayModalBillcomVendorField(method, meta);
         renderPayModalMonthOptions(monthSelect.value);
         payModalAmount.value = Number(row.totalAmount || 0).toFixed(2);
         payModalHint.textContent = "";
@@ -2113,10 +2235,13 @@
         return Math.round(parsed * 100) / 100;
       }
 
-      function buildPayPayload(months, amount) {
+      function buildPayPayload(months, amount, billcomVendorId) {
         const payload = { months };
         if (amount !== undefined && amount !== null) {
           payload.amount = amount;
+        }
+        if (billcomVendorId) {
+          payload.billcomVendorId = billcomVendorId;
         }
         return payload;
       }
@@ -2191,6 +2316,22 @@
             return;
           }
 
+          let billcomVendorId = "";
+          if (method === "Bill.com") {
+            const parsed = normalizeBillcomVendorIdInput(payModalBillcomVendorId.value);
+            if (parsed === null) {
+              payModalHint.textContent =
+                "Enter a valid Bill.com vendor ID (starts with 009).";
+              return;
+            }
+            if (!parsed) {
+              payModalHint.textContent =
+                "Bill.com vendor ID is required. Paste the 009... ID from Bill.com.";
+              return;
+            }
+            billcomVendorId = parsed;
+          }
+
           if (method === "Bill.com" && payModalMfaToken) {
             isPayingAffiliate = true;
             updatePayAllButton();
@@ -2221,7 +2362,7 @@
             const res = await fetch(endpoint, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(buildPayPayload(months, amount)),
+              body: JSON.stringify(buildPayPayload(months, amount, billcomVendorId)),
             });
             const data = await res.json();
 

@@ -22,7 +22,6 @@ import {
   PAYMENT_TERMS,
   sumPublisherPayoutAcrossMonths,
   matchWiseRecipientByName,
-  matchBillcomVendorByName,
 } from "./agents/paymentAgent";
 import {
   getRecipients,
@@ -34,8 +33,6 @@ import {
 } from "./lib/wiseClient";
 import {
   listVendors,
-  createVendor,
-  createBill,
   bulkPayBills,
   prepareBillcomPayout,
   payBill,
@@ -643,6 +640,26 @@ function normalizeMetadataTag(value: unknown): string | null {
   return trimmed;
 }
 
+function normalizeBillcomVendorId(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error("Bill.com vendor ID must be a string");
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!/^009[0-9A-Za-z]+$/.test(trimmed)) {
+    throw new Error("Bill.com vendor ID must start with 009");
+  }
+  if (trimmed.length > 64) {
+    throw new Error("Bill.com vendor ID is too long");
+  }
+  return trimmed;
+}
+
 app.get("/api/payment/metadata", (_req, res) => {
   try {
     res.json(getAllAffiliateMetadata());
@@ -664,6 +681,13 @@ app.post("/api/payment/metadata/:name", (req, res) => {
 
     const paymentMethod = normalizeMetadataTag(req.body?.paymentMethod);
     const paymentTerms = normalizeMetadataTag(req.body?.paymentTerms);
+    const existingMeta = affiliateMetadataFor(publisherName);
+    let billcomVendorId: string | null = existingMeta?.billcomVendorId ?? null;
+    if (req.body && typeof req.body === "object" && "billcomVendorId" in req.body) {
+      billcomVendorId = normalizeBillcomVendorId(
+        (req.body as { billcomVendorId?: unknown }).billcomVendorId
+      );
+    }
 
     if (
       paymentMethod !== null &&
@@ -684,14 +708,15 @@ app.post("/api/payment/metadata/:name", (req, res) => {
     const metadata = upsertAffiliateMetadata(
       publisherName,
       paymentMethod,
-      paymentTerms
+      paymentTerms,
+      billcomVendorId
     );
     res.json(metadata);
   } catch (err) {
-    res.status(500).json({
-      error:
-        err instanceof Error ? err.message : "Failed to save affiliate metadata",
-    });
+    const message =
+      err instanceof Error ? err.message : "Failed to save affiliate metadata";
+    const status = message.includes("vendor ID") ? 400 : 500;
+    res.status(status).json({ error: message });
   }
 });
 
@@ -885,7 +910,26 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
     }
 
     const { amount } = await resolvePayAmount(publisherName, req);
-    const prepared = await prepareBillcomPayout(publisherName, amount);
+
+    let billcomVendorId = meta.billcomVendorId?.trim() ?? "";
+    if (typeof req.body?.billcomVendorId === "string" && req.body.billcomVendorId.trim()) {
+      billcomVendorId = normalizeBillcomVendorId(req.body.billcomVendorId) ?? "";
+      if (billcomVendorId !== (meta.billcomVendorId?.trim() ?? "")) {
+        upsertAffiliateMetadata(
+          publisherName,
+          meta.paymentMethod,
+          meta.paymentTerms,
+          billcomVendorId || null
+        );
+        console.log(
+          `[Payment] Saved Bill.com vendor ID for ${publisherName}: ${billcomVendorId}`
+        );
+      }
+    }
+
+    const prepared = await prepareBillcomPayout(publisherName, amount, {
+      billcomVendorId: billcomVendorId || null,
+    });
 
     try {
       const payment = await payBill(prepared.billId, prepared.vendorId, amount);
@@ -1105,28 +1149,14 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
       }
 
       const { amount } = await resolvePayAmount(publisherName, req);
+      const prepared = await prepareBillcomPayout(publisherName, amount, {
+        billcomVendorId: meta.billcomVendorId,
+        existingVendors: vendors,
+      });
 
-      let vendor = matchBillcomVendorByName(vendors, publisherName);
-      if (!vendor) {
-        const slug = publisherName
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, ".")
-          .replace(/^\.+|\.+$/g, "");
-        vendor = await createVendor(
-          publisherName,
-          `${slug || "affiliate"}@leadsmart.payout`
-        );
-        vendors.push(vendor);
-      }
-
-      const bill = await createBill(
-        vendor.id,
-        amount,
-        `LeadSmart affiliate payout — ${publisherName}`
-      );
       billPayments.push({
         publisherName,
-        billId: bill.id,
+        billId: prepared.billId,
         amount,
       });
     } catch (err) {

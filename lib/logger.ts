@@ -24,6 +24,17 @@ export interface ScrubLogEntry {
 
 let db: Database.Database | null = null;
 
+function migrateAffiliateMetadataSchema(database: Database.Database): void {
+  const columns = database
+    .prepare("PRAGMA table_info(affiliate_metadata)")
+    .all() as Array<{ name: string }>;
+  const names = new Set(columns.map((c) => c.name));
+
+  if (!names.has("billcomVendorId")) {
+    database.exec("ALTER TABLE affiliate_metadata ADD COLUMN billcomVendorId TEXT");
+  }
+}
+
 function migrateScrubLogSchema(database: Database.Database): void {
   const columns = database
     .prepare("PRAGMA table_info(scrub_log)")
@@ -84,7 +95,8 @@ function getDb(): Database.Database {
       paymentTerms TEXT,
       isPaid INTEGER DEFAULT 0,
       paidAt TEXT,
-      updatedAt TEXT
+      updatedAt TEXT,
+      billcomVendorId TEXT
     );
 
     CREATE TABLE IF NOT EXISTS billcom_mfa (
@@ -106,6 +118,7 @@ function getDb(): Database.Database {
   }
 
   migrateScrubLogSchema(db);
+  migrateAffiliateMetadataSchema(db);
 
   return db;
 }
@@ -224,6 +237,7 @@ export interface AffiliateMetadata {
   isPaid: boolean;
   paidAt: string | null;
   updatedAt: string | null;
+  billcomVendorId: string | null;
 }
 
 type AffiliateMetadataRow = {
@@ -233,6 +247,7 @@ type AffiliateMetadataRow = {
   isPaid: number;
   paidAt: string | null;
   updatedAt: string | null;
+  billcomVendorId: string | null;
 };
 
 function rowToAffiliateMetadata(row: AffiliateMetadataRow): AffiliateMetadata {
@@ -242,6 +257,7 @@ function rowToAffiliateMetadata(row: AffiliateMetadataRow): AffiliateMetadata {
     isPaid: row.isPaid === 1,
     paidAt: row.paidAt,
     updatedAt: row.updatedAt,
+    billcomVendorId: row.billcomVendorId,
   };
 }
 
@@ -250,7 +266,7 @@ export function getAllAffiliateMetadata(): Record<string, AffiliateMetadata> {
   const database = getDb();
   const rows = database
     .prepare(
-      `SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt
+      `SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId
        FROM affiliate_metadata`
     )
     .all() as AffiliateMetadataRow[];
@@ -262,17 +278,18 @@ export function getAllAffiliateMetadata(): Record<string, AffiliateMetadata> {
   return map;
 }
 
-/** Upserts payment method and terms for one affiliate. */
+/** Upserts payment method, terms, and Bill.com vendor ID for one affiliate. */
 export function upsertAffiliateMetadata(
   publisherName: string,
   paymentMethod: string | null,
-  paymentTerms: string | null
+  paymentTerms: string | null,
+  billcomVendorId: string | null = null
 ): AffiliateMetadata {
   const database = getDb();
   const updatedAt = new Date().toISOString();
   const existing = database
     .prepare(
-      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt FROM affiliate_metadata WHERE publisherName = ?"
+      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId FROM affiliate_metadata WHERE publisherName = ?"
     )
     .get(publisherName) as AffiliateMetadataRow | undefined;
 
@@ -280,23 +297,23 @@ export function upsertAffiliateMetadata(
     database
       .prepare(
         `UPDATE affiliate_metadata
-         SET paymentMethod = ?, paymentTerms = ?, updatedAt = ?
+         SET paymentMethod = ?, paymentTerms = ?, billcomVendorId = ?, updatedAt = ?
          WHERE publisherName = ?`
       )
-      .run(paymentMethod, paymentTerms, updatedAt, publisherName);
+      .run(paymentMethod, paymentTerms, billcomVendorId, updatedAt, publisherName);
   } else {
     database
       .prepare(
         `INSERT INTO affiliate_metadata (
-          publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt
-        ) VALUES (?, ?, ?, 0, NULL, ?)`
+          publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId
+        ) VALUES (?, ?, ?, 0, NULL, ?, ?)`
       )
-      .run(publisherName, paymentMethod, paymentTerms, updatedAt);
+      .run(publisherName, paymentMethod, paymentTerms, updatedAt, billcomVendorId);
   }
 
   const row = database
     .prepare(
-      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt FROM affiliate_metadata WHERE publisherName = ?"
+      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId FROM affiliate_metadata WHERE publisherName = ?"
     )
     .get(publisherName) as AffiliateMetadataRow;
 
@@ -309,7 +326,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
   const updatedAt = new Date().toISOString();
   const existing = database
     .prepare(
-      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt FROM affiliate_metadata WHERE publisherName = ?"
+      "SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId FROM affiliate_metadata WHERE publisherName = ?"
     )
     .get(publisherName) as AffiliateMetadataRow | undefined;
 
@@ -318,8 +335,8 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     database
       .prepare(
         `INSERT INTO affiliate_metadata (
-          publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt
-        ) VALUES (?, NULL, NULL, 1, ?, ?)`
+          publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, billcomVendorId
+        ) VALUES (?, NULL, NULL, 1, ?, ?, NULL)`
       )
       .run(publisherName, paidAt, updatedAt);
 
@@ -329,6 +346,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
       isPaid: true,
       paidAt,
       updatedAt,
+      billcomVendorId: null,
     };
   }
 
@@ -349,6 +367,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     isPaid: nextPaid === 1,
     paidAt,
     updatedAt,
+    billcomVendorId: existing.billcomVendorId,
   };
 }
 
