@@ -1852,6 +1852,7 @@
             billcomAddressZip: null,
             wiseEmail: null,
             wiseTag: null,
+            paymentEmail: null,
           }
         );
       }
@@ -1946,7 +1947,8 @@
         paymentTerms,
         billcomVendorId,
         billcomAch,
-        wiseFields
+        wiseFields,
+        paymentEmail
       ) {
         const payload = {
           paymentMethod: paymentMethod || "Untagged",
@@ -1960,6 +1962,9 @@
         }
         if (wiseFields) {
           Object.assign(payload, wiseFields);
+        }
+        if (paymentEmail !== undefined) {
+          payload.paymentEmail = paymentEmail || "";
         }
         const res = await fetch(
           "/api/payment/metadata/" + encodeURIComponent(publisherName),
@@ -2104,6 +2109,14 @@
           termsSelect.appendChild(opt);
         }
         termsSelect.value = meta.paymentTerms || "Untagged";
+
+        const paymentEmailLabel = document.createElement("label");
+        paymentEmailLabel.textContent = "Payment confirmation email";
+        const paymentEmailInput = document.createElement("input");
+        paymentEmailInput.type = "email";
+        paymentEmailInput.placeholder = "affiliate@example.com (optional)";
+        paymentEmailInput.value = meta.paymentEmail || "";
+        paymentEmailInput.autocomplete = "off";
 
         const vendorIdWrap = document.createElement("div");
         vendorIdWrap.className = "metadata-popover__billcom-section";
@@ -2292,7 +2305,8 @@
               termsSelect.value,
               billcomVendorId,
               billcomAch,
-              wiseFields
+              wiseFields,
+              paymentEmailInput.value.trim()
             );
             affiliateMetadataMap[publisherName] = data;
             closeEditPopover();
@@ -2309,6 +2323,8 @@
         popover.appendChild(methodSelect);
         popover.appendChild(termsLabel);
         popover.appendChild(termsSelect);
+        popover.appendChild(paymentEmailLabel);
+        popover.appendChild(paymentEmailInput);
         popover.appendChild(vendorIdWrap);
         popover.appendChild(wiseWrap);
         popover.appendChild(actions);

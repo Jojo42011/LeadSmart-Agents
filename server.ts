@@ -52,6 +52,7 @@ import {
 } from "./lib/billcomClient";
 import { storePendingBillcomPay, takePendingBillcomPay } from "./lib/billcomPendingPay";
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
+import { sendPaymentConfirmationEmail } from "./lib/paymentEmail";
 
 import http from "http";
 import { handleDeepgramUpgrade } from "./hull/voice/deepgramProxy";
@@ -838,6 +839,69 @@ function parseWiseFieldUpdates(body: unknown): WiseFieldUpdates | null {
   return hasUpdate ? updates : null;
 }
 
+function normalizePaymentEmail(value: string): string {
+  const email = value.trim().toLowerCase();
+  if (!email) {
+    return "";
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("Payment confirmation email must be a valid email address");
+  }
+  return email;
+}
+
+function parsePaymentEmailUpdate(body: unknown): string | null | undefined {
+  if (!body || typeof body !== "object" || !("paymentEmail" in body)) {
+    return undefined;
+  }
+  const value = (body as { paymentEmail?: unknown }).paymentEmail;
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error("Payment confirmation email must be a string");
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return normalizePaymentEmail(trimmed);
+}
+
+function trySendPaymentConfirmation(
+  publisherName: string,
+  amount: number,
+  months: string[],
+  method: "Wise" | "Bill.com"
+): void {
+  void (async () => {
+    const meta = affiliateMetadataFor(publisherName);
+    const email = meta?.paymentEmail?.trim();
+    if (!email) {
+      console.log(`[Payment] No confirmation email for ${publisherName}, skipping`);
+      return;
+    }
+
+    try {
+      await sendPaymentConfirmationEmail({
+        publisherName,
+        email,
+        amount,
+        months,
+        method,
+      });
+      console.log(
+        `[Payment] Confirmation email sent to ${email} for ${publisherName}`
+      );
+    } catch (err) {
+      console.error(
+        `[Payment] Confirmation email failed for ${publisherName}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  })();
+}
+
 function wiseDetailsFromMetadata(meta: AffiliateMetadata | null): {
   wiseEmail: string | null;
   wiseTag: string | null;
@@ -1016,13 +1080,27 @@ app.post("/api/payment/metadata/:name", (req, res) => {
       return;
     }
 
+    let paymentEmail: string | null | undefined;
+    try {
+      paymentEmail = parsePaymentEmailUpdate(req.body);
+    } catch (emailErr) {
+      res.status(400).json({
+        error:
+          emailErr instanceof Error
+            ? emailErr.message
+            : "Invalid payment confirmation email",
+      });
+      return;
+    }
+
     const metadata = upsertAffiliateMetadata(
       publisherName,
       paymentMethod,
       paymentTerms,
       billcomVendorId,
       billcomAch,
-      wiseFields
+      wiseFields,
+      paymentEmail
     );
     res.json(metadata);
   } catch (err) {
@@ -1234,6 +1312,7 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       target
     );
     markAffiliatePaidIfUnpaid(publisherName, months);
+    trySendPaymentConfirmation(publisherName, amount, months, "Wise");
 
     console.log(
       `[Payment] Wise pay success: ${publisherName} transferId=${payout.transferId} amount=${amount}`
@@ -1340,6 +1419,7 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
         newBankAccount: prepared.vendorCreated,
       });
       markAffiliatePaidIfUnpaid(publisherName, months);
+      trySendPaymentConfirmation(publisherName, amount, months, "Bill.com");
 
       console.log(
         `[Payment] Bill.com pay success: ${publisherName} paymentId=${payment.id} amount=${amount}`
@@ -1438,6 +1518,12 @@ app.post("/api/payment/billcom/mfa/verify", async (req, res) => {
       { newBankAccount: pending.newBankAccount }
     );
     markAffiliatePaidIfUnpaid(pending.publisherName, pending.months);
+    trySendPaymentConfirmation(
+      pending.publisherName,
+      pending.amount,
+      pending.months,
+      "Bill.com"
+    );
 
     console.log(
       `[Payment] Bill.com pay success after MFA: ${pending.publisherName} paymentId=${payment.id} amount=${pending.amount}`
@@ -1477,7 +1563,11 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
   const failed: Array<{ publisherName: string; error: string }> = [];
   const profileId = getWiseProfileIdFromEnv();
   const recipients = await getRecipients(profileId);
-  const pendingFunds: Array<{ publisherName: string; transferId: number }> = [];
+  const pendingFunds: Array<{
+    publisherName: string;
+    transferId: number;
+    amount: number;
+  }> = [];
 
   for (const publisherName of publisherNames) {
     try {
@@ -1503,7 +1593,11 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
         "LeadSmart Affiliate Payout",
         target
       );
-      pendingFunds.push({ publisherName, transferId: transfer.transferId });
+      pendingFunds.push({
+        publisherName,
+        transferId: transfer.transferId,
+        amount,
+      });
     } catch (err) {
       failed.push({
         publisherName,
@@ -1516,6 +1610,12 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
     try {
       await fundTransfer(profileId, pending.transferId);
       markAffiliatePaidIfUnpaid(pending.publisherName, months);
+      trySendPaymentConfirmation(
+        pending.publisherName,
+        pending.amount,
+        months,
+        "Wise"
+      );
       succeeded.push(pending.publisherName);
     } catch (err) {
       failed.push({
@@ -1602,6 +1702,12 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
   for (const item of billPayments) {
     if (paidBillIds.has(item.billId)) {
       markAffiliatePaidIfUnpaid(item.publisherName, months);
+      trySendPaymentConfirmation(
+        item.publisherName,
+        item.amount,
+        months,
+        "Bill.com"
+      );
       succeeded.push(item.publisherName);
     } else {
       const bulkFailure = bulkResult.failed.find(

@@ -56,6 +56,9 @@ function migrateAffiliateMetadataSchema(database: Database.Database): void {
       database.exec(`ALTER TABLE affiliate_metadata ADD COLUMN ${column} TEXT`);
     }
   }
+  if (!names.has("paymentEmail")) {
+    database.exec("ALTER TABLE affiliate_metadata ADD COLUMN paymentEmail TEXT");
+  }
 }
 
 function migrateScrubLogSchema(database: Database.Database): void {
@@ -326,6 +329,7 @@ export interface AffiliateMetadata {
   billcomAddressZip: string | null;
   wiseEmail: string | null;
   wiseTag: string | null;
+  paymentEmail: string | null;
 }
 
 export type BillcomAchFieldUpdates = {
@@ -362,6 +366,7 @@ type AffiliateMetadataRow = {
   billcomAddressZip: string | null;
   wiseEmail: string | null;
   wiseTag: string | null;
+  paymentEmail: string | null;
 };
 
 const AFFILIATE_METADATA_SELECT =
@@ -369,7 +374,7 @@ const AFFILIATE_METADATA_SELECT =
           billcomVendorId, billcomPayeeName, billcomAccountHolderName,
           billcomRoutingNumber, billcomAccountNumber, billcomAddressLine1,
           billcomAddressCity, billcomAddressState, billcomAddressZip,
-          wiseEmail, wiseTag
+          wiseEmail, wiseTag, paymentEmail
    FROM affiliate_metadata`;
 
 function loadPaidMonthsMap(
@@ -413,6 +418,7 @@ function rowToAffiliateMetadata(
     billcomAddressZip: row.billcomAddressZip,
     wiseEmail: row.wiseEmail,
     wiseTag: row.wiseTag,
+    paymentEmail: row.paymentEmail,
   };
 }
 
@@ -536,7 +542,8 @@ export function upsertAffiliateMetadata(
   paymentTerms: string | null,
   billcomVendorId: string | null = null,
   billcomAch: BillcomAchFieldUpdates | null = null,
-  wiseFields: WiseFieldUpdates | null = null
+  wiseFields: WiseFieldUpdates | null = null,
+  paymentEmail: string | null | undefined = undefined
 ): AffiliateMetadata {
   const database = getDb();
   const updatedAt = new Date().toISOString();
@@ -606,6 +613,9 @@ export function upsertAffiliateMetadata(
         wiseTag: existing?.wiseTag ?? null,
       };
 
+  const nextPaymentEmail =
+    paymentEmail !== undefined ? paymentEmail : existing?.paymentEmail ?? null;
+
   if (existing) {
     database
       .prepare(
@@ -615,7 +625,7 @@ export function upsertAffiliateMetadata(
              billcomRoutingNumber = ?, billcomAccountNumber = ?,
              billcomAddressLine1 = ?, billcomAddressCity = ?,
              billcomAddressState = ?, billcomAddressZip = ?,
-             wiseEmail = ?, wiseTag = ?,
+             wiseEmail = ?, wiseTag = ?, paymentEmail = ?,
              updatedAt = ?
          WHERE publisherName = ?`
       )
@@ -633,6 +643,7 @@ export function upsertAffiliateMetadata(
         nextAch.billcomAddressZip,
         nextWise.wiseEmail,
         nextWise.wiseTag,
+        nextPaymentEmail,
         updatedAt,
         publisherName
       );
@@ -644,8 +655,8 @@ export function upsertAffiliateMetadata(
           billcomVendorId, billcomPayeeName, billcomAccountHolderName,
           billcomRoutingNumber, billcomAccountNumber, billcomAddressLine1,
           billcomAddressCity, billcomAddressState, billcomAddressZip,
-          wiseEmail, wiseTag
-        ) VALUES (?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          wiseEmail, wiseTag, paymentEmail
+        ) VALUES (?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         publisherName,
@@ -662,7 +673,8 @@ export function upsertAffiliateMetadata(
         nextAch.billcomAddressState,
         nextAch.billcomAddressZip,
         nextWise.wiseEmail,
-        nextWise.wiseTag
+        nextWise.wiseTag,
+        nextPaymentEmail
       );
   }
 
@@ -745,6 +757,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
       billcomAddressZip: null,
       wiseEmail: null,
       wiseTag: null,
+      paymentEmail: null,
     };
   }
 
@@ -778,6 +791,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     billcomAddressZip: existing.billcomAddressZip,
     wiseEmail: existing.wiseEmail,
     wiseTag: existing.wiseTag,
+    paymentEmail: existing.paymentEmail,
   };
 }
 
