@@ -35,6 +35,8 @@ const BILLCOM_ACH_COLUMNS = [
   "billcomAddressZip",
 ] as const;
 
+const WISE_IDENTIFIER_COLUMNS = ["wiseEmail", "wiseTag"] as const;
+
 function migrateAffiliateMetadataSchema(database: Database.Database): void {
   const columns = database
     .prepare("PRAGMA table_info(affiliate_metadata)")
@@ -45,6 +47,11 @@ function migrateAffiliateMetadataSchema(database: Database.Database): void {
     database.exec("ALTER TABLE affiliate_metadata ADD COLUMN billcomVendorId TEXT");
   }
   for (const column of BILLCOM_ACH_COLUMNS) {
+    if (!names.has(column)) {
+      database.exec(`ALTER TABLE affiliate_metadata ADD COLUMN ${column} TEXT`);
+    }
+  }
+  for (const column of WISE_IDENTIFIER_COLUMNS) {
     if (!names.has(column)) {
       database.exec(`ALTER TABLE affiliate_metadata ADD COLUMN ${column} TEXT`);
     }
@@ -121,6 +128,16 @@ function getDb(): Database.Database {
       mfaId TEXT NOT NULL,
       updatedAt TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS affiliate_paid_months (
+      publisherName TEXT NOT NULL,
+      month TEXT NOT NULL,
+      paidAt TEXT NOT NULL,
+      PRIMARY KEY (publisherName, month)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_affiliate_paid_months_month
+      ON affiliate_paid_months (month);
   `);
 
   const row = db
@@ -135,8 +152,51 @@ function getDb(): Database.Database {
 
   migrateScrubLogSchema(db);
   migrateAffiliateMetadataSchema(db);
+  migrateLegacyPaidToMonths(db);
 
   return db;
+}
+
+const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
+
+function monthKeyFromIso(iso: string): string | null {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  if (!year || !month) {
+    return null;
+  }
+  return `${year}-${month}`;
+}
+
+/** One-time backfill: global isPaid rows → affiliate_paid_months by paidAt month. */
+function migrateLegacyPaidToMonths(database: Database.Database): void {
+  const rows = database
+    .prepare(
+      `SELECT publisherName, paidAt FROM affiliate_metadata
+       WHERE isPaid = 1 AND paidAt IS NOT NULL`
+    )
+    .all() as Array<{ publisherName: string; paidAt: string }>;
+
+  const insert = database.prepare(
+    `INSERT OR IGNORE INTO affiliate_paid_months (publisherName, month, paidAt)
+     VALUES (?, ?, ?)`
+  );
+
+  for (const row of rows) {
+    const month = monthKeyFromIso(row.paidAt);
+    if (month) {
+      insert.run(row.publisherName, month, row.paidAt);
+    }
+  }
 }
 
 /** Ensures tables/columns exist (call on app startup). */
@@ -250,6 +310,8 @@ export function setLastSuccessfulPollAt(isoTimestamp: string): void {
 export interface AffiliateMetadata {
   paymentMethod: string | null;
   paymentTerms: string | null;
+  /** Paid months keyed by YYYY-MM → paidAt ISO timestamp. */
+  paidMonths: Record<string, string>;
   isPaid: boolean;
   paidAt: string | null;
   updatedAt: string | null;
@@ -262,6 +324,8 @@ export interface AffiliateMetadata {
   billcomAddressCity: string | null;
   billcomAddressState: string | null;
   billcomAddressZip: string | null;
+  wiseEmail: string | null;
+  wiseTag: string | null;
 }
 
 export type BillcomAchFieldUpdates = {
@@ -273,6 +337,11 @@ export type BillcomAchFieldUpdates = {
   billcomAddressCity?: string | null;
   billcomAddressState?: string | null;
   billcomAddressZip?: string | null;
+};
+
+export type WiseFieldUpdates = {
+  wiseEmail?: string | null;
+  wiseTag?: string | null;
 };
 
 type AffiliateMetadataRow = {
@@ -291,19 +360,45 @@ type AffiliateMetadataRow = {
   billcomAddressCity: string | null;
   billcomAddressState: string | null;
   billcomAddressZip: string | null;
+  wiseEmail: string | null;
+  wiseTag: string | null;
 };
 
 const AFFILIATE_METADATA_SELECT =
   `SELECT publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt,
           billcomVendorId, billcomPayeeName, billcomAccountHolderName,
           billcomRoutingNumber, billcomAccountNumber, billcomAddressLine1,
-          billcomAddressCity, billcomAddressState, billcomAddressZip
+          billcomAddressCity, billcomAddressState, billcomAddressZip,
+          wiseEmail, wiseTag
    FROM affiliate_metadata`;
 
-function rowToAffiliateMetadata(row: AffiliateMetadataRow): AffiliateMetadata {
+function loadPaidMonthsMap(
+  database: Database.Database
+): Record<string, Record<string, string>> {
+  const rows = database
+    .prepare(
+      `SELECT publisherName, month, paidAt FROM affiliate_paid_months ORDER BY month`
+    )
+    .all() as Array<{ publisherName: string; month: string; paidAt: string }>;
+
+  const map: Record<string, Record<string, string>> = {};
+  for (const row of rows) {
+    if (!map[row.publisherName]) {
+      map[row.publisherName] = {};
+    }
+    map[row.publisherName][row.month] = row.paidAt;
+  }
+  return map;
+}
+
+function rowToAffiliateMetadata(
+  row: AffiliateMetadataRow,
+  paidMonths: Record<string, string> = {}
+): AffiliateMetadata {
   return {
     paymentMethod: row.paymentMethod,
     paymentTerms: row.paymentTerms,
+    paidMonths,
     isPaid: row.isPaid === 1,
     paidAt: row.paidAt,
     updatedAt: row.updatedAt,
@@ -316,21 +411,122 @@ function rowToAffiliateMetadata(row: AffiliateMetadataRow): AffiliateMetadata {
     billcomAddressCity: row.billcomAddressCity,
     billcomAddressState: row.billcomAddressState,
     billcomAddressZip: row.billcomAddressZip,
+    wiseEmail: row.wiseEmail,
+    wiseTag: row.wiseTag,
   };
 }
 
 /** Returns all affiliate metadata keyed by publisher name. */
 export function getAllAffiliateMetadata(): Record<string, AffiliateMetadata> {
   const database = getDb();
+  const paidByPublisher = loadPaidMonthsMap(database);
   const rows = database
     .prepare(`${AFFILIATE_METADATA_SELECT}`)
     .all() as AffiliateMetadataRow[];
 
   const map: Record<string, AffiliateMetadata> = {};
   for (const row of rows) {
-    map[row.publisherName] = rowToAffiliateMetadata(row);
+    map[row.publisherName] = rowToAffiliateMetadata(
+      row,
+      paidByPublisher[row.publisherName] ?? {}
+    );
   }
   return map;
+}
+
+export function isAffiliatePaidForMonth(
+  publisherName: string,
+  month: string
+): boolean {
+  if (!MONTH_KEY_RE.test(month)) {
+    return false;
+  }
+  const database = getDb();
+  const row = database
+    .prepare(
+      `SELECT 1 FROM affiliate_paid_months
+       WHERE publisherName = ? AND month = ? LIMIT 1`
+    )
+    .get(publisherName, month);
+  return row !== undefined;
+}
+
+export function getAffiliatePaidAtForMonth(
+  publisherName: string,
+  month: string
+): string | null {
+  if (!MONTH_KEY_RE.test(month)) {
+    return null;
+  }
+  const database = getDb();
+  const row = database
+    .prepare(
+      `SELECT paidAt FROM affiliate_paid_months
+       WHERE publisherName = ? AND month = ?`
+    )
+    .get(publisherName, month) as { paidAt: string } | undefined;
+  return row?.paidAt ?? null;
+}
+
+/** Marks an affiliate paid for one or more YYYY-MM months (skips already-paid months). */
+export function markAffiliatePaidForMonths(
+  publisherName: string,
+  months: string[]
+): void {
+  const database = getDb();
+  const uniqueMonths = [...new Set(months.filter((m) => MONTH_KEY_RE.test(m)))];
+  if (uniqueMonths.length === 0) {
+    return;
+  }
+
+  const paidAt = new Date().toISOString();
+  const insert = database.prepare(
+    `INSERT OR IGNORE INTO affiliate_paid_months (publisherName, month, paidAt)
+     VALUES (?, ?, ?)`
+  );
+
+  for (const month of uniqueMonths) {
+    insert.run(publisherName, month, paidAt);
+  }
+}
+
+/** Toggles paid status for one affiliate for a specific month. */
+export function toggleAffiliatePaidForMonth(
+  publisherName: string,
+  month: string
+): { paid: boolean; paidAt: string | null; paidMonths: Record<string, string> } {
+  if (!MONTH_KEY_RE.test(month)) {
+    throw new Error("month must be YYYY-MM");
+  }
+
+  const database = getDb();
+  const existing = database
+    .prepare(
+      `SELECT paidAt FROM affiliate_paid_months
+       WHERE publisherName = ? AND month = ?`
+    )
+    .get(publisherName, month) as { paidAt: string } | undefined;
+
+  if (existing) {
+    database
+      .prepare(
+        `DELETE FROM affiliate_paid_months WHERE publisherName = ? AND month = ?`
+      )
+      .run(publisherName, month);
+  } else {
+    const paidAt = new Date().toISOString();
+    database
+      .prepare(
+        `INSERT INTO affiliate_paid_months (publisherName, month, paidAt)
+         VALUES (?, ?, ?)`
+      )
+      .run(publisherName, month, paidAt);
+  }
+
+  const paidByPublisher = loadPaidMonthsMap(database);
+  const paidMonths = paidByPublisher[publisherName] ?? {};
+  const paidAt = paidMonths[month] ?? null;
+  return { paid: paidAt !== null, paidAt, paidMonths };
 }
 
 /** Upserts payment method, terms, Bill.com vendor ID, and optional ACH fields. */
@@ -339,7 +535,8 @@ export function upsertAffiliateMetadata(
   paymentMethod: string | null,
   paymentTerms: string | null,
   billcomVendorId: string | null = null,
-  billcomAch: BillcomAchFieldUpdates | null = null
+  billcomAch: BillcomAchFieldUpdates | null = null,
+  wiseFields: WiseFieldUpdates | null = null
 ): AffiliateMetadata {
   const database = getDb();
   const updatedAt = new Date().toISOString();
@@ -393,6 +590,22 @@ export function upsertAffiliateMetadata(
         billcomAddressZip: existing?.billcomAddressZip ?? null,
       };
 
+  const nextWise = wiseFields
+    ? {
+        wiseEmail:
+          wiseFields.wiseEmail !== undefined
+            ? wiseFields.wiseEmail
+            : existing?.wiseEmail ?? null,
+        wiseTag:
+          wiseFields.wiseTag !== undefined
+            ? wiseFields.wiseTag
+            : existing?.wiseTag ?? null,
+      }
+    : {
+        wiseEmail: existing?.wiseEmail ?? null,
+        wiseTag: existing?.wiseTag ?? null,
+      };
+
   if (existing) {
     database
       .prepare(
@@ -402,6 +615,7 @@ export function upsertAffiliateMetadata(
              billcomRoutingNumber = ?, billcomAccountNumber = ?,
              billcomAddressLine1 = ?, billcomAddressCity = ?,
              billcomAddressState = ?, billcomAddressZip = ?,
+             wiseEmail = ?, wiseTag = ?,
              updatedAt = ?
          WHERE publisherName = ?`
       )
@@ -417,6 +631,8 @@ export function upsertAffiliateMetadata(
         nextAch.billcomAddressCity,
         nextAch.billcomAddressState,
         nextAch.billcomAddressZip,
+        nextWise.wiseEmail,
+        nextWise.wiseTag,
         updatedAt,
         publisherName
       );
@@ -427,8 +643,9 @@ export function upsertAffiliateMetadata(
           publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt,
           billcomVendorId, billcomPayeeName, billcomAccountHolderName,
           billcomRoutingNumber, billcomAccountNumber, billcomAddressLine1,
-          billcomAddressCity, billcomAddressState, billcomAddressZip
-        ) VALUES (?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          billcomAddressCity, billcomAddressState, billcomAddressZip,
+          wiseEmail, wiseTag
+        ) VALUES (?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         publisherName,
@@ -443,7 +660,9 @@ export function upsertAffiliateMetadata(
         nextAch.billcomAddressLine1,
         nextAch.billcomAddressCity,
         nextAch.billcomAddressState,
-        nextAch.billcomAddressZip
+        nextAch.billcomAddressZip,
+        nextWise.wiseEmail,
+        nextWise.wiseTag
       );
   }
 
@@ -451,7 +670,8 @@ export function upsertAffiliateMetadata(
     .prepare(`${AFFILIATE_METADATA_SELECT} WHERE publisherName = ?`)
     .get(publisherName) as AffiliateMetadataRow;
 
-  return rowToAffiliateMetadata(row);
+  const paidByPublisher = loadPaidMonthsMap(database);
+  return rowToAffiliateMetadata(row, paidByPublisher[publisherName] ?? {});
 }
 
 /** Updates only the Bill.com vendor ID, preserving other metadata. */
@@ -485,10 +705,11 @@ export function setAffiliateBillcomVendorId(
     .prepare(`${AFFILIATE_METADATA_SELECT} WHERE publisherName = ?`)
     .get(publisherName) as AffiliateMetadataRow;
 
-  return rowToAffiliateMetadata(row);
+  const paidByPublisher = loadPaidMonthsMap(database);
+  return rowToAffiliateMetadata(row, paidByPublisher[publisherName] ?? {});
 }
 
-/** Toggles paid status for one affiliate; sets paidAt when marking paid. */
+/** @deprecated Use toggleAffiliatePaidForMonth — legacy global toggle. */
 export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
   const database = getDb();
   const updatedAt = new Date().toISOString();
@@ -509,6 +730,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     return {
       paymentMethod: null,
       paymentTerms: null,
+      paidMonths: {},
       isPaid: true,
       paidAt,
       updatedAt,
@@ -521,6 +743,8 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
       billcomAddressCity: null,
       billcomAddressState: null,
       billcomAddressZip: null,
+      wiseEmail: null,
+      wiseTag: null,
     };
   }
 
@@ -535,9 +759,11 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     )
     .run(nextPaid, paidAt, updatedAt, publisherName);
 
+  const paidByPublisher = loadPaidMonthsMap(database);
   return {
     paymentMethod: existing.paymentMethod,
     paymentTerms: existing.paymentTerms,
+    paidMonths: paidByPublisher[publisherName] ?? {},
     isPaid: nextPaid === 1,
     paidAt,
     updatedAt,
@@ -550,6 +776,8 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     billcomAddressCity: existing.billcomAddressCity,
     billcomAddressState: existing.billcomAddressState,
     billcomAddressZip: existing.billcomAddressZip,
+    wiseEmail: existing.wiseEmail,
+    wiseTag: existing.wiseTag,
   };
 }
 

@@ -6,10 +6,13 @@ import {
   ensureScrubLogSchema,
   getAllAffiliateMetadata,
   upsertAffiliateMetadata,
-  toggleAffiliatePaid,
+  toggleAffiliatePaidForMonth,
+  markAffiliatePaidForMonths,
+  isAffiliatePaidForMonth,
   setAffiliateBillcomVendorId,
   type AffiliateMetadata,
   type BillcomAchFieldUpdates,
+  type WiseFieldUpdates,
 } from "./lib/logger";
 import { getDataDir, getDbPath, getPublicDir } from "./lib/paths";
 import { importDatabaseFile } from "./lib/importDatabase";
@@ -29,10 +32,12 @@ import {
 import {
   getRecipients,
   executeWisePayout,
-  getWiseProfileIdFromEnv,
-  createQuote,
-  createTransfer,
+  prepareWiseTransfer,
   fundTransfer,
+  getWiseProfileIdFromEnv,
+  resolveWiseIdentifier,
+  resolveWisePayoutTarget,
+  type WiseRecipient,
 } from "./lib/wiseClient";
 import {
   bulkPayBills,
@@ -788,6 +793,103 @@ function parseBillcomAchUpdates(
   return hasUpdate ? updates : null;
 }
 
+function normalizeWiseEmail(value: string): string {
+  const email = value.trim().toLowerCase();
+  if (!email) {
+    return "";
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("Wise email must be a valid email address");
+  }
+  return email;
+}
+
+function normalizeWiseTag(value: string): string {
+  const tag = value.trim().replace(/^@+/, "");
+  if (!tag) {
+    return "";
+  }
+  if (!/^[a-zA-Z0-9._-]{3,30}$/.test(tag)) {
+    throw new Error("Wise tag must be 3–30 characters (letters, numbers, . _ -)");
+  }
+  return tag;
+}
+
+function parseWiseFieldUpdates(body: unknown): WiseFieldUpdates | null {
+  if (!body || typeof body !== "object") {
+    return null;
+  }
+
+  const updates: WiseFieldUpdates = {};
+  let hasUpdate = false;
+
+  const emailRaw = readOptionalString(body, "wiseEmail");
+  if (emailRaw !== undefined) {
+    updates.wiseEmail = emailRaw ? normalizeWiseEmail(emailRaw) : null;
+    hasUpdate = true;
+  }
+
+  const tagRaw = readOptionalString(body, "wiseTag");
+  if (tagRaw !== undefined) {
+    updates.wiseTag = tagRaw ? normalizeWiseTag(tagRaw) : null;
+    hasUpdate = true;
+  }
+
+  return hasUpdate ? updates : null;
+}
+
+function wiseDetailsFromMetadata(meta: AffiliateMetadata | null): {
+  wiseEmail: string | null;
+  wiseTag: string | null;
+} {
+  return {
+    wiseEmail: meta?.wiseEmail ?? null,
+    wiseTag: meta?.wiseTag ?? null,
+  };
+}
+
+function resolveWiseFieldsForPay(
+  meta: AffiliateMetadata | null,
+  body: unknown
+): { wiseEmail: string | null; wiseTag: string | null } {
+  const merged = wiseDetailsFromMetadata(meta);
+
+  const emailRaw = readOptionalString(body, "wiseEmail");
+  if (emailRaw !== undefined) {
+    merged.wiseEmail = emailRaw ? normalizeWiseEmail(emailRaw) : null;
+  }
+
+  const tagRaw = readOptionalString(body, "wiseTag");
+  if (tagRaw !== undefined) {
+    merged.wiseTag = tagRaw ? normalizeWiseTag(tagRaw) : null;
+  }
+
+  return merged;
+}
+
+async function resolveWisePayoutForAffiliate(
+  profileId: string,
+  recipients: WiseRecipient[],
+  meta: AffiliateMetadata | null,
+  publisherName: string,
+  body: unknown
+) {
+  const { wiseEmail, wiseTag } = resolveWiseFieldsForPay(meta, body);
+
+  if (resolveWiseIdentifier(wiseEmail, wiseTag)) {
+    return resolveWisePayoutTarget(profileId, recipients, wiseEmail, wiseTag);
+  }
+
+  const byName = matchWiseRecipientByName(recipients, publisherName);
+  if (byName) {
+    return { recipientId: byName.id, resolvedVia: "recipient" as const };
+  }
+
+  throw new Error(
+    "Add Wise email or Wise tag in affiliate settings (no bank details needed for Wise-to-Wise USD payouts)"
+  );
+}
+
 function resolveBillcomAchForPay(
   meta: AffiliateMetadata | null,
   body: unknown
@@ -871,6 +973,33 @@ app.post("/api/payment/metadata/:name", (req, res) => {
       return;
     }
 
+    let wiseFields: WiseFieldUpdates | null = null;
+    try {
+      wiseFields = parseWiseFieldUpdates(req.body);
+    } catch (wiseErr) {
+      res.status(400).json({
+        error: wiseErr instanceof Error ? wiseErr.message : "Invalid Wise details",
+      });
+      return;
+    }
+
+    if (paymentMethod === "Wise") {
+      const nextEmail =
+        wiseFields?.wiseEmail !== undefined
+          ? wiseFields.wiseEmail
+          : existingMeta?.wiseEmail ?? null;
+      const nextTag =
+        wiseFields?.wiseTag !== undefined
+          ? wiseFields.wiseTag
+          : existingMeta?.wiseTag ?? null;
+      if (!resolveWiseIdentifier(nextEmail, nextTag)) {
+        res.status(400).json({
+          error: "Wise email or Wise tag is required when payment method is Wise",
+        });
+        return;
+      }
+    }
+
     if (
       paymentMethod !== null &&
       !(PAYMENT_METHODS as readonly string[]).includes(paymentMethod)
@@ -892,7 +1021,8 @@ app.post("/api/payment/metadata/:name", (req, res) => {
       paymentMethod,
       paymentTerms,
       billcomVendorId,
-      billcomAch
+      billcomAch,
+      wiseFields
     );
     res.json(metadata);
   } catch (err) {
@@ -911,8 +1041,41 @@ app.post("/api/payment/mark-paid/:name", (req, res) => {
       return;
     }
 
-    const metadata = toggleAffiliatePaid(publisherName);
-    res.json(metadata);
+    const monthRaw =
+      typeof req.body?.month === "string" && req.body.month.trim()
+        ? req.body.month.trim()
+        : typeof req.query.month === "string" && req.query.month.trim()
+          ? req.query.month.trim()
+          : monthToDateRange().month;
+
+    if (!/^\d{4}-\d{2}$/.test(monthRaw)) {
+      res.status(400).json({ error: "Invalid month (expected YYYY-MM)" });
+      return;
+    }
+
+    const result = toggleAffiliatePaidForMonth(publisherName, monthRaw);
+    const meta = affiliateMetadataFor(publisherName);
+    res.json({
+      ...(meta ?? {
+        paymentMethod: null,
+        paymentTerms: null,
+        billcomVendorId: null,
+        billcomPayeeName: null,
+        billcomAccountHolderName: null,
+        billcomRoutingNumber: null,
+        billcomAccountNumber: null,
+        billcomAddressLine1: null,
+        billcomAddressCity: null,
+        billcomAddressState: null,
+        billcomAddressZip: null,
+        isPaid: false,
+        paidAt: null,
+        updatedAt: null,
+      }),
+      paidMonths: result.paidMonths,
+      isPaid: result.paid,
+      paidAt: result.paidAt,
+    });
   } catch (err) {
     res.status(500).json({
       error:
@@ -935,11 +1098,21 @@ function affiliateMetadataFor(name: string) {
   return getAllAffiliateMetadata()[name] ?? null;
 }
 
-function markAffiliatePaidIfUnpaid(publisherName: string): void {
-  const meta = affiliateMetadataFor(publisherName);
-  if (!meta?.isPaid) {
-    toggleAffiliatePaid(publisherName);
+function markAffiliatePaidIfUnpaid(
+  publisherName: string,
+  months: string[]
+): void {
+  markAffiliatePaidForMonths(publisherName, months);
+}
+
+function isAffiliatePaidForAllMonths(
+  publisherName: string,
+  months: string[]
+): boolean {
+  if (months.length === 0) {
+    return false;
   }
+  return months.every((month) => isAffiliatePaidForMonth(publisherName, month));
 }
 
 function parsePublisherNames(body: unknown): string[] {
@@ -1020,8 +1193,10 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       res.status(400).json({ error: "Affiliate is not tagged for Wise payments" });
       return;
     }
-    if (meta.isPaid) {
-      res.status(400).json({ error: "Affiliate is already marked paid" });
+    if (isAffiliatePaidForAllMonths(publisherName, months)) {
+      res.status(400).json({
+        error: "Affiliate is already marked paid for the selected month(s)",
+      });
       return;
     }
 
@@ -1029,21 +1204,36 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
 
     const profileId = getWiseProfileIdFromEnv();
     const recipients = await getRecipients(profileId);
-    const recipient = matchWiseRecipientByName(recipients, publisherName);
-    if (!recipient) {
-      res.status(404).json({
-        error: `No Wise recipient found for ${publisherName}`,
-      });
-      return;
+    const target = await resolveWisePayoutForAffiliate(
+      profileId,
+      recipients,
+      meta,
+      publisherName,
+      req.body
+    );
+
+    const { wiseEmail, wiseTag } = resolveWiseFieldsForPay(meta, req.body);
+    if (
+      wiseEmail !== meta.wiseEmail ||
+      wiseTag !== meta.wiseTag
+    ) {
+      upsertAffiliateMetadata(
+        publisherName,
+        meta.paymentMethod,
+        meta.paymentTerms,
+        meta.billcomVendorId,
+        null,
+        { wiseEmail, wiseTag }
+      );
     }
 
     const payout = await executeWisePayout(
       profileId,
-      recipient.id,
       amount,
-      "LeadSmart Affiliate Payout"
+      "LeadSmart Affiliate Payout",
+      target
     );
-    markAffiliatePaidIfUnpaid(publisherName);
+    markAffiliatePaidIfUnpaid(publisherName, months);
 
     console.log(
       `[Payment] Wise pay success: ${publisherName} transferId=${payout.transferId} amount=${amount}`
@@ -1087,8 +1277,10 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       });
       return;
     }
-    if (meta.isPaid) {
-      res.status(400).json({ error: "Affiliate is already marked paid" });
+    if (isAffiliatePaidForAllMonths(publisherName, months)) {
+      res.status(400).json({
+        error: "Affiliate is already marked paid for the selected month(s)",
+      });
       return;
     }
 
@@ -1147,7 +1339,7 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       const payment = await payBill(prepared.billId, prepared.vendorId, amount, {
         newBankAccount: prepared.vendorCreated,
       });
-      markAffiliatePaidIfUnpaid(publisherName);
+      markAffiliatePaidIfUnpaid(publisherName, months);
 
       console.log(
         `[Payment] Bill.com pay success: ${publisherName} paymentId=${payment.id} amount=${amount}`
@@ -1179,6 +1371,7 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
         amount,
         publisherName,
         newBankAccount: prepared.vendorCreated,
+        months,
       });
 
       console.log(
@@ -1244,7 +1437,7 @@ app.post("/api/payment/billcom/mfa/verify", async (req, res) => {
       pending.amount,
       { newBankAccount: pending.newBankAccount }
     );
-    markAffiliatePaidIfUnpaid(pending.publisherName);
+    markAffiliatePaidIfUnpaid(pending.publisherName, pending.months);
 
     console.log(
       `[Payment] Bill.com pay success after MFA: ${pending.publisherName} paymentId=${payment.id} amount=${pending.amount}`
@@ -1292,23 +1485,25 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
       if (!meta || meta.paymentMethod !== "Wise") {
         throw new Error("Affiliate is not tagged for Wise payments");
       }
-      if (meta.isPaid) {
-        throw new Error("Affiliate is already marked paid");
+      if (isAffiliatePaidForAllMonths(publisherName, months)) {
+        throw new Error("Affiliate is already marked paid for the selected month(s)");
       }
 
       const { amount } = await resolvePayAmount(publisherName, req);
-      const recipient = matchWiseRecipientByName(recipients, publisherName);
-      if (!recipient) {
-        throw new Error(`No Wise recipient found for ${publisherName}`);
-      }
-
-      const quote = await createQuote(profileId, amount, "USD");
-      const transfer = await createTransfer(
-        quote.id,
-        recipient.id,
-        "LeadSmart Affiliate Payout"
+      const target = await resolveWisePayoutForAffiliate(
+        profileId,
+        recipients,
+        meta,
+        publisherName,
+        req.body
       );
-      pendingFunds.push({ publisherName, transferId: transfer.id });
+      const transfer = await prepareWiseTransfer(
+        profileId,
+        amount,
+        "LeadSmart Affiliate Payout",
+        target
+      );
+      pendingFunds.push({ publisherName, transferId: transfer.transferId });
     } catch (err) {
       failed.push({
         publisherName,
@@ -1320,7 +1515,7 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
   for (const pending of pendingFunds) {
     try {
       await fundTransfer(profileId, pending.transferId);
-      markAffiliatePaidIfUnpaid(pending.publisherName);
+      markAffiliatePaidIfUnpaid(pending.publisherName, months);
       succeeded.push(pending.publisherName);
     } catch (err) {
       failed.push({
@@ -1359,8 +1554,8 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
       if (!meta || meta.paymentMethod !== "Bill.com") {
         throw new Error("Affiliate is not tagged for Bill.com payments");
       }
-      if (meta.isPaid) {
-        throw new Error("Affiliate is already marked paid");
+      if (isAffiliatePaidForAllMonths(publisherName, months)) {
+        throw new Error("Affiliate is already marked paid for the selected month(s)");
       }
 
       const billcomVendorId = meta.billcomVendorId?.trim() ?? "";
@@ -1406,7 +1601,7 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
 
   for (const item of billPayments) {
     if (paidBillIds.has(item.billId)) {
-      markAffiliatePaidIfUnpaid(item.publisherName);
+      markAffiliatePaidIfUnpaid(item.publisherName, months);
       succeeded.push(item.publisherName);
     } else {
       const bulkFailure = bulkResult.failed.find(

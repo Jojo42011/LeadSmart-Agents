@@ -18,6 +18,7 @@ export interface WiseQuote {
   sourceCurrency: string;
   targetCurrency: string;
   rate: number;
+  targetAccount?: number;
 }
 
 export interface WiseTransfer {
@@ -30,6 +31,16 @@ export interface WiseTransfer {
 export interface WiseFundResult {
   status: string;
   type: string;
+}
+
+export interface WiseContact {
+  contactId: string;
+  name: string;
+}
+
+export interface WisePayoutTarget {
+  recipientId: number;
+  resolvedVia: "recipient" | "contact";
 }
 
 function wiseToken(): string {
@@ -73,6 +84,48 @@ function readString(obj: Record<string, unknown>, key: string): string | null {
 function readNumber(obj: Record<string, unknown>, key: string): number | null {
   const value = obj[key];
   return typeof value === "number" ? value : null;
+}
+
+function parseQuoteRow(row: Record<string, unknown>, fallbackAmount: number): WiseQuote {
+  const id = readString(row, "id");
+  if (!id) {
+    throw new Error("Wise quote response missing id");
+  }
+
+  return {
+    id,
+    sourceAmount: readNumber(row, "sourceAmount") ?? fallbackAmount,
+    targetAmount: readNumber(row, "targetAmount") ?? fallbackAmount,
+    sourceCurrency: readString(row, "sourceCurrency") ?? "USD",
+    targetCurrency: readString(row, "targetCurrency") ?? "USD",
+    rate: readNumber(row, "rate") ?? 1,
+    targetAccount: readNumber(row, "targetAccount") ?? undefined,
+  };
+}
+
+/** Normalize stored Wise tag for API (Wise accepts tag with or without @). */
+export function normalizeWiseTagForApi(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+}
+
+/** Pick email or tag identifier for Wise contact lookup (email preferred). */
+export function resolveWiseIdentifier(
+  wiseEmail: string | null | undefined,
+  wiseTag: string | null | undefined
+): string | null {
+  const email = wiseEmail?.trim().toLowerCase() ?? "";
+  if (email) {
+    return email;
+  }
+  const tag = wiseTag?.trim() ?? "";
+  if (tag) {
+    return normalizeWiseTagForApi(tag);
+  }
+  return null;
 }
 
 /** Get recipient accounts for a profile (matched by name/email on payout). */
@@ -125,40 +178,69 @@ export async function getRecipients(profileId: string): Promise<WiseRecipient[]>
   return recipients;
 }
 
+/** Find a Wise profile by email or Wisetag and add as contact (no bank details). */
+export async function createContactFromIdentifier(
+  profileId: string,
+  identifier: string,
+  targetCurrency = "USD"
+): Promise<WiseContact> {
+  const client = createWiseClient();
+  const res = await client.post(
+    `/v2/profiles/${profileId}/contacts`,
+    {
+      identifier,
+      targetCurrency,
+    },
+    { params: { isDirectIdentifierCreation: true } }
+  );
+
+  const row = asRecord(res.data);
+  if (!row) {
+    throw new Error("Wise contact response was empty");
+  }
+
+  const contactId = readString(row, "contactId");
+  if (!contactId) {
+    throw new Error("Wise contact response missing contactId");
+  }
+
+  return {
+    contactId,
+    name: readString(row, "name") ?? identifier,
+  };
+}
+
 /** Create a quote for a transfer. */
 export async function createQuote(
   profileId: string,
   amount: number,
-  targetCurrency: string
+  targetCurrency: string,
+  options?: { contactId?: string; targetAccount?: number }
 ): Promise<WiseQuote> {
   const client = createWiseClient();
-  const res = await client.post(`/v3/profiles/${profileId}/quotes`, {
+  const body: Record<string, unknown> = {
     sourceCurrency: "USD",
     targetCurrency,
     sourceAmount: amount,
     paymentMetadata: {
       transferNature: "MOVING_MONEY_BETWEEN_OWN_ACCOUNTS",
     },
-  });
+  };
+
+  if (options?.contactId) {
+    body.contactId = options.contactId;
+  } else if (options?.targetAccount !== undefined) {
+    body.targetAccount = options.targetAccount;
+  }
+
+  const res = await client.post(`/v3/profiles/${profileId}/quotes`, body);
 
   const row = asRecord(res.data);
   if (!row) {
     throw new Error("Wise quote response was empty");
   }
 
-  const id = readString(row, "id");
-  if (!id) {
-    throw new Error("Wise quote response missing id");
-  }
-
-  return {
-    id,
-    sourceAmount: readNumber(row, "sourceAmount") ?? amount,
-    targetAmount: readNumber(row, "targetAmount") ?? amount,
-    sourceCurrency: readString(row, "sourceCurrency") ?? "USD",
-    targetCurrency: readString(row, "targetCurrency") ?? targetCurrency,
-    rate: readNumber(row, "rate") ?? 1,
-  };
+  return parseQuoteRow(row, amount);
 }
 
 /** Create a transfer from a quote. */
@@ -218,17 +300,133 @@ export async function fundTransfer(
   };
 }
 
+/** Match an existing saved recipient by stored email. */
+export function matchWiseRecipientByEmail(
+  recipients: WiseRecipient[],
+  wiseEmail: string | null | undefined
+): WiseRecipient | null {
+  const email = wiseEmail?.trim().toLowerCase() ?? "";
+  if (!email) {
+    return null;
+  }
+
+  for (const recipient of recipients) {
+    const recipientEmail = recipient.email?.trim().toLowerCase();
+    if (recipientEmail && recipientEmail === email) {
+      return recipient;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Resolve payout target: existing recipient ID, or contactId flow for email/tag.
+ * For USD→USD to Wise users, only email or Wisetag is required (no bank details).
+ */
+export async function resolveWisePayoutTarget(
+  profileId: string,
+  recipients: WiseRecipient[],
+  wiseEmail: string | null | undefined,
+  wiseTag: string | null | undefined
+): Promise<WisePayoutTarget | { contactId: string; resolvedVia: "contact" }> {
+  const existing = matchWiseRecipientByEmail(recipients, wiseEmail);
+  if (existing) {
+    return { recipientId: existing.id, resolvedVia: "recipient" };
+  }
+
+  const identifier = resolveWiseIdentifier(wiseEmail, wiseTag);
+  if (!identifier) {
+    throw new Error(
+      "Wise email or Wise tag is required (no bank details needed for Wise-to-Wise USD payouts)"
+    );
+  }
+
+  const contact = await createContactFromIdentifier(profileId, identifier, "USD");
+  return { contactId: contact.contactId, resolvedVia: "contact" };
+}
+
+async function targetAccountFromQuote(
+  profileId: string,
+  amount: number,
+  target: WisePayoutTarget | { contactId: string; resolvedVia: "contact" }
+): Promise<{ quote: WiseQuote; targetAccountId: number }> {
+  if ("recipientId" in target) {
+    const quote = await createQuote(profileId, amount, "USD", {
+      targetAccount: target.recipientId,
+    });
+    return {
+      quote,
+      targetAccountId: quote.targetAccount ?? target.recipientId,
+    };
+  }
+
+  const quote = await createQuote(profileId, amount, "USD", {
+    contactId: target.contactId,
+  });
+  const targetAccountId = quote.targetAccount;
+  if (targetAccountId === undefined) {
+    throw new Error("Wise quote did not resolve contact to a recipient account");
+  }
+
+  return { quote, targetAccountId };
+}
+
+function normalizePayoutTarget(
+  target:
+    | WisePayoutTarget
+    | { contactId: string; resolvedVia: "contact" }
+    | { recipientId: number }
+): WisePayoutTarget | { contactId: string; resolvedVia: "contact" } {
+  if ("recipientId" in target && !("resolvedVia" in target)) {
+    return { recipientId: target.recipientId, resolvedVia: "recipient" };
+  }
+  return target;
+}
+
+/** Create quote + transfer without funding (for bulk pay batching). */
+export async function prepareWiseTransfer(
+  profileId: string,
+  amount: number,
+  reference: string,
+  target:
+    | WisePayoutTarget
+    | { contactId: string; resolvedVia: "contact" }
+    | { recipientId: number }
+): Promise<{ transferId: number; quoteId: string }> {
+  const normalizedTarget = normalizePayoutTarget(target);
+  const { quote, targetAccountId } = await targetAccountFromQuote(
+    profileId,
+    amount,
+    normalizedTarget
+  );
+  const transfer = await createTransfer(quote.id, targetAccountId, reference);
+  return { transferId: transfer.id, quoteId: quote.id };
+}
+
 /** Run quote → transfer → fund for one payout amount. */
 export async function executeWisePayout(
+  profileId: string,
+  amount: number,
+  reference = "LeadSmart Affiliate Payout",
+  target:
+    | WisePayoutTarget
+    | { contactId: string; resolvedVia: "contact" }
+    | { recipientId: number }
+): Promise<{ transferId: number; quoteId: string }> {
+  const prepared = await prepareWiseTransfer(profileId, amount, reference, target);
+  await fundTransfer(profileId, prepared.transferId);
+  return prepared;
+}
+
+/** @deprecated Use executeWisePayout with a resolved target. */
+export async function executeWisePayoutToRecipient(
   profileId: string,
   recipientId: number,
   amount: number,
   reference = "LeadSmart Affiliate Payout"
 ): Promise<{ transferId: number; quoteId: string }> {
-  const quote = await createQuote(profileId, amount, "USD");
-  const transfer = await createTransfer(quote.id, recipientId, reference);
-  await fundTransfer(profileId, transfer.id);
-  return { transferId: transfer.id, quoteId: quote.id };
+  return executeWisePayout(profileId, amount, reference, { recipientId });
 }
 
 export function getWiseProfileIdFromEnv(): string {

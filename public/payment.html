@@ -418,6 +418,15 @@
         color: var(--green);
       }
 
+      .payment-status-filters.hidden {
+        display: none;
+      }
+
+      .payment-status-filter--active {
+        background: rgba(255, 176, 0, 0.1);
+        color: var(--amber);
+      }
+
       .badge-source {
         display: inline-block;
         padding: 4px 8px;
@@ -1174,6 +1183,10 @@
         display: none;
       }
 
+      .metadata-popover__wise-section.hidden {
+        display: none;
+      }
+
       .metadata-popover__billcom-hint {
         margin: 0 0 10px;
         font-size: 9px;
@@ -1349,6 +1362,10 @@
             <button type="button" class="source-filter" data-source="BOTH">BOTH</button>
             <button type="button" class="source-filter" data-source="PROFIT">PUBLISHER PROFIT</button>
           </div>
+          <div class="source-filters payment-status-filters" id="paymentStatusFilters">
+            <button type="button" class="source-filter payment-status-filter payment-status-filter--active" data-payment-status="UNPAID">UNPAID</button>
+            <button type="button" class="source-filter payment-status-filter" data-payment-status="PAID">PAID</button>
+          </div>
           <button type="button" class="btn-pay-all hidden" id="payAllBtn">PAY ALL</button>
           <input
             class="search-input"
@@ -1418,6 +1435,28 @@
                   <input class="pay-modal__ach-input" type="text" id="payModalBillcomZip" autocomplete="off" />
                 </div>
               </div>
+            </div>
+            <div class="pay-modal__vendor-section hidden" id="payModalWiseSection">
+              <p class="pay-modal__ach-hint">
+                Wise-to-Wise USD payouts only need the recipient's Wise email or Wise tag — no bank or routing details.
+              </p>
+              <label class="pay-modal__section-label" for="payModalWiseEmail">Wise email</label>
+              <input
+                class="pay-modal__vendor-input"
+                type="email"
+                id="payModalWiseEmail"
+                placeholder="affiliate@example.com"
+                autocomplete="off"
+              />
+              <label class="pay-modal__section-label" for="payModalWiseTag">Wise tag</label>
+              <input
+                class="pay-modal__vendor-input"
+                type="text"
+                id="payModalWiseTag"
+                placeholder="@username (one of email or tag required)"
+                autocomplete="off"
+                spellcheck="false"
+              />
             </div>
             <p class="pay-modal__hint" id="payModalHint"></p>
             <div class="pay-modal__mfa-section hidden" id="payModalMfaSection">
@@ -1558,6 +1597,7 @@
       const tableBody = document.getElementById("tableBody");
       const cstClock = document.getElementById("cstClock");
       const sourceFilters = document.getElementById("sourceFilters");
+      const paymentStatusFilters = document.getElementById("paymentStatusFilters");
       const payAllBtn = document.getElementById("payAllBtn");
       const paymentToast = document.getElementById("paymentToast");
       const payModal = document.getElementById("payModal");
@@ -1582,6 +1622,9 @@
       const payModalBillcomCity = document.getElementById("payModalBillcomCity");
       const payModalBillcomState = document.getElementById("payModalBillcomState");
       const payModalBillcomZip = document.getElementById("payModalBillcomZip");
+      const payModalWiseSection = document.getElementById("payModalWiseSection");
+      const payModalWiseEmail = document.getElementById("payModalWiseEmail");
+      const payModalWiseTag = document.getElementById("payModalWiseTag");
       const pageSizeControls = document.getElementById("pageSizeControls");
       const paginationInfo = document.getElementById("paginationInfo");
       const prevBtn = document.getElementById("prevBtn");
@@ -1611,6 +1654,7 @@
       let isLoading = false;
       let isProfitLoading = false;
       let sourceFilter = "ALL";
+      let paymentStatusFilter = "UNPAID";
       let pageSize = 100;
       let currentPage = 1;
       let profitDataMonth = null;
@@ -1639,6 +1683,30 @@
 
       function isProfitView() {
         return sourceFilter === "PROFIT";
+      }
+
+      function getDashboardMonth() {
+        return monthSelect.value;
+      }
+
+      function isPaidForDashboardMonth(publisherName) {
+        const meta = getAffiliateMeta(publisherName);
+        const month = getDashboardMonth();
+        return !!(meta.paidMonths && meta.paidMonths[month]);
+      }
+
+      function paidAtForDashboardMonth(publisherName) {
+        const meta = getAffiliateMeta(publisherName);
+        const month = getDashboardMonth();
+        return (meta.paidMonths && meta.paidMonths[month]) || null;
+      }
+
+      function syncPaymentStatusFiltersVisibility() {
+        if (isProfitView()) {
+          paymentStatusFilters.classList.add("hidden");
+        } else {
+          paymentStatusFilters.classList.remove("hidden");
+        }
       }
 
       const MONTHS = [
@@ -1769,6 +1837,7 @@
           affiliateMetadataMap[publisherName] || {
             paymentMethod: null,
             paymentTerms: null,
+            paidMonths: {},
             isPaid: false,
             paidAt: null,
             updatedAt: null,
@@ -1781,8 +1850,23 @@
             billcomAddressCity: null,
             billcomAddressState: null,
             billcomAddressZip: null,
+            wiseEmail: null,
+            wiseTag: null,
           }
         );
+      }
+
+      function hasWiseIdentifierClient(meta) {
+        return Boolean(
+          String(meta.wiseEmail || "").trim() || String(meta.wiseTag || "").trim()
+        );
+      }
+
+      function collectWisePayload(source) {
+        return {
+          wiseEmail: String(source.email || "").trim(),
+          wiseTag: String(source.tag || "").trim(),
+        };
       }
 
       function isBillcomAchCompleteClient(ach) {
@@ -1835,6 +1919,16 @@
         payModalBillcomZip.value = "";
       }
 
+      function fillPayModalWiseFields(meta) {
+        payModalWiseEmail.value = meta.wiseEmail || "";
+        payModalWiseTag.value = meta.wiseTag || "";
+      }
+
+      function clearPayModalWiseFields() {
+        payModalWiseEmail.value = "";
+        payModalWiseTag.value = "";
+      }
+
       function normalizeBillcomVendorIdInput(value) {
         const trimmed = String(value || "").trim();
         if (!trimmed) {
@@ -1851,7 +1945,8 @@
         paymentMethod,
         paymentTerms,
         billcomVendorId,
-        billcomAch
+        billcomAch,
+        wiseFields
       ) {
         const payload = {
           paymentMethod: paymentMethod || "Untagged",
@@ -1862,6 +1957,9 @@
         }
         if (billcomAch) {
           Object.assign(payload, billcomAch);
+        }
+        if (wiseFields) {
+          Object.assign(payload, wiseFields);
         }
         const res = await fetch(
           "/api/payment/metadata/" + encodeURIComponent(publisherName),
@@ -2093,11 +2191,50 @@
         cityStateZipRow.appendChild(zipWrap);
         vendorIdWrap.appendChild(cityStateZipRow);
 
+        const wiseWrap = document.createElement("div");
+        wiseWrap.className = "metadata-popover__wise-section";
+        if ((meta.paymentMethod || "Untagged") !== "Wise") {
+          wiseWrap.classList.add("hidden");
+        }
+
+        const wiseHint = document.createElement("p");
+        wiseHint.className = "metadata-popover__billcom-hint";
+        wiseHint.textContent =
+          "Wise-to-Wise USD payouts only need email or tag — no bank or routing details.";
+
+        const wiseEmailLabel = document.createElement("label");
+        wiseEmailLabel.textContent = "Wise email";
+        const wiseEmailInput = document.createElement("input");
+        wiseEmailInput.type = "email";
+        wiseEmailInput.placeholder = "affiliate@example.com";
+        wiseEmailInput.value = meta.wiseEmail || "";
+        wiseEmailInput.autocomplete = "off";
+
+        const wiseTagLabel = document.createElement("label");
+        wiseTagLabel.textContent = "Wise tag";
+        const wiseTagInput = document.createElement("input");
+        wiseTagInput.type = "text";
+        wiseTagInput.placeholder = "@username (one of email or tag required)";
+        wiseTagInput.value = meta.wiseTag || "";
+        wiseTagInput.autocomplete = "off";
+        wiseTagInput.spellcheck = false;
+
+        wiseWrap.appendChild(wiseHint);
+        wiseWrap.appendChild(wiseEmailLabel);
+        wiseWrap.appendChild(wiseEmailInput);
+        wiseWrap.appendChild(wiseTagLabel);
+        wiseWrap.appendChild(wiseTagInput);
+
         methodSelect.addEventListener("change", () => {
           if (methodSelect.value === "Bill.com") {
             vendorIdWrap.classList.remove("hidden");
           } else {
             vendorIdWrap.classList.add("hidden");
+          }
+          if (methodSelect.value === "Wise") {
+            wiseWrap.classList.remove("hidden");
+          } else {
+            wiseWrap.classList.add("hidden");
           }
           requestAnimationFrame(() => positionMetadataPopover(anchorTd, popover));
         });
@@ -2114,6 +2251,7 @@
           try {
             let billcomVendorId;
             let billcomAch;
+            let wiseFields;
             if (methodSelect.value === "Bill.com") {
               const parsed = normalizeBillcomVendorIdInput(vendorIdInput.value);
               if (parsed === null) {
@@ -2136,12 +2274,25 @@
                 );
               }
             }
+            if (methodSelect.value === "Wise") {
+              wiseFields = collectWisePayload({
+                email: wiseEmailInput.value,
+                tag: wiseTagInput.value,
+              });
+              if (
+                !String(wiseFields.wiseEmail || "").trim() &&
+                !String(wiseFields.wiseTag || "").trim()
+              ) {
+                throw new Error("Wise email or Wise tag is required");
+              }
+            }
             const data = await saveAffiliateMetadata(
               publisherName,
               methodSelect.value,
               termsSelect.value,
               billcomVendorId,
-              billcomAch
+              billcomAch,
+              wiseFields
             );
             affiliateMetadataMap[publisherName] = data;
             closeEditPopover();
@@ -2159,6 +2310,7 @@
         popover.appendChild(termsLabel);
         popover.appendChild(termsSelect);
         popover.appendChild(vendorIdWrap);
+        popover.appendChild(wiseWrap);
         popover.appendChild(actions);
         popover.addEventListener("click", (e) => e.stopPropagation());
         document.body.appendChild(popover);
@@ -2202,10 +2354,10 @@
           if (sourceFilter !== "ALL" && row.source !== sourceFilter) {
             return false;
           }
-          const meta = getAffiliateMeta(row.publisherName);
-          if (meta.isPaid) {
+          if (isPaidForDashboardMonth(row.publisherName)) {
             return false;
           }
+          const meta = getAffiliateMeta(row.publisherName);
           return isAutoPayMethod(meta.paymentMethod);
         });
       }
@@ -2218,7 +2370,10 @@
 
         const payable = getPayableAffiliates();
         const wiseNames = payable
-          .filter((row) => getAffiliateMeta(row.publisherName).paymentMethod === "Wise")
+          .filter((row) => {
+            const meta = getAffiliateMeta(row.publisherName);
+            return meta.paymentMethod === "Wise" && hasWiseIdentifierClient(meta);
+          })
           .map((row) => row.publisherName);
         const billNames = payable
           .filter((row) => getAffiliateMeta(row.publisherName).paymentMethod === "Bill.com")
@@ -2438,23 +2593,34 @@
         payModalConfirm.disabled = false;
         resetPayModalMfaState();
         payModalVendorSection.classList.add("hidden");
+        payModalWiseSection.classList.add("hidden");
         clearPayModalBillcomFields();
+        clearPayModalWiseFields();
       }
 
-      function syncPayModalBillcomVendorField(method, meta) {
+      function syncPayModalPaymentFields(method, meta) {
         if (method === "Bill.com") {
           payModalVendorSection.classList.remove("hidden");
+          payModalWiseSection.classList.add("hidden");
           fillPayModalBillcomFields(meta);
+          clearPayModalWiseFields();
+        } else if (method === "Wise") {
+          payModalWiseSection.classList.remove("hidden");
+          payModalVendorSection.classList.add("hidden");
+          fillPayModalWiseFields(meta);
+          clearPayModalBillcomFields();
         } else {
           payModalVendorSection.classList.add("hidden");
+          payModalWiseSection.classList.add("hidden");
           clearPayModalBillcomFields();
+          clearPayModalWiseFields();
         }
       }
 
       function openPayModalForRow(row) {
         const meta = getAffiliateMeta(row.publisherName);
         const method = meta.paymentMethod;
-        if (meta.isPaid || !isAutoPayMethod(method)) {
+        if (isPaidForDashboardMonth(row.publisherName) || !isAutoPayMethod(method)) {
           return;
         }
 
@@ -2466,7 +2632,7 @@
         payModalSubtitle.textContent =
           row.publisherName + " via " + method;
         payModalAmountSection.classList.remove("hidden");
-        syncPayModalBillcomVendorField(method, meta);
+        syncPayModalPaymentFields(method, meta);
         renderPayModalMonthOptions(monthSelect.value);
         payModalAmount.value = Number(row.totalAmount || 0).toFixed(2);
         payModalHint.textContent = "";
@@ -2508,17 +2674,20 @@
         return Math.round(parsed * 100) / 100;
       }
 
-      function buildPayPayload(months, amount, billcomExtras) {
+      function buildPayPayload(months, amount, extras) {
         const payload = { months };
         if (amount !== undefined && amount !== null) {
           payload.amount = amount;
         }
-        if (billcomExtras) {
-          if (billcomExtras.billcomVendorId) {
-            payload.billcomVendorId = billcomExtras.billcomVendorId;
+        if (extras) {
+          if (extras.billcomVendorId) {
+            payload.billcomVendorId = extras.billcomVendorId;
           }
-          if (billcomExtras.billcomAch) {
-            Object.assign(payload, billcomExtras.billcomAch);
+          if (extras.billcomAch) {
+            Object.assign(payload, extras.billcomAch);
+          }
+          if (extras.wiseFields) {
+            Object.assign(payload, extras.wiseFields);
           }
         }
         return payload;
@@ -2596,6 +2765,7 @@
 
           let billcomVendorId = "";
           let billcomAch = null;
+          let wiseFields = null;
           if (method === "Bill.com") {
             const parsed = normalizeBillcomVendorIdInput(payModalBillcomVendorId.value);
             if (parsed === null) {
@@ -2620,6 +2790,20 @@
               return;
             }
           }
+          if (method === "Wise") {
+            wiseFields = collectWisePayload({
+              email: payModalWiseEmail.value,
+              tag: payModalWiseTag.value,
+            });
+            if (
+              !String(wiseFields.wiseEmail || "").trim() &&
+              !String(wiseFields.wiseTag || "").trim()
+            ) {
+              payModalHint.textContent =
+                "Wise email or Wise tag is required. Fill in the edit popup or enter details here.";
+              return;
+            }
+          }
 
           if (method === "Bill.com" && payModalMfaToken) {
             isPayingAffiliate = true;
@@ -2634,7 +2818,7 @@
             return;
           }
 
-          if (method !== "Bill.com") {
+          if (method !== "Bill.com" && method !== "Wise") {
             closePayModal();
           }
 
@@ -2655,6 +2839,7 @@
                 buildPayPayload(months, amount, {
                   billcomVendorId,
                   billcomAch,
+                  wiseFields,
                 })
               ),
             });
@@ -2671,7 +2856,7 @@
               throw new Error(data.error || "Payment failed");
             }
 
-            if (method === "Bill.com") {
+            if (method === "Bill.com" || method === "Wise") {
               closePayModal();
             }
 
@@ -2684,13 +2869,9 @@
             renderTable();
             updatePayAllButton();
           } catch (err) {
-            if (method !== "Bill.com") {
-              setBanner(null, null);
-            } else {
-              setBanner(null, null);
-            }
+            setBanner(null, null);
             const message = err instanceof Error ? err.message : "Payment failed";
-            if (method === "Bill.com" && !payModalMfaToken) {
+            if ((method === "Bill.com" && !payModalMfaToken) || method === "Wise") {
               payModalHint.textContent = message;
             }
             setWarning(message);
@@ -2801,36 +2982,40 @@
         const controls = document.createElement("div");
         controls.className = "action-cell__controls";
 
+        const paidForMonth = isPaidForDashboardMonth(row.publisherName);
+        const paidAtMonth = paidAtForDashboardMonth(row.publisherName);
+
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.className = "pay-checkbox";
-        checkbox.checked = !!meta.isPaid;
-        checkbox.disabled = !!meta.isPaid;
+        checkbox.checked = paidForMonth;
         checkbox.title =
-          meta.isPaid && meta.paidAt
-            ? "Paid " + formatCstTimestamp(meta.paidAt)
-            : "Mark as paid";
+          paidForMonth && paidAtMonth
+            ? "Paid " + formatCstTimestamp(paidAtMonth) + " for " + monthLabel(getDashboardMonth())
+            : "Mark as paid for " + monthLabel(getDashboardMonth());
         checkbox.addEventListener("click", (e) => e.stopPropagation());
         checkbox.addEventListener("change", async () => {
-          if (meta.isPaid) {
-            checkbox.checked = true;
-            return;
-          }
-          const previous = !!meta.isPaid;
+          const previousPaid = isPaidForDashboardMonth(row.publisherName);
+          const month = getDashboardMonth();
           try {
             const res = await fetch(
               "/api/payment/mark-paid/" + encodeURIComponent(row.publisherName),
-              { method: "POST" }
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ month }),
+              }
             );
             const data = await res.json();
             if (!res.ok) {
               throw new Error(data.error || "Failed to update paid status");
             }
             affiliateMetadataMap[row.publisherName] = data;
-            renderTable();
+            currentPage = 1;
+            applyFilterAndSort();
             updatePayAllButton();
           } catch (err) {
-            checkbox.checked = previous;
+            checkbox.checked = previousPaid;
             setWarning(
               err instanceof Error ? err.message : "Failed to update paid status"
             );
@@ -2847,12 +3032,14 @@
           openMetadataPopover(td, row.publisherName);
         });
 
-        if (meta.isPaid) {
+        if (paidForMonth) {
           const paidLabel = document.createElement("span");
           paidLabel.className = "paid-label";
           paidLabel.textContent = "PAID";
           paidLabel.title =
-            meta.paidAt ? "Paid " + formatCstTimestamp(meta.paidAt) : "Paid";
+            paidAtMonth
+              ? "Paid " + formatCstTimestamp(paidAtMonth) + " for " + monthLabel(getDashboardMonth())
+              : "Paid for " + monthLabel(getDashboardMonth());
           controls.appendChild(checkbox);
           controls.appendChild(editBtn);
           controls.appendChild(paidLabel);
@@ -3009,6 +3196,7 @@
           affiliatesPanel.classList.remove("hidden");
           profitPanel.classList.add("hidden");
         }
+        syncPaymentStatusFiltersVisibility();
       }
 
       function updateHeaderTotals(data) {
@@ -3266,6 +3454,15 @@
           if (sourceFilter !== "ALL" && row.source !== sourceFilter) {
             return false;
           }
+          if (!isProfitView()) {
+            const paidForMonth = isPaidForDashboardMonth(row.publisherName);
+            if (paymentStatusFilter === "PAID" && !paidForMonth) {
+              return false;
+            }
+            if (paymentStatusFilter === "UNPAID" && paidForMonth) {
+              return false;
+            }
+          }
           if (!q) return true;
           return String(row.publisherName || "").toLowerCase().includes(q);
         });
@@ -3398,7 +3595,7 @@
           if (globalIndex === selectedRowIndex) {
             tr.classList.add("row--selected");
           }
-          if (meta.isPaid) {
+          if (isPaidForDashboardMonth(row.publisherName)) {
             tr.classList.add("row--paid");
           }
 
@@ -3506,6 +3703,8 @@
       });
       monthSelect.addEventListener("change", async () => {
         profitDataMonth = null;
+        selectedRowIndex = -1;
+        currentPage = 1;
         await fetchStats();
         if (isProfitView()) {
           try {
@@ -3513,6 +3712,8 @@
           } catch {
             /* error banner set in fetchProfitData */
           }
+        } else {
+          applyFilterAndSort();
         }
       });
       searchInput.addEventListener("input", () => {
@@ -3526,11 +3727,11 @@
       });
 
       sourceFilters.addEventListener("click", async (e) => {
-        const btn = e.target.closest(".source-filter");
+        const btn = e.target.closest(".source-filter[data-source]");
         if (!btn) return;
         const nextSource = btn.dataset.source || "ALL";
         sourceFilter = nextSource;
-        document.querySelectorAll(".source-filter").forEach((el) => {
+        document.querySelectorAll(".source-filter[data-source]").forEach((el) => {
           el.classList.toggle("source-filter--active", el === btn);
         });
         selectedRowIndex = -1;
@@ -3552,6 +3753,18 @@
         } else {
           applyFilterAndSort();
         }
+      });
+
+      paymentStatusFilters.addEventListener("click", (e) => {
+        const btn = e.target.closest(".payment-status-filter");
+        if (!btn || isProfitView()) return;
+        paymentStatusFilter = btn.dataset.paymentStatus || "UNPAID";
+        document.querySelectorAll(".payment-status-filter").forEach((el) => {
+          el.classList.toggle("payment-status-filter--active", el === btn);
+        });
+        selectedRowIndex = -1;
+        currentPage = 1;
+        applyFilterAndSort();
       });
 
       pageSizeControls.addEventListener("click", (e) => {
