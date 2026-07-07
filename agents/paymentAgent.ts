@@ -389,68 +389,59 @@ function targetBuyerLabelFromRow(raw: Record<string, unknown>): string {
   const target = String(
     raw.targetName ?? raw.TargetName ?? raw.target ?? ""
   ).trim();
-  const buyer = String(
-    raw.buyerName ?? raw.BuyerName ?? raw.buyer ?? ""
-  ).trim();
+  const buyer = String(raw.buyer ?? raw.Buyer ?? "").trim();
   return [target, buyer].filter(Boolean).join(" ");
 }
 
-function aggregatePublisherPayoutRows(
-  rawRows: Record<string, unknown>[]
-): PublisherPayoutRow[] {
-  const byPublisher = new Map<
-    string,
-    {
-      publisherName: string;
-      payoutAmount: number;
-      callCount: number;
-      convertedCalls: number;
-      completedCalls: number;
-      cplAffiliate: boolean;
-    }
-  >();
+function normalizePublisherRow(
+  raw: Record<string, unknown>
+): PublisherPayoutRow | null {
+  const publisherName = String(
+    raw.publisherName ?? raw.PublisherName ?? raw.publisher ?? ""
+  ).trim();
 
+  if (!publisherName) {
+    return null;
+  }
+
+  return {
+    publisherName,
+    payoutAmount: parseNumber(raw.payoutAmount),
+    source: "RINGBA",
+    callCount: parseNumber(raw.callCount),
+    convertedCalls: parseNumber(raw.convertedCalls),
+    completedCalls: parseNumber(raw.completedCalls),
+  };
+}
+
+function collectCplPublisherKeys(rawRows: Record<string, unknown>[]): Set<string> {
+  const keys = new Set<string>();
   for (const raw of rawRows) {
+    if (!isCplTargetLabel(targetBuyerLabelFromRow(raw))) {
+      continue;
+    }
     const publisherName = String(
       raw.publisherName ?? raw.PublisherName ?? raw.publisher ?? ""
     ).trim();
     if (!publisherName) {
       continue;
     }
-
-    const key = normalizePublisherName(publisherName);
-    let agg = byPublisher.get(key);
-    if (!agg) {
-      agg = {
-        publisherName,
-        payoutAmount: 0,
-        callCount: 0,
-        convertedCalls: 0,
-        completedCalls: 0,
-        cplAffiliate: false,
-      };
-      byPublisher.set(key, agg);
-    }
-
-    agg.payoutAmount += parseNumber(raw.payoutAmount);
-    agg.callCount += parseNumber(raw.callCount);
-    agg.convertedCalls += parseNumber(raw.convertedCalls);
-    agg.completedCalls += parseNumber(raw.completedCalls);
-
-    if (isCplTargetLabel(targetBuyerLabelFromRow(raw))) {
-      agg.cplAffiliate = true;
-    }
+    keys.add(normalizePublisherName(publisherName));
   }
+  return keys;
+}
 
-  return Array.from(byPublisher.values()).map((agg) => ({
-    publisherName: agg.publisherName,
-    payoutAmount: agg.payoutAmount,
-    source: "RINGBA" as const,
-    callCount: agg.callCount,
-    convertedCalls: agg.convertedCalls,
-    completedCalls: agg.completedCalls,
-    ...(agg.cplAffiliate ? { cplAffiliate: true as const } : {}),
-  }));
+function ringbaInsightsBaseBody(startDate: string, endDate: string) {
+  return {
+    reportStart: startDate,
+    reportEnd: endDate,
+    formatTimespans: true,
+    formatPercentages: true,
+    generateRollups: true,
+    maxResultsPerGroup: 1000,
+    filters: [] as unknown[],
+    formatTimeZone: "America/Chicago",
+  };
 }
 
 /**
@@ -462,15 +453,11 @@ export async function fetchPublisherPayouts(
 ): Promise<PublisherPayoutRow[]> {
   const client = createClient();
   const accountId = getAccountId();
+  const baseBody = ringbaInsightsBaseBody(startDate, endDate);
 
-  const body = {
-    reportStart: startDate,
-    reportEnd: endDate,
-    groupByColumns: [
-      { column: "publisherName", displayName: "Publisher" },
-      { column: "targetName", displayName: "Target" },
-      { column: "buyerName", displayName: "Buyer" },
-    ],
+  const payoutBody = {
+    ...baseBody,
+    groupByColumns: [{ column: "publisherName", displayName: "Publisher" }],
     valueColumns: [
       { column: "callCount", aggregateFunction: null },
       { column: "completedCalls", aggregateFunction: null },
@@ -478,17 +465,24 @@ export async function fetchPublisherPayouts(
       { column: "payoutAmount", aggregateFunction: null },
     ],
     orderByColumns: [{ column: "payoutAmount", direction: "desc" }],
-    formatTimespans: true,
-    formatPercentages: true,
-    generateRollups: true,
-    maxResultsPerGroup: 1000,
-    filters: [],
-    formatTimeZone: "America/Chicago",
   };
 
-  let response;
+  const cplBody = {
+    ...baseBody,
+    groupByColumns: [
+      { column: "publisherName", displayName: "Publisher" },
+      { column: "targetName", displayName: "Target" },
+    ],
+    valueColumns: [{ column: "callCount", aggregateFunction: null }],
+    orderByColumns: [{ column: "callCount", direction: "desc" }],
+  };
+
+  let payoutResponse;
   try {
-    response = await client.post<unknown>(`/${accountId}/insights`, body);
+    payoutResponse = await client.post<unknown>(
+      `/${accountId}/insights`,
+      payoutBody
+    );
   } catch (error) {
     if (axios.isAxiosError(error)) {
       console.error(
@@ -499,7 +493,36 @@ export async function fetchPublisherPayouts(
     throw error;
   }
 
-  const rows = aggregatePublisherPayoutRows(extractRawRows(response.data));
+  let cplPublisherKeys = new Set<string>();
+  try {
+    const cplResponse = await client.post<unknown>(
+      `/${accountId}/insights`,
+      cplBody
+    );
+    cplPublisherKeys = collectCplPublisherKeys(extractRawRows(cplResponse.data));
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      console.warn(
+        "[PaymentAgent] Ringba CPL target insights failed — continuing without CPL flags:",
+        JSON.stringify(error.response?.data, null, 2)
+      );
+    } else {
+      console.warn(
+        "[PaymentAgent] Ringba CPL target insights failed — continuing without CPL flags:",
+        error
+      );
+    }
+  }
+
+  const rows = extractRawRows(payoutResponse.data)
+    .map(normalizePublisherRow)
+    .filter((row): row is PublisherPayoutRow => row !== null)
+    .map((row) => {
+      if (!cplPublisherKeys.has(normalizePublisherName(row.publisherName))) {
+        return row;
+      }
+      return { ...row, cplAffiliate: true as const };
+    });
 
   rows.sort((a, b) => b.payoutAmount - a.payoutAmount);
 
