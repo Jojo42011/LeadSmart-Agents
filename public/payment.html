@@ -1446,9 +1446,9 @@
             </div>
             <div class="pay-modal__vendor-section hidden" id="payModalWiseSection">
               <p class="pay-modal__ach-hint">
-                Wise-to-Wise USD payouts only need the recipient's Wise email or Wise tag — no bank or routing details.
+                Wise-to-Wise: email or tag only. Other platforms (PayPal, Venmo, etc.): fill ACH + full US address below.
               </p>
-              <label class="pay-modal__section-label" for="payModalWiseEmail">Wise email</label>
+              <label class="pay-modal__section-label" for="payModalWiseEmail">Wise email (Wise-to-Wise)</label>
               <input
                 class="pay-modal__vendor-input"
                 type="email"
@@ -1456,15 +1456,37 @@
                 placeholder="affiliate@example.com"
                 autocomplete="off"
               />
-              <label class="pay-modal__section-label" for="payModalWiseTag">Wise tag</label>
+              <label class="pay-modal__section-label" for="payModalWiseTag">Wise tag (Wise-to-Wise)</label>
               <input
                 class="pay-modal__vendor-input"
                 type="text"
                 id="payModalWiseTag"
-                placeholder="@username (one of email or tag required)"
+                placeholder="@username"
                 autocomplete="off"
                 spellcheck="false"
               />
+              <label class="pay-modal__section-label" for="payModalWiseAccountHolder">Account holder name (ACH)</label>
+              <input class="pay-modal__ach-input" type="text" id="payModalWiseAccountHolder" autocomplete="off" />
+              <label class="pay-modal__section-label" for="payModalWiseRouting">Routing number</label>
+              <input class="pay-modal__ach-input" type="text" id="payModalWiseRouting" inputmode="numeric" autocomplete="off" />
+              <label class="pay-modal__section-label" for="payModalWiseAccount">Account number</label>
+              <input class="pay-modal__ach-input" type="text" id="payModalWiseAccount" inputmode="numeric" autocomplete="off" />
+              <label class="pay-modal__section-label" for="payModalWiseAddress">Street address</label>
+              <input class="pay-modal__ach-input" type="text" id="payModalWiseAddress" autocomplete="off" />
+              <div class="pay-modal__ach-grid">
+                <div>
+                  <label class="pay-modal__section-label" for="payModalWiseCity">City</label>
+                  <input class="pay-modal__ach-input" type="text" id="payModalWiseCity" autocomplete="off" />
+                </div>
+                <div>
+                  <label class="pay-modal__section-label" for="payModalWiseState">State</label>
+                  <input class="pay-modal__ach-input" type="text" id="payModalWiseState" maxlength="2" autocomplete="off" />
+                </div>
+                <div>
+                  <label class="pay-modal__section-label" for="payModalWiseZip">ZIP</label>
+                  <input class="pay-modal__ach-input" type="text" id="payModalWiseZip" autocomplete="off" />
+                </div>
+              </div>
             </div>
             <p class="pay-modal__hint" id="payModalHint"></p>
             <div class="pay-modal__mfa-section hidden" id="payModalMfaSection">
@@ -1634,6 +1656,13 @@
       const payModalWiseSection = document.getElementById("payModalWiseSection");
       const payModalWiseEmail = document.getElementById("payModalWiseEmail");
       const payModalWiseTag = document.getElementById("payModalWiseTag");
+      const payModalWiseAccountHolder = document.getElementById("payModalWiseAccountHolder");
+      const payModalWiseRouting = document.getElementById("payModalWiseRouting");
+      const payModalWiseAccount = document.getElementById("payModalWiseAccount");
+      const payModalWiseAddress = document.getElementById("payModalWiseAddress");
+      const payModalWiseCity = document.getElementById("payModalWiseCity");
+      const payModalWiseState = document.getElementById("payModalWiseState");
+      const payModalWiseZip = document.getElementById("payModalWiseZip");
       const pageSizeControls = document.getElementById("pageSizeControls");
       const paginationInfo = document.getElementById("paginationInfo");
       const prevBtn = document.getElementById("prevBtn");
@@ -1861,6 +1890,13 @@
             billcomAddressZip: null,
             wiseEmail: null,
             wiseTag: null,
+            wiseAccountHolderName: null,
+            wiseRoutingNumber: null,
+            wiseAccountNumber: null,
+            wiseAddressLine1: null,
+            wiseAddressCity: null,
+            wiseAddressState: null,
+            wiseAddressZip: null,
             paymentEmail: null,
           }
         );
@@ -1872,10 +1908,44 @@
         );
       }
 
+      function isWiseAchCompleteClient(ach) {
+        return Boolean(
+          ach.wiseAccountHolderName &&
+            ach.wiseRoutingNumber &&
+            ach.wiseAccountNumber &&
+            ach.wiseAddressLine1 &&
+            ach.wiseAddressCity &&
+            ach.wiseAddressState &&
+            ach.wiseAddressZip
+        );
+      }
+
+      function hasWisePayableClient(meta) {
+        return (
+          hasWiseIdentifierClient(meta) ||
+          isWiseAchCompleteClient({
+            wiseAccountHolderName: meta.wiseAccountHolderName,
+            wiseRoutingNumber: meta.wiseRoutingNumber,
+            wiseAccountNumber: meta.wiseAccountNumber,
+            wiseAddressLine1: meta.wiseAddressLine1,
+            wiseAddressCity: meta.wiseAddressCity,
+            wiseAddressState: meta.wiseAddressState,
+            wiseAddressZip: meta.wiseAddressZip,
+          })
+        );
+      }
+
       function collectWisePayload(source) {
         return {
           wiseEmail: String(source.email || "").trim(),
           wiseTag: String(source.tag || "").trim(),
+          wiseAccountHolderName: String(source.accountHolder || "").trim(),
+          wiseRoutingNumber: String(source.routing || "").trim(),
+          wiseAccountNumber: String(source.account || "").trim(),
+          wiseAddressLine1: String(source.address || "").trim(),
+          wiseAddressCity: String(source.city || "").trim(),
+          wiseAddressState: String(source.state || "").trim().toUpperCase(),
+          wiseAddressZip: String(source.zip || "").trim(),
         };
       }
 
@@ -1932,11 +2002,25 @@
       function fillPayModalWiseFields(meta) {
         payModalWiseEmail.value = meta.wiseEmail || "";
         payModalWiseTag.value = meta.wiseTag || "";
+        payModalWiseAccountHolder.value = meta.wiseAccountHolderName || "";
+        payModalWiseRouting.value = meta.wiseRoutingNumber || "";
+        payModalWiseAccount.value = meta.wiseAccountNumber || "";
+        payModalWiseAddress.value = meta.wiseAddressLine1 || "";
+        payModalWiseCity.value = meta.wiseAddressCity || "";
+        payModalWiseState.value = meta.wiseAddressState || "";
+        payModalWiseZip.value = meta.wiseAddressZip || "";
       }
 
       function clearPayModalWiseFields() {
         payModalWiseEmail.value = "";
         payModalWiseTag.value = "";
+        payModalWiseAccountHolder.value = "";
+        payModalWiseRouting.value = "";
+        payModalWiseAccount.value = "";
+        payModalWiseAddress.value = "";
+        payModalWiseCity.value = "";
+        payModalWiseState.value = "";
+        payModalWiseZip.value = "";
       }
 
       function normalizeBillcomVendorIdInput(value) {
@@ -2232,10 +2316,10 @@
         const wiseHint = document.createElement("p");
         wiseHint.className = "metadata-popover__billcom-hint";
         wiseHint.textContent =
-          "Wise-to-Wise USD payouts only need email or tag — no bank or routing details.";
+          "Wise-to-Wise: email or tag. Other platforms: ACH holder name, routing, account, and full US address.";
 
         const wiseEmailLabel = document.createElement("label");
-        wiseEmailLabel.textContent = "Wise email";
+        wiseEmailLabel.textContent = "Wise email (Wise-to-Wise)";
         const wiseEmailInput = document.createElement("input");
         wiseEmailInput.type = "email";
         wiseEmailInput.placeholder = "affiliate@example.com";
@@ -2243,19 +2327,95 @@
         wiseEmailInput.autocomplete = "off";
 
         const wiseTagLabel = document.createElement("label");
-        wiseTagLabel.textContent = "Wise tag";
+        wiseTagLabel.textContent = "Wise tag (Wise-to-Wise)";
         const wiseTagInput = document.createElement("input");
         wiseTagInput.type = "text";
-        wiseTagInput.placeholder = "@username (one of email or tag required)";
+        wiseTagInput.placeholder = "@username";
         wiseTagInput.value = meta.wiseTag || "";
         wiseTagInput.autocomplete = "off";
         wiseTagInput.spellcheck = false;
+
+        const wiseAchLabel = document.createElement("label");
+        wiseAchLabel.textContent = "Account holder name (ACH / other platform)";
+        const wiseHolderInput = document.createElement("input");
+        wiseHolderInput.type = "text";
+        wiseHolderInput.value = meta.wiseAccountHolderName || "";
+        wiseHolderInput.autocomplete = "off";
+
+        const wiseRoutingLabel = document.createElement("label");
+        wiseRoutingLabel.textContent = "Routing number";
+        const wiseRoutingInput = document.createElement("input");
+        wiseRoutingInput.type = "text";
+        wiseRoutingInput.placeholder = "9 digits";
+        wiseRoutingInput.value = meta.wiseRoutingNumber || "";
+        wiseRoutingInput.autocomplete = "off";
+
+        const wiseAccountLabel = document.createElement("label");
+        wiseAccountLabel.textContent = "Account number";
+        const wiseAccountInput = document.createElement("input");
+        wiseAccountInput.type = "text";
+        wiseAccountInput.value = meta.wiseAccountNumber || "";
+        wiseAccountInput.autocomplete = "off";
+
+        const wiseAddressLabel = document.createElement("label");
+        wiseAddressLabel.textContent = "Street address";
+        const wiseAddressInput = document.createElement("input");
+        wiseAddressInput.type = "text";
+        wiseAddressInput.value = meta.wiseAddressLine1 || "";
+        wiseAddressInput.autocomplete = "off";
+
+        const wiseCityStateZipRow = document.createElement("div");
+        wiseCityStateZipRow.className = "metadata-popover__row";
+
+        const wiseCityWrap = document.createElement("div");
+        const wiseCityLabel = document.createElement("label");
+        wiseCityLabel.textContent = "City";
+        const wiseCityInput = document.createElement("input");
+        wiseCityInput.type = "text";
+        wiseCityInput.value = meta.wiseAddressCity || "";
+        wiseCityInput.autocomplete = "off";
+        wiseCityWrap.appendChild(wiseCityLabel);
+        wiseCityWrap.appendChild(wiseCityInput);
+
+        const wiseStateWrap = document.createElement("div");
+        const wiseStateLabel = document.createElement("label");
+        wiseStateLabel.textContent = "State";
+        const wiseStateInput = document.createElement("input");
+        wiseStateInput.type = "text";
+        wiseStateInput.maxLength = 2;
+        wiseStateInput.value = meta.wiseAddressState || "";
+        wiseStateInput.autocomplete = "off";
+        wiseStateWrap.appendChild(wiseStateLabel);
+        wiseStateWrap.appendChild(wiseStateInput);
+
+        const wiseZipWrap = document.createElement("div");
+        const wiseZipLabel = document.createElement("label");
+        wiseZipLabel.textContent = "ZIP";
+        const wiseZipInput = document.createElement("input");
+        wiseZipInput.type = "text";
+        wiseZipInput.value = meta.wiseAddressZip || "";
+        wiseZipInput.autocomplete = "off";
+        wiseZipWrap.appendChild(wiseZipLabel);
+        wiseZipWrap.appendChild(wiseZipInput);
+
+        wiseCityStateZipRow.appendChild(wiseCityWrap);
+        wiseCityStateZipRow.appendChild(wiseStateWrap);
+        wiseCityStateZipRow.appendChild(wiseZipWrap);
 
         wiseWrap.appendChild(wiseHint);
         wiseWrap.appendChild(wiseEmailLabel);
         wiseWrap.appendChild(wiseEmailInput);
         wiseWrap.appendChild(wiseTagLabel);
         wiseWrap.appendChild(wiseTagInput);
+        wiseWrap.appendChild(wiseAchLabel);
+        wiseWrap.appendChild(wiseHolderInput);
+        wiseWrap.appendChild(wiseRoutingLabel);
+        wiseWrap.appendChild(wiseRoutingInput);
+        wiseWrap.appendChild(wiseAccountLabel);
+        wiseWrap.appendChild(wiseAccountInput);
+        wiseWrap.appendChild(wiseAddressLabel);
+        wiseWrap.appendChild(wiseAddressInput);
+        wiseWrap.appendChild(wiseCityStateZipRow);
 
         methodSelect.addEventListener("change", () => {
           if (methodSelect.value === "Bill.com") {
@@ -2310,12 +2470,21 @@
               wiseFields = collectWisePayload({
                 email: wiseEmailInput.value,
                 tag: wiseTagInput.value,
+                accountHolder: wiseHolderInput.value,
+                routing: wiseRoutingInput.value,
+                account: wiseAccountInput.value,
+                address: wiseAddressInput.value,
+                city: wiseCityInput.value,
+                state: wiseStateInput.value,
+                zip: wiseZipInput.value,
               });
               if (
-                !String(wiseFields.wiseEmail || "").trim() &&
-                !String(wiseFields.wiseTag || "").trim()
+                !hasWiseIdentifierClient({ wiseEmail: wiseFields.wiseEmail, wiseTag: wiseFields.wiseTag }) &&
+                !isWiseAchCompleteClient(wiseFields)
               ) {
-                throw new Error("Wise email or Wise tag is required");
+                throw new Error(
+                  "Wise requires email/tag (Wise-to-Wise) or full ACH + US address (other platforms)"
+                );
               }
             }
             const data = await saveAffiliateMetadata(
@@ -2411,7 +2580,7 @@
         const wiseNames = payable
           .filter((row) => {
             const meta = getAffiliateMeta(row.publisherName);
-            return meta.paymentMethod === "Wise" && hasWiseIdentifierClient(meta);
+            return meta.paymentMethod === "Wise" && hasWisePayableClient(meta);
           })
           .map((row) => row.publisherName);
         const billNames = payable
@@ -2833,13 +3002,20 @@
             wiseFields = collectWisePayload({
               email: payModalWiseEmail.value,
               tag: payModalWiseTag.value,
+              accountHolder: payModalWiseAccountHolder.value,
+              routing: payModalWiseRouting.value,
+              account: payModalWiseAccount.value,
+              address: payModalWiseAddress.value,
+              city: payModalWiseCity.value,
+              state: payModalWiseState.value,
+              zip: payModalWiseZip.value,
             });
             if (
-              !String(wiseFields.wiseEmail || "").trim() &&
-              !String(wiseFields.wiseTag || "").trim()
+              !hasWiseIdentifierClient({ wiseEmail: wiseFields.wiseEmail, wiseTag: wiseFields.wiseTag }) &&
+              !isWiseAchCompleteClient(wiseFields)
             ) {
               payModalHint.textContent =
-                "Wise email or Wise tag is required. Fill in the edit popup or enter details here.";
+                "Wise email/tag (Wise-to-Wise) or full ACH + address (other platforms) required.";
               return;
             }
           }

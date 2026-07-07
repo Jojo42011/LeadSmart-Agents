@@ -37,6 +37,16 @@ const BILLCOM_ACH_COLUMNS = [
 
 const WISE_IDENTIFIER_COLUMNS = ["wiseEmail", "wiseTag"] as const;
 
+const WISE_ACH_COLUMNS = [
+  "wiseAccountHolderName",
+  "wiseRoutingNumber",
+  "wiseAccountNumber",
+  "wiseAddressLine1",
+  "wiseAddressCity",
+  "wiseAddressState",
+  "wiseAddressZip",
+] as const;
+
 function migrateAffiliateMetadataSchema(database: Database.Database): void {
   const columns = database
     .prepare("PRAGMA table_info(affiliate_metadata)")
@@ -52,6 +62,11 @@ function migrateAffiliateMetadataSchema(database: Database.Database): void {
     }
   }
   for (const column of WISE_IDENTIFIER_COLUMNS) {
+    if (!names.has(column)) {
+      database.exec(`ALTER TABLE affiliate_metadata ADD COLUMN ${column} TEXT`);
+    }
+  }
+  for (const column of WISE_ACH_COLUMNS) {
     if (!names.has(column)) {
       database.exec(`ALTER TABLE affiliate_metadata ADD COLUMN ${column} TEXT`);
     }
@@ -329,6 +344,13 @@ export interface AffiliateMetadata {
   billcomAddressZip: string | null;
   wiseEmail: string | null;
   wiseTag: string | null;
+  wiseAccountHolderName: string | null;
+  wiseRoutingNumber: string | null;
+  wiseAccountNumber: string | null;
+  wiseAddressLine1: string | null;
+  wiseAddressCity: string | null;
+  wiseAddressState: string | null;
+  wiseAddressZip: string | null;
   paymentEmail: string | null;
 }
 
@@ -346,6 +368,13 @@ export type BillcomAchFieldUpdates = {
 export type WiseFieldUpdates = {
   wiseEmail?: string | null;
   wiseTag?: string | null;
+  wiseAccountHolderName?: string | null;
+  wiseRoutingNumber?: string | null;
+  wiseAccountNumber?: string | null;
+  wiseAddressLine1?: string | null;
+  wiseAddressCity?: string | null;
+  wiseAddressState?: string | null;
+  wiseAddressZip?: string | null;
 };
 
 type AffiliateMetadataRow = {
@@ -366,6 +395,13 @@ type AffiliateMetadataRow = {
   billcomAddressZip: string | null;
   wiseEmail: string | null;
   wiseTag: string | null;
+  wiseAccountHolderName: string | null;
+  wiseRoutingNumber: string | null;
+  wiseAccountNumber: string | null;
+  wiseAddressLine1: string | null;
+  wiseAddressCity: string | null;
+  wiseAddressState: string | null;
+  wiseAddressZip: string | null;
   paymentEmail: string | null;
 };
 
@@ -374,7 +410,9 @@ const AFFILIATE_METADATA_SELECT =
           billcomVendorId, billcomPayeeName, billcomAccountHolderName,
           billcomRoutingNumber, billcomAccountNumber, billcomAddressLine1,
           billcomAddressCity, billcomAddressState, billcomAddressZip,
-          wiseEmail, wiseTag, paymentEmail
+          wiseEmail, wiseTag, wiseAccountHolderName, wiseRoutingNumber,
+          wiseAccountNumber, wiseAddressLine1, wiseAddressCity, wiseAddressState,
+          wiseAddressZip, paymentEmail
    FROM affiliate_metadata`;
 
 function loadPaidMonthsMap(
@@ -418,6 +456,13 @@ function rowToAffiliateMetadata(
     billcomAddressZip: row.billcomAddressZip,
     wiseEmail: row.wiseEmail,
     wiseTag: row.wiseTag,
+    wiseAccountHolderName: row.wiseAccountHolderName,
+    wiseRoutingNumber: row.wiseRoutingNumber,
+    wiseAccountNumber: row.wiseAccountNumber,
+    wiseAddressLine1: row.wiseAddressLine1,
+    wiseAddressCity: row.wiseAddressCity,
+    wiseAddressState: row.wiseAddressState,
+    wiseAddressZip: row.wiseAddressZip,
     paymentEmail: row.paymentEmail,
   };
 }
@@ -607,10 +652,45 @@ export function upsertAffiliateMetadata(
           wiseFields.wiseTag !== undefined
             ? wiseFields.wiseTag
             : existing?.wiseTag ?? null,
+        wiseAccountHolderName:
+          wiseFields.wiseAccountHolderName !== undefined
+            ? wiseFields.wiseAccountHolderName
+            : existing?.wiseAccountHolderName ?? null,
+        wiseRoutingNumber:
+          wiseFields.wiseRoutingNumber !== undefined
+            ? wiseFields.wiseRoutingNumber
+            : existing?.wiseRoutingNumber ?? null,
+        wiseAccountNumber:
+          wiseFields.wiseAccountNumber !== undefined
+            ? wiseFields.wiseAccountNumber
+            : existing?.wiseAccountNumber ?? null,
+        wiseAddressLine1:
+          wiseFields.wiseAddressLine1 !== undefined
+            ? wiseFields.wiseAddressLine1
+            : existing?.wiseAddressLine1 ?? null,
+        wiseAddressCity:
+          wiseFields.wiseAddressCity !== undefined
+            ? wiseFields.wiseAddressCity
+            : existing?.wiseAddressCity ?? null,
+        wiseAddressState:
+          wiseFields.wiseAddressState !== undefined
+            ? wiseFields.wiseAddressState
+            : existing?.wiseAddressState ?? null,
+        wiseAddressZip:
+          wiseFields.wiseAddressZip !== undefined
+            ? wiseFields.wiseAddressZip
+            : existing?.wiseAddressZip ?? null,
       }
     : {
         wiseEmail: existing?.wiseEmail ?? null,
         wiseTag: existing?.wiseTag ?? null,
+        wiseAccountHolderName: existing?.wiseAccountHolderName ?? null,
+        wiseRoutingNumber: existing?.wiseRoutingNumber ?? null,
+        wiseAccountNumber: existing?.wiseAccountNumber ?? null,
+        wiseAddressLine1: existing?.wiseAddressLine1 ?? null,
+        wiseAddressCity: existing?.wiseAddressCity ?? null,
+        wiseAddressState: existing?.wiseAddressState ?? null,
+        wiseAddressZip: existing?.wiseAddressZip ?? null,
       };
 
   const nextPaymentEmail =
@@ -625,7 +705,10 @@ export function upsertAffiliateMetadata(
              billcomRoutingNumber = ?, billcomAccountNumber = ?,
              billcomAddressLine1 = ?, billcomAddressCity = ?,
              billcomAddressState = ?, billcomAddressZip = ?,
-             wiseEmail = ?, wiseTag = ?, paymentEmail = ?,
+             wiseEmail = ?, wiseTag = ?,
+             wiseAccountHolderName = ?, wiseRoutingNumber = ?, wiseAccountNumber = ?,
+             wiseAddressLine1 = ?, wiseAddressCity = ?, wiseAddressState = ?, wiseAddressZip = ?,
+             paymentEmail = ?,
              updatedAt = ?
          WHERE publisherName = ?`
       )
@@ -643,6 +726,13 @@ export function upsertAffiliateMetadata(
         nextAch.billcomAddressZip,
         nextWise.wiseEmail,
         nextWise.wiseTag,
+        nextWise.wiseAccountHolderName,
+        nextWise.wiseRoutingNumber,
+        nextWise.wiseAccountNumber,
+        nextWise.wiseAddressLine1,
+        nextWise.wiseAddressCity,
+        nextWise.wiseAddressState,
+        nextWise.wiseAddressZip,
         nextPaymentEmail,
         updatedAt,
         publisherName
@@ -655,8 +745,10 @@ export function upsertAffiliateMetadata(
           billcomVendorId, billcomPayeeName, billcomAccountHolderName,
           billcomRoutingNumber, billcomAccountNumber, billcomAddressLine1,
           billcomAddressCity, billcomAddressState, billcomAddressZip,
-          wiseEmail, wiseTag, paymentEmail
-        ) VALUES (?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          wiseEmail, wiseTag, wiseAccountHolderName, wiseRoutingNumber,
+          wiseAccountNumber, wiseAddressLine1, wiseAddressCity, wiseAddressState,
+          wiseAddressZip, paymentEmail
+        ) VALUES (?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         publisherName,
@@ -674,6 +766,13 @@ export function upsertAffiliateMetadata(
         nextAch.billcomAddressZip,
         nextWise.wiseEmail,
         nextWise.wiseTag,
+        nextWise.wiseAccountHolderName,
+        nextWise.wiseRoutingNumber,
+        nextWise.wiseAccountNumber,
+        nextWise.wiseAddressLine1,
+        nextWise.wiseAddressCity,
+        nextWise.wiseAddressState,
+        nextWise.wiseAddressZip,
         nextPaymentEmail
       );
   }
@@ -757,6 +856,13 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
       billcomAddressZip: null,
       wiseEmail: null,
       wiseTag: null,
+      wiseAccountHolderName: null,
+      wiseRoutingNumber: null,
+      wiseAccountNumber: null,
+      wiseAddressLine1: null,
+      wiseAddressCity: null,
+      wiseAddressState: null,
+      wiseAddressZip: null,
       paymentEmail: null,
     };
   }
@@ -791,6 +897,13 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     billcomAddressZip: existing.billcomAddressZip,
     wiseEmail: existing.wiseEmail,
     wiseTag: existing.wiseTag,
+    wiseAccountHolderName: existing.wiseAccountHolderName,
+    wiseRoutingNumber: existing.wiseRoutingNumber,
+    wiseAccountNumber: existing.wiseAccountNumber,
+    wiseAddressLine1: existing.wiseAddressLine1,
+    wiseAddressCity: existing.wiseAddressCity,
+    wiseAddressState: existing.wiseAddressState,
+    wiseAddressZip: existing.wiseAddressZip,
     paymentEmail: existing.paymentEmail,
   };
 }

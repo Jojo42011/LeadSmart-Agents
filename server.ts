@@ -37,6 +37,8 @@ import {
   getWiseProfileIdFromEnv,
   resolveWiseIdentifier,
   resolveWisePayoutTarget,
+  isWiseAchComplete,
+  type WiseAchDetails,
   type WiseRecipient,
 } from "./lib/wiseClient";
 import {
@@ -821,7 +823,27 @@ function normalizeWiseTag(value: string): string {
   return tag;
 }
 
-function parseWiseFieldUpdates(body: unknown): WiseFieldUpdates | null {
+function wiseAchDetailsFromMetadata(
+  meta: AffiliateMetadata | null
+): Partial<WiseAchDetails> {
+  if (!meta) {
+    return {};
+  }
+  return {
+    accountHolderName: meta.wiseAccountHolderName ?? undefined,
+    routingNumber: meta.wiseRoutingNumber ?? undefined,
+    accountNumber: meta.wiseAccountNumber ?? undefined,
+    addressLine1: meta.wiseAddressLine1 ?? undefined,
+    city: meta.wiseAddressCity ?? undefined,
+    state: meta.wiseAddressState ?? undefined,
+    zip: meta.wiseAddressZip ?? undefined,
+  };
+}
+
+function parseWiseFieldUpdates(
+  body: unknown,
+  existing: AffiliateMetadata | null
+): WiseFieldUpdates | null {
   if (!body || typeof body !== "object") {
     return null;
   }
@@ -841,7 +863,97 @@ function parseWiseFieldUpdates(body: unknown): WiseFieldUpdates | null {
     hasUpdate = true;
   }
 
+  const accountHolder = readOptionalString(body, "wiseAccountHolderName");
+  if (accountHolder !== undefined) {
+    updates.wiseAccountHolderName = accountHolder;
+    hasUpdate = true;
+  }
+
+  const routingRaw = readOptionalString(body, "wiseRoutingNumber");
+  if (routingRaw !== undefined) {
+    updates.wiseRoutingNumber = routingRaw ? normalizeRoutingNumber(routingRaw) : null;
+    hasUpdate = true;
+  }
+
+  const accountRaw = readOptionalString(body, "wiseAccountNumber");
+  if (accountRaw !== undefined) {
+    if (!accountRaw || isMaskedAccountNumber(accountRaw)) {
+      updates.wiseAccountNumber = existing?.wiseAccountNumber ?? null;
+    } else if (accountRaw.replace(/\D/g, "").length < 4) {
+      throw new Error("Wise account number must be at least 4 digits");
+    } else {
+      updates.wiseAccountNumber = accountRaw.replace(/\s/g, "");
+    }
+    hasUpdate = true;
+  }
+
+  const line1 = readOptionalString(body, "wiseAddressLine1");
+  if (line1 !== undefined) {
+    updates.wiseAddressLine1 = line1;
+    hasUpdate = true;
+  }
+
+  const city = readOptionalString(body, "wiseAddressCity");
+  if (city !== undefined) {
+    updates.wiseAddressCity = city;
+    hasUpdate = true;
+  }
+
+  const stateRaw = readOptionalString(body, "wiseAddressState");
+  if (stateRaw !== undefined) {
+    updates.wiseAddressState = stateRaw ? normalizeState(stateRaw) : null;
+    hasUpdate = true;
+  }
+
+  const zipRaw = readOptionalString(body, "wiseAddressZip");
+  if (zipRaw !== undefined) {
+    updates.wiseAddressZip = zipRaw ? normalizeZip(zipRaw) : null;
+    hasUpdate = true;
+  }
+
   return hasUpdate ? updates : null;
+}
+
+function mergedWiseAchDetails(
+  meta: AffiliateMetadata | null,
+  updates: WiseFieldUpdates | null
+): Partial<WiseAchDetails> {
+  const merged: Partial<WiseAchDetails> = {
+    ...wiseAchDetailsFromMetadata(meta),
+  };
+  if (!updates) {
+    return merged;
+  }
+  if (updates.wiseAccountHolderName !== undefined) {
+    merged.accountHolderName = updates.wiseAccountHolderName ?? undefined;
+  }
+  if (updates.wiseRoutingNumber !== undefined) {
+    merged.routingNumber = updates.wiseRoutingNumber ?? undefined;
+  }
+  if (updates.wiseAccountNumber !== undefined) {
+    merged.accountNumber = updates.wiseAccountNumber ?? undefined;
+  }
+  if (updates.wiseAddressLine1 !== undefined) {
+    merged.addressLine1 = updates.wiseAddressLine1 ?? undefined;
+  }
+  if (updates.wiseAddressCity !== undefined) {
+    merged.city = updates.wiseAddressCity ?? undefined;
+  }
+  if (updates.wiseAddressState !== undefined) {
+    merged.state = updates.wiseAddressState ?? undefined;
+  }
+  if (updates.wiseAddressZip !== undefined) {
+    merged.zip = updates.wiseAddressZip ?? undefined;
+  }
+  return merged;
+}
+
+function hasWisePayoutDetails(
+  wiseEmail: string | null | undefined,
+  wiseTag: string | null | undefined,
+  ach: Partial<WiseAchDetails> | null | undefined
+): boolean {
+  return Boolean(resolveWiseIdentifier(wiseEmail, wiseTag) || isWiseAchComplete(ach));
 }
 
 function normalizePaymentEmail(value: string): string {
@@ -944,9 +1056,16 @@ async function resolveWisePayoutForAffiliate(
   body: unknown
 ) {
   const { wiseEmail, wiseTag } = resolveWiseFieldsForPay(meta, body);
+  const achDetails = resolveWiseAchForPay(meta, body);
 
-  if (resolveWiseIdentifier(wiseEmail, wiseTag)) {
-    return resolveWisePayoutTarget(profileId, recipients, wiseEmail, wiseTag);
+  if (hasWisePayoutDetails(wiseEmail, wiseTag, achDetails)) {
+    return resolveWisePayoutTarget(
+      profileId,
+      recipients,
+      wiseEmail,
+      wiseTag,
+      achDetails
+    );
   }
 
   const byName = matchWiseRecipientByName(recipients, publisherName);
@@ -955,8 +1074,48 @@ async function resolveWisePayoutForAffiliate(
   }
 
   throw new Error(
-    "Add Wise email or Wise tag in affiliate settings (no bank details needed for Wise-to-Wise USD payouts)"
+    "Add Wise email/tag (Wise-to-Wise) or full ACH + US address (other platforms) in affiliate settings"
   );
+}
+
+function resolveWiseAchForPay(
+  meta: AffiliateMetadata | null,
+  body: unknown
+): WiseAchDetails | null {
+  const merged: Partial<WiseAchDetails> = {
+    ...wiseAchDetailsFromMetadata(meta),
+  };
+
+  const accountHolder = readOptionalString(body, "wiseAccountHolderName");
+  if (accountHolder) {
+    merged.accountHolderName = accountHolder;
+  }
+  const routing = readOptionalString(body, "wiseRoutingNumber");
+  if (routing) {
+    merged.routingNumber = normalizeRoutingNumber(routing);
+  }
+  const account = readOptionalString(body, "wiseAccountNumber");
+  if (account && !isMaskedAccountNumber(account)) {
+    merged.accountNumber = account.replace(/\s/g, "");
+  }
+  const line1 = readOptionalString(body, "wiseAddressLine1");
+  if (line1) {
+    merged.addressLine1 = line1;
+  }
+  const city = readOptionalString(body, "wiseAddressCity");
+  if (city) {
+    merged.city = city;
+  }
+  const state = readOptionalString(body, "wiseAddressState");
+  if (state) {
+    merged.state = normalizeState(state);
+  }
+  const zip = readOptionalString(body, "wiseAddressZip");
+  if (zip) {
+    merged.zip = normalizeZip(zip);
+  }
+
+  return isWiseAchComplete(merged) ? merged : null;
 }
 
 function resolveBillcomAchForPay(
@@ -1044,7 +1203,7 @@ app.post("/api/payment/metadata/:name", (req, res) => {
 
     let wiseFields: WiseFieldUpdates | null = null;
     try {
-      wiseFields = parseWiseFieldUpdates(req.body);
+      wiseFields = parseWiseFieldUpdates(req.body, existingMeta);
     } catch (wiseErr) {
       res.status(400).json({
         error: wiseErr instanceof Error ? wiseErr.message : "Invalid Wise details",
@@ -1061,9 +1220,11 @@ app.post("/api/payment/metadata/:name", (req, res) => {
         wiseFields?.wiseTag !== undefined
           ? wiseFields.wiseTag
           : existingMeta?.wiseTag ?? null;
-      if (!resolveWiseIdentifier(nextEmail, nextTag)) {
+      const nextAch = mergedWiseAchDetails(existingMeta, wiseFields);
+      if (!hasWisePayoutDetails(nextEmail, nextTag, nextAch)) {
         res.status(400).json({
-          error: "Wise email or Wise tag is required when payment method is Wise",
+          error:
+            "Wise requires email/tag (Wise-to-Wise) or full ACH + US address (other platforms)",
         });
         return;
       }
@@ -1295,18 +1456,15 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       req.body
     );
 
-    const { wiseEmail, wiseTag } = resolveWiseFieldsForPay(meta, req.body);
-    if (
-      wiseEmail !== meta.wiseEmail ||
-      wiseTag !== meta.wiseTag
-    ) {
+    const wiseFields = parseWiseFieldUpdates(req.body, meta);
+    if (wiseFields) {
       upsertAffiliateMetadata(
         publisherName,
         meta.paymentMethod,
         meta.paymentTerms,
         meta.billcomVendorId,
         null,
-        { wiseEmail, wiseTag }
+        wiseFields
       );
     }
 

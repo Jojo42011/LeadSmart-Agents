@@ -40,7 +40,34 @@ export interface WiseContact {
 
 export interface WisePayoutTarget {
   recipientId: number;
-  resolvedVia: "recipient" | "contact";
+  resolvedVia: "recipient" | "contact" | "ach";
+}
+
+export interface WiseAchDetails {
+  accountHolderName: string;
+  routingNumber: string;
+  accountNumber: string;
+  addressLine1: string;
+  city: string;
+  state: string;
+  zip: string;
+}
+
+export function isWiseAchComplete(
+  ach: Partial<WiseAchDetails> | null | undefined
+): ach is WiseAchDetails {
+  if (!ach) {
+    return false;
+  }
+  return Boolean(
+    ach.accountHolderName?.trim() &&
+      ach.routingNumber?.trim() &&
+      ach.accountNumber?.trim() &&
+      ach.addressLine1?.trim() &&
+      ach.city?.trim() &&
+      ach.state?.trim() &&
+      ach.zip?.trim()
+  );
 }
 
 function wiseToken(): string {
@@ -320,15 +347,57 @@ export function matchWiseRecipientByEmail(
   return null;
 }
 
+/** Create a USD ACH (ABA) recipient for cross-platform payouts. */
+export async function createWiseAchRecipient(
+  profileId: string,
+  ach: WiseAchDetails
+): Promise<{ recipientId: number }> {
+  const client = createWiseClient();
+  const res = await client.post("/v1/accounts", {
+    currency: "USD",
+    type: "aba",
+    profile: profileId,
+    ownedByCustomer: false,
+    accountHolderName: ach.accountHolderName.trim(),
+    details: {
+      legalType: "PRIVATE",
+      abartn: ach.routingNumber.trim(),
+      accountNumber: ach.accountNumber.trim(),
+      accountType: "CHECKING",
+      address: {
+        country: "US",
+        state: ach.state.trim().toUpperCase(),
+        city: ach.city.trim(),
+        firstLine: ach.addressLine1.trim(),
+        postCode: ach.zip.trim(),
+      },
+    },
+  });
+
+  const row = asRecord(res.data);
+  const id = row ? readNumber(row, "id") : null;
+  if (id === null) {
+    throw new Error("Wise recipient create response missing id");
+  }
+
+  console.log(
+    "[Wise] Created ACH recipient id=%s holder=%s",
+    id,
+    ach.accountHolderName.trim()
+  );
+
+  return { recipientId: id };
+}
+
 /**
- * Resolve payout target: existing recipient ID, or contactId flow for email/tag.
- * For USD→USD to Wise users, only email or Wisetag is required (no bank details).
+ * Resolve payout target: Wise-to-Wise (email/tag), existing recipient, or ACH bank details.
  */
 export async function resolveWisePayoutTarget(
   profileId: string,
   recipients: WiseRecipient[],
   wiseEmail: string | null | undefined,
-  wiseTag: string | null | undefined
+  wiseTag: string | null | undefined,
+  achDetails?: Partial<WiseAchDetails> | null
 ): Promise<WisePayoutTarget | { contactId: string; resolvedVia: "contact" }> {
   const existing = matchWiseRecipientByEmail(recipients, wiseEmail);
   if (existing) {
@@ -336,14 +405,19 @@ export async function resolveWisePayoutTarget(
   }
 
   const identifier = resolveWiseIdentifier(wiseEmail, wiseTag);
-  if (!identifier) {
-    throw new Error(
-      "Wise email or Wise tag is required (no bank details needed for Wise-to-Wise USD payouts)"
-    );
+  if (identifier) {
+    const contact = await createContactFromIdentifier(profileId, identifier, "USD");
+    return { contactId: contact.contactId, resolvedVia: "contact" };
   }
 
-  const contact = await createContactFromIdentifier(profileId, identifier, "USD");
-  return { contactId: contact.contactId, resolvedVia: "contact" };
+  if (isWiseAchComplete(achDetails)) {
+    const created = await createWiseAchRecipient(profileId, achDetails);
+    return { recipientId: created.recipientId, resolvedVia: "ach" };
+  }
+
+  throw new Error(
+    "Wise payout requires Wise email/tag (Wise-to-Wise) or full ACH + address (other platforms)"
+  );
 }
 
 async function targetAccountFromQuote(
