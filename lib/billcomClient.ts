@@ -207,6 +207,31 @@ function readNumber(obj: Record<string, unknown>, key: string): number | null {
   return null;
 }
 
+const PROCESS_DATE_YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isValidProcessDateYmd(value: string | null | undefined): value is string {
+  return typeof value === "string" && PROCESS_DATE_YMD_RE.test(value);
+}
+
+/** Ensure PayBills processDate is a valid YYYY-MM-DD in Chicago time. */
+function ensureBillcomProcessDateYmd(
+  preferred: string | null | undefined,
+  newBankAccount: boolean
+): string {
+  if (isValidProcessDateYmd(preferred)) {
+    return preferred;
+  }
+
+  const fresh = billcomProcessDateYmd(newBankAccount);
+  console.warn(
+    "[BillCom] processDate invalid or missing (%s) — recalculated to %s (newBankAccount=%s)",
+    preferred ?? "(empty)",
+    fresh,
+    newBankAccount
+  );
+  return fresh;
+}
+
 function todayYmd(): string {
   return chicagoTodayYmd();
 }
@@ -601,21 +626,22 @@ export async function payBill(
   options?: { newBankAccount?: boolean }
 ): Promise<BillcomPayment> {
   const newBankAccount = options?.newBankAccount ?? false;
-  let processDate = billcomProcessDateYmd(newBankAccount);
   const bac = optionalBankAccountId();
 
-  const runPay = async (date: string) => {
+  const runPay = async (requestedDate: string | null | undefined) => {
+    const processDate = ensureBillcomProcessDateYmd(requestedDate, newBankAccount);
+    console.log("[BillCom] PayBills sending processDate=%s", processDate);
     console.log("[BillCom] PayBills request:", {
       billId,
       vendorId,
       amount,
-      processDate: date,
+      processDate,
       bankAccountId: bac ?? "(org primary)",
     });
 
     const payload: Record<string, unknown> = {
       vendorId,
-      processDate: date,
+      processDate,
       billPays: [{ billId, amount }],
     };
     if (bac) {
@@ -627,19 +653,19 @@ export async function payBill(
 
   let row: Record<string, unknown>;
   try {
-    row = await runPay(processDate);
+    row = await runPay(billcomProcessDateYmd(newBankAccount));
   } catch (err) {
     if (
       !newBankAccount &&
       err instanceof BillcomApiError &&
       err.errorCode === "BDC_1402"
     ) {
-      processDate = chicagoAddBusinessDaysYmd(2);
+      const retryDate = billcomProcessDateYmd(true);
       console.log(
-        "[BillCom] BDC_1402 — retrying PayBills with processDate=%s (2 business days out)",
-        processDate
+        "[BillCom] BDC_1402 — retrying PayBills with fresh processDate=%s (2 business days out)",
+        retryDate
       );
-      row = await runPay(processDate);
+      row = await runPay(retryDate);
     } else {
       throw err;
     }
@@ -742,11 +768,13 @@ export async function bulkPayBills(
 
   for (let i = 0; i < payments.length; i += 50) {
     const batch = payments.slice(i, i + 50);
+    const processDate = ensureBillcomProcessDateYmd(billcomProcessDateYmd(), false);
+    console.log("[BillCom] Bulk pay sending processDate=%s", processDate);
     try {
       const res = await axios.post(
         `${BILLCOM_GATEWAY_BASE}/payments/bulk`,
         {
-          processDate: billcomProcessDateYmd(),
+          processDate,
           fundingAccount: {
             type: "BANK_ACCOUNT",
             id: bankAccountId(),

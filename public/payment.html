@@ -2066,7 +2066,13 @@
 
       function bindMetadataPopoverListeners(anchorTd, popover) {
         const reposition = () => positionMetadataPopover(anchorTd, popover);
-        const closeOnScroll = () => closeEditPopover();
+        const closeOnScroll = (e) => {
+          const target = e.target;
+          if (target instanceof Node && popover.contains(target)) {
+            return;
+          }
+          closeEditPopover();
+        };
         window.addEventListener("resize", reposition);
         window.addEventListener("scroll", closeOnScroll, true);
         popover._metadataPopoverCleanup = () => {
@@ -2329,6 +2335,7 @@
         popover.appendChild(wiseWrap);
         popover.appendChild(actions);
         popover.addEventListener("click", (e) => e.stopPropagation());
+        popover.addEventListener("mousedown", (e) => e.stopPropagation());
         document.body.appendChild(popover);
         positionMetadataPopover(anchorTd, popover);
         bindMetadataPopoverListeners(anchorTd, popover);
@@ -3856,10 +3863,19 @@
       formatCstClock();
       setInterval(formatCstClock, 1000);
 
-      document.addEventListener("click", () => {
-        if (openEditPopoverPublisher) {
-          closeEditPopover();
+      document.addEventListener("click", (e) => {
+        if (!openEditPopoverPublisher) {
+          return;
         }
+        const popover = document.querySelector(".metadata-popover");
+        if (!popover) {
+          openEditPopoverPublisher = null;
+          return;
+        }
+        if (e.target instanceof Node && popover.contains(e.target)) {
+          return;
+        }
+        closeEditPopover();
       });
 
       if (sessionStorage.getItem(AUTH_KEY) === "1") {
