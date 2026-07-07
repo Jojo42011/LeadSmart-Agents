@@ -38,8 +38,11 @@ import {
   resolveWiseIdentifier,
   resolveWisePayoutTarget,
   isWiseAchComplete,
+  parseWiseRecipientIdInput,
+  formatWiseRecipientIdForStorage,
   type WiseAchDetails,
   type WiseRecipient,
+  type WisePayoutTarget,
 } from "./lib/wiseClient";
 import {
   bulkPayBills,
@@ -863,6 +866,20 @@ function parseWiseFieldUpdates(
     hasUpdate = true;
   }
 
+  const recipientRaw = readOptionalString(body, "wiseRecipientId");
+  if (recipientRaw !== undefined) {
+    if (!recipientRaw.trim()) {
+      updates.wiseRecipientId = null;
+    } else {
+      const parsed = parseWiseRecipientIdInput(recipientRaw);
+      if (parsed === null) {
+        throw new Error("Wise recipient ID must be a positive number");
+      }
+      updates.wiseRecipientId = formatWiseRecipientIdForStorage(parsed);
+    }
+    hasUpdate = true;
+  }
+
   const accountHolder = readOptionalString(body, "wiseAccountHolderName");
   if (accountHolder !== undefined) {
     updates.wiseAccountHolderName = accountHolder;
@@ -951,9 +968,58 @@ function mergedWiseAchDetails(
 function hasWisePayoutDetails(
   wiseEmail: string | null | undefined,
   wiseTag: string | null | undefined,
-  ach: Partial<WiseAchDetails> | null | undefined
+  ach: Partial<WiseAchDetails> | null | undefined,
+  wiseRecipientId: string | null | undefined
 ): boolean {
+  const storedId = wiseRecipientId?.trim() ?? "";
+  if (storedId && parseWiseRecipientIdInput(storedId) !== null) {
+    return true;
+  }
   return Boolean(resolveWiseIdentifier(wiseEmail, wiseTag) || isWiseAchComplete(ach));
+}
+
+function resolveWiseRecipientIdForPay(
+  meta: AffiliateMetadata | null,
+  body: unknown
+): number | null {
+  const raw = readOptionalString(body, "wiseRecipientId");
+  if (raw !== undefined) {
+    if (!raw.trim()) {
+      return null;
+    }
+    return parseWiseRecipientIdInput(raw);
+  }
+
+  const stored = meta?.wiseRecipientId?.trim() ?? "";
+  if (!stored) {
+    return null;
+  }
+  return parseWiseRecipientIdInput(stored);
+}
+
+function persistWiseRecipientIdFromPayout(
+  publisherName: string,
+  meta: AffiliateMetadata,
+  target: WisePayoutTarget | { contactId: string; resolvedVia: "contact" }
+): void {
+  if (!("recipientId" in target)) {
+    return;
+  }
+  if (target.resolvedVia !== "ach" && target.resolvedVia !== "recipient") {
+    return;
+  }
+  const stored = formatWiseRecipientIdForStorage(target.recipientId);
+  if (meta.wiseRecipientId === stored) {
+    return;
+  }
+  upsertAffiliateMetadata(
+    publisherName,
+    meta.paymentMethod,
+    meta.paymentTerms,
+    meta.billcomVendorId,
+    null,
+    { wiseRecipientId: stored }
+  );
 }
 
 function normalizePaymentEmail(value: string): string {
@@ -1057,14 +1123,25 @@ async function resolveWisePayoutForAffiliate(
 ) {
   const { wiseEmail, wiseTag } = resolveWiseFieldsForPay(meta, body);
   const achDetails = resolveWiseAchForPay(meta, body);
+  const storedRecipientId = resolveWiseRecipientIdForPay(meta, body);
 
-  if (hasWisePayoutDetails(wiseEmail, wiseTag, achDetails)) {
+  if (
+    hasWisePayoutDetails(
+      wiseEmail,
+      wiseTag,
+      achDetails,
+      storedRecipientId !== null
+        ? formatWiseRecipientIdForStorage(storedRecipientId)
+        : meta?.wiseRecipientId
+    )
+  ) {
     return resolveWisePayoutTarget(
       profileId,
       recipients,
       wiseEmail,
       wiseTag,
-      achDetails
+      achDetails,
+      storedRecipientId
     );
   }
 
@@ -1074,7 +1151,7 @@ async function resolveWisePayoutForAffiliate(
   }
 
   throw new Error(
-    "Add Wise email/tag (Wise-to-Wise) or full ACH + US address (other platforms) in affiliate settings"
+    "Add Wise recipient ID, email/tag (Wise-to-Wise), or full ACH + US address in affiliate settings"
   );
 }
 
@@ -1221,10 +1298,14 @@ app.post("/api/payment/metadata/:name", (req, res) => {
           ? wiseFields.wiseTag
           : existingMeta?.wiseTag ?? null;
       const nextAch = mergedWiseAchDetails(existingMeta, wiseFields);
-      if (!hasWisePayoutDetails(nextEmail, nextTag, nextAch)) {
+      const nextRecipientId =
+        wiseFields?.wiseRecipientId !== undefined
+          ? wiseFields.wiseRecipientId
+          : existingMeta?.wiseRecipientId ?? null;
+      if (!hasWisePayoutDetails(nextEmail, nextTag, nextAch, nextRecipientId)) {
         res.status(400).json({
           error:
-            "Wise requires email/tag (Wise-to-Wise) or full ACH + US address (other platforms)",
+            "Wise requires recipient ID, email/tag (Wise-to-Wise), or full ACH + US address (other platforms)",
         });
         return;
       }
@@ -1474,6 +1555,7 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       "LeadSmart Affiliate Payout",
       target
     );
+    persistWiseRecipientIdFromPayout(publisherName, meta, target);
     markAffiliatePaidIfUnpaid(publisherName, months);
     trySendPaymentConfirmation(publisherName, amount, months, "Wise");
 
@@ -1732,6 +1814,8 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
     publisherName: string;
     transferId: number;
     amount: number;
+    meta: AffiliateMetadata;
+    target: WisePayoutTarget | { contactId: string; resolvedVia: "contact" };
   }> = [];
 
   for (const publisherName of publisherNames) {
@@ -1762,6 +1846,8 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
         publisherName,
         transferId: transfer.transferId,
         amount,
+        meta,
+        target,
       });
     } catch (err) {
       failed.push({
@@ -1774,6 +1860,11 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
   for (const pending of pendingFunds) {
     try {
       await fundTransfer(profileId, pending.transferId);
+      persistWiseRecipientIdFromPayout(
+        pending.publisherName,
+        pending.meta,
+        pending.target
+      );
       markAffiliatePaidIfUnpaid(pending.publisherName, months);
       trySendPaymentConfirmation(
         pending.publisherName,

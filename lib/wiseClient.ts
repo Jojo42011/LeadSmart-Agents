@@ -38,9 +38,60 @@ export interface WiseContact {
   name: string;
 }
 
+/** Parse numeric Wise API recipient ID from plain digits or a wise.com/recipients URL. */
+export function parseWiseRecipientIdInput(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    const id = parseInt(trimmed, 10);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
+
+  const urlMatch = trimmed.match(/wise\.com\/recipients\/([^/?#]+)/i);
+  if (urlMatch) {
+    const segment = urlMatch[1];
+    if (/^\d+$/.test(segment)) {
+      return parseInt(segment, 10);
+    }
+    throw new Error(
+      "Wise browser links use a UUID, not the API recipient ID. " +
+        "Open the recipient in Wise and enter the numeric recipient ID (or list recipients via API)."
+    );
+  }
+
+  throw new Error("Wise recipient ID must be a number (e.g. 40000000)");
+}
+
+export function formatWiseRecipientIdForStorage(recipientId: number): string {
+  return String(recipientId);
+}
+
+/** Verify a stored recipient ID exists in Wise. */
+export async function verifyWiseRecipientId(recipientId: number): Promise<boolean> {
+  const client = createWiseClient();
+  try {
+    const res = await client.get(`/v2/accounts/${recipientId}`);
+    const row = asRecord(res.data);
+    const id = row ? readNumber(row, "id") : null;
+    return id === recipientId;
+  } catch {
+    return false;
+  }
+}
+
+function findRecipientById(
+  recipients: WiseRecipient[],
+  recipientId: number
+): WiseRecipient | null {
+  return recipients.find((recipient) => recipient.id === recipientId) ?? null;
+}
+
 export interface WisePayoutTarget {
   recipientId: number;
-  resolvedVia: "recipient" | "contact" | "ach";
+  resolvedVia: "recipient" | "contact" | "ach" | "stored";
 }
 
 export interface WiseAchDetails {
@@ -397,8 +448,27 @@ export async function resolveWisePayoutTarget(
   recipients: WiseRecipient[],
   wiseEmail: string | null | undefined,
   wiseTag: string | null | undefined,
-  achDetails?: Partial<WiseAchDetails> | null
+  achDetails?: Partial<WiseAchDetails> | null,
+  storedRecipientId?: number | null
 ): Promise<WisePayoutTarget | { contactId: string; resolvedVia: "contact" }> {
+  if (storedRecipientId !== null && storedRecipientId !== undefined) {
+    const cached = findRecipientById(recipients, storedRecipientId);
+    if (cached) {
+      return { recipientId: cached.id, resolvedVia: "stored" };
+    }
+    const valid = await verifyWiseRecipientId(storedRecipientId);
+    if (!valid) {
+      throw new Error(
+        `Wise recipient ID ${storedRecipientId} was not found. Update the stored ID in affiliate settings.`
+      );
+    }
+    console.log(
+      "[Wise] Using stored recipient ID for payout: %s",
+      storedRecipientId
+    );
+    return { recipientId: storedRecipientId, resolvedVia: "stored" };
+  }
+
   const existing = matchWiseRecipientByEmail(recipients, wiseEmail);
   if (existing) {
     return { recipientId: existing.id, resolvedVia: "recipient" };
@@ -416,7 +486,7 @@ export async function resolveWisePayoutTarget(
   }
 
   throw new Error(
-    "Wise payout requires Wise email/tag (Wise-to-Wise) or full ACH + address (other platforms)"
+    "Wise payout requires stored recipient ID, Wise email/tag (Wise-to-Wise), or full ACH + address (other platforms)"
   );
 }
 
