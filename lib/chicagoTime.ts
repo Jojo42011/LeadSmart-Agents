@@ -1,9 +1,6 @@
 /** Central Time (America/Chicago) — same zone used by the payment dashboard and scrub agent. */
 export const CHICAGO_TZ = "America/Chicago";
 
-/** Bill.com same-day ACH cutoff in Central Time (after this, use next business day). */
-const BILLCOM_SAME_DAY_CUTOFF_HOUR_CT = 15;
-
 const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -110,17 +107,9 @@ export function chicagoAddBusinessDaysYmd(
 }
 
 /**
- * Process date for Bill.com PayBills — Central Time, next business day after cutoff.
- * Bill.com rejects same-day processDate after the ACH cutoff (BDC_1152).
+ * Process date for Bill.com PayBills — Central Time, next business day.
+ * Bill.com rejects same-day processDate (BDC_1152), including before the nominal cutoff.
  */
 export function chicagoBillcomProcessDateYmd(at: Date = new Date()): string {
-  const parts = chicagoDateParts(at);
-  const weekend = parts.weekday === 0 || parts.weekday === 6;
-  const pastCutoff = parts.hour >= BILLCOM_SAME_DAY_CUTOFF_HOUR_CT;
-
-  if (!weekend && !pastCutoff) {
-    return chicagoTodayYmd(at);
-  }
-
   return chicagoNextBusinessDayYmd(at);
 }

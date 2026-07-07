@@ -1422,7 +1422,6 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
     try {
       const payment = await payBill(prepared.billId, prepared.vendorId, amount, {
         newBankAccount: prepared.vendorCreated,
-        processDate: prepared.processDate,
       });
       markAffiliatePaidIfUnpaid(publisherName, months);
       trySendPaymentConfirmation(publisherName, amount, months, "Bill.com");
@@ -1457,7 +1456,6 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
         amount,
         publisherName,
         newBankAccount: prepared.vendorCreated,
-        processDate: prepared.processDate,
         months,
       });
 
@@ -1524,7 +1522,6 @@ app.post("/api/payment/billcom/mfa/verify", async (req, res) => {
       pending.amount,
       {
         newBankAccount: pending.newBankAccount,
-        processDate: pending.processDate,
       }
     );
     markAffiliatePaidIfUnpaid(pending.publisherName, pending.months);

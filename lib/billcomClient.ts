@@ -7,6 +7,7 @@ import {
   chicagoBillcomProcessDateYmd,
   chicagoAddBusinessDaysYmd,
   chicagoDateParts,
+  chicagoNextBusinessDayYmd,
   chicagoTodayYmd,
 } from "./chicagoTime";
 
@@ -657,7 +658,16 @@ export async function payBill(
       options?.processDate ?? billcomProcessDateYmd(newBankAccount);
     row = await runPay(initialProcessDate);
   } catch (err) {
-    if (
+    if (err instanceof BillcomApiError && err.errorCode === "BDC_1152") {
+      const retryDate = newBankAccount
+        ? billcomProcessDateYmd(true)
+        : chicagoNextBusinessDayYmd();
+      console.log(
+        "[BillCom] BDC_1152 — retrying PayBills with processDate=%s",
+        retryDate
+      );
+      row = await runPay(retryDate);
+    } else if (
       !newBankAccount &&
       err instanceof BillcomApiError &&
       err.errorCode === "BDC_1402"
@@ -707,12 +717,10 @@ export async function prepareBillcomPayout(
   vendorId: string;
   amount: number;
   vendorCreated: boolean;
-  processDate?: string;
 }> {
   const storedId = options?.billcomVendorId?.trim() ?? "";
   let vendorId: string;
   let vendorCreated = false;
-  let processDate: string | undefined;
 
   if (storedId) {
     if (!/^009[0-9A-Za-z]+$/.test(storedId)) {
@@ -726,13 +734,6 @@ export async function prepareBillcomPayout(
       storedId
     );
     vendorId = storedId;
-    processDate = billcomProcessDateYmd(false);
-    if (!PROCESS_DATE_YMD_RE.test(processDate)) {
-      throw new Error(
-        `Invalid Bill.com processDate for existing vendor ${publisherName}: ${processDate}`
-      );
-    }
-    console.log("[BillCom] processDate for existing vendor:", processDate);
   } else if (isBillcomAchComplete(options?.achDetails)) {
     const ach = options.achDetails;
     const vendor = await createVendorV3WithAch(publisherName, ach);
@@ -762,7 +763,6 @@ export async function prepareBillcomPayout(
     vendorId,
     amount,
     vendorCreated,
-    ...(processDate ? { processDate } : {}),
   };
 }
 
@@ -860,7 +860,6 @@ export async function executeBillcomPayout(
   const prepared = await prepareBillcomPayout(publisherName, amount, options);
   const payment = await payBill(prepared.billId, prepared.vendorId, amount, {
     newBankAccount: prepared.vendorCreated,
-    processDate: prepared.processDate,
   });
 
   return {
