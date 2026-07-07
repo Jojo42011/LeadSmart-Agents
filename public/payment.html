@@ -454,6 +454,12 @@
         background: rgba(179, 136, 255, 0.08);
       }
 
+      .badge-source--cpl {
+        border-color: rgba(255, 176, 0, 0.55);
+        color: var(--amber);
+        background: rgba(255, 176, 0, 0.12);
+      }
+
       .col-payout--amber {
         color: var(--amber);
         font-weight: 600;
@@ -1360,6 +1366,7 @@
             <button type="button" class="source-filter" data-source="RINGBA">RINGBA</button>
             <button type="button" class="source-filter" data-source="POLYERAS">POLYERAS</button>
             <button type="button" class="source-filter" data-source="BOTH">BOTH</button>
+            <button type="button" class="source-filter" data-source="CPL">CPL</button>
             <button type="button" class="source-filter" data-source="PROFIT">PUBLISHER PROFIT</button>
           </div>
           <div class="source-filters payment-status-filters" id="paymentStatusFilters">
@@ -1384,6 +1391,7 @@
 
         <div class="status-banner hidden" id="statusBanner"></div>
         <div class="status-banner status-banner--warning hidden" id="warningBanner"></div>
+        <div class="status-banner status-banner--warning hidden" id="cplBanner"></div>
         <div class="payment-toast hidden" id="paymentToast" role="status"></div>
 
         <div class="pay-modal hidden" id="payModal" role="dialog" aria-modal="true" aria-labelledby="payModalTitle">
@@ -1594,6 +1602,7 @@
       const searchInput = document.getElementById("searchInput");
       const statusBanner = document.getElementById("statusBanner");
       const warningBanner = document.getElementById("warningBanner");
+      const cplBanner = document.getElementById("cplBanner");
       const tableBody = document.getElementById("tableBody");
       const cstClock = document.getElementById("cstClock");
       const sourceFilters = document.getElementById("sourceFilters");
@@ -2004,14 +2013,18 @@
         );
       }
 
-      function publisherNameCellHtml(name) {
+      function publisherNameCellHtml(name, cplAffiliate) {
         const meta = getAffiliateMeta(name);
         const badge = paymentMethodBadgeHtml(meta.paymentMethod);
+        const cplBadge = cplAffiliate
+          ? '<span class="badge-source badge-source--cpl">CPL</span>'
+          : "";
         return (
           '<span class="col-name-inner">' +
           '<span class="col-name-text">' +
           escapeHtml(name) +
           "</span>" +
+          cplBadge +
           badge +
           "</span>"
         );
@@ -2374,7 +2387,10 @@
 
       function getPayableAffiliates() {
         return allPublishers.filter((row) => {
-          if (sourceFilter !== "ALL" && row.source !== sourceFilter) {
+          if (row.cplAffiliate) {
+            return false;
+          }
+          if (sourceFilter !== "ALL" && sourceFilter !== "CPL" && row.source !== sourceFilter) {
             return false;
           }
           if (isPaidForDashboardMonth(row.publisherName)) {
@@ -3253,6 +3269,7 @@
           callCount: row.callCount,
           convertedCalls: row.convertedCalls,
           completedCalls: row.completedCalls,
+          cplAffiliate: row.cplAffiliate === true,
         };
       }
 
@@ -3471,10 +3488,25 @@
         updateProfitSortHeaders();
       }
 
+      function updateCplBanner() {
+        if (sourceFilter === "CPL" && !isProfitView()) {
+          cplBanner.classList.remove("hidden");
+          cplBanner.textContent =
+            "CPL affiliates: amounts are updated in Ringba ~1 week after period close. Confirm final amounts before paying.";
+        } else {
+          cplBanner.classList.add("hidden");
+          cplBanner.textContent = "";
+        }
+      }
+
       function applyFilterAndSort() {
         const q = searchInput.value.trim().toLowerCase();
         filteredPublishers = allPublishers.filter((row) => {
-          if (sourceFilter !== "ALL" && row.source !== sourceFilter) {
+          if (sourceFilter === "CPL") {
+            if (!row.cplAffiliate) {
+              return false;
+            }
+          } else if (sourceFilter !== "ALL" && row.source !== sourceFilter) {
             return false;
           }
           if (!isProfitView()) {
@@ -3501,6 +3533,7 @@
         renderTable();
         updateSortHeaders();
         updatePayAllButton();
+        updateCplBanner();
       }
 
       function updateProfitSortHeaders() {
@@ -3645,7 +3678,7 @@
 
           tr.innerHTML =
             '<td class="col-rank">' + (globalIndex + 1) + "</td>" +
-            '<td class="col-name" title="' + escapeHtml(row.publisherName) + '">' + publisherNameCellHtml(row.publisherName) + "</td>" +
+            '<td class="col-name" title="' + escapeHtml(row.publisherName) + '">' + publisherNameCellHtml(row.publisherName, row.cplAffiliate) + "</td>" +
             "<td>" + sourceBadgeHtml(row.source) + "</td>" +
             '<td class="col-calls">' + callsHtml + "</td>" +
             '<td class="col-calls">' + convertedHtml + "</td>" +

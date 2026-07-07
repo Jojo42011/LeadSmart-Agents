@@ -23,6 +23,7 @@ export interface PublisherPayoutRow {
   callCount?: number;
   convertedCalls?: number;
   completedCalls?: number;
+  cplAffiliate?: boolean;
 }
 
 export interface PublisherProfitRow {
@@ -42,6 +43,7 @@ export interface MergedPublisherRow {
   callCount?: number;
   convertedCalls?: number;
   completedCalls?: number;
+  cplAffiliate?: boolean;
 }
 
 export interface PaymentOutlier {
@@ -160,6 +162,7 @@ export function mergeAffiliates(
     callCount: row.callCount,
     convertedCalls: row.convertedCalls,
     completedCalls: row.completedCalls,
+    ...(row.cplAffiliate ? { cplAffiliate: true } : {}),
   }));
 
   const publisherIndexByKey = new Map<string, number>();
@@ -185,6 +188,7 @@ export function mergeAffiliates(
         callCount: ringbaRow.callCount,
         convertedCalls: ringbaRow.convertedCalls,
         completedCalls: ringbaRow.completedCalls,
+        ...(ringbaRow.cplAffiliate ? { cplAffiliate: true } : {}),
       };
       continue;
     }
@@ -204,6 +208,7 @@ export function mergeAffiliates(
           callCount: forcedRingba.callCount,
           convertedCalls: forcedRingba.convertedCalls,
           completedCalls: forcedRingba.completedCalls,
+          ...(forcedRingba.cplAffiliate ? { cplAffiliate: true } : {}),
         };
         continue;
       }
@@ -227,6 +232,7 @@ export function mergeAffiliates(
           callCount: suffixTagRingba.callCount,
           convertedCalls: suffixTagRingba.convertedCalls,
           completedCalls: suffixTagRingba.completedCalls,
+          ...(suffixTagRingba.cplAffiliate ? { cplAffiliate: true } : {}),
         };
         continue;
       }
@@ -369,25 +375,82 @@ function extractRawRows(data: unknown): Record<string, unknown>[] {
   return [];
 }
 
-function normalizePublisherRow(
-  raw: Record<string, unknown>
-): PublisherPayoutRow | null {
-  const publisherName = String(
-    raw.publisherName ?? raw.PublisherName ?? raw.publisher ?? ""
-  ).trim();
+const CPL_TARGET_MARKERS = ["inquirly", "33 miles rtt -"] as const;
 
-  if (!publisherName) {
-    return null;
+function isCplTargetLabel(label: string): boolean {
+  const lower = label.trim().toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  return CPL_TARGET_MARKERS.some((marker) => lower.includes(marker));
+}
+
+function targetBuyerLabelFromRow(raw: Record<string, unknown>): string {
+  const target = String(
+    raw.targetName ?? raw.TargetName ?? raw.target ?? ""
+  ).trim();
+  const buyer = String(
+    raw.buyerName ?? raw.BuyerName ?? raw.buyer ?? ""
+  ).trim();
+  return [target, buyer].filter(Boolean).join(" ");
+}
+
+function aggregatePublisherPayoutRows(
+  rawRows: Record<string, unknown>[]
+): PublisherPayoutRow[] {
+  const byPublisher = new Map<
+    string,
+    {
+      publisherName: string;
+      payoutAmount: number;
+      callCount: number;
+      convertedCalls: number;
+      completedCalls: number;
+      cplAffiliate: boolean;
+    }
+  >();
+
+  for (const raw of rawRows) {
+    const publisherName = String(
+      raw.publisherName ?? raw.PublisherName ?? raw.publisher ?? ""
+    ).trim();
+    if (!publisherName) {
+      continue;
+    }
+
+    const key = normalizePublisherName(publisherName);
+    let agg = byPublisher.get(key);
+    if (!agg) {
+      agg = {
+        publisherName,
+        payoutAmount: 0,
+        callCount: 0,
+        convertedCalls: 0,
+        completedCalls: 0,
+        cplAffiliate: false,
+      };
+      byPublisher.set(key, agg);
+    }
+
+    agg.payoutAmount += parseNumber(raw.payoutAmount);
+    agg.callCount += parseNumber(raw.callCount);
+    agg.convertedCalls += parseNumber(raw.convertedCalls);
+    agg.completedCalls += parseNumber(raw.completedCalls);
+
+    if (isCplTargetLabel(targetBuyerLabelFromRow(raw))) {
+      agg.cplAffiliate = true;
+    }
   }
 
-  return {
-    publisherName,
-    payoutAmount: parseNumber(raw.payoutAmount),
-    source: "RINGBA",
-    callCount: parseNumber(raw.callCount),
-    convertedCalls: parseNumber(raw.convertedCalls),
-    completedCalls: parseNumber(raw.completedCalls),
-  };
+  return Array.from(byPublisher.values()).map((agg) => ({
+    publisherName: agg.publisherName,
+    payoutAmount: agg.payoutAmount,
+    source: "RINGBA" as const,
+    callCount: agg.callCount,
+    convertedCalls: agg.convertedCalls,
+    completedCalls: agg.completedCalls,
+    ...(agg.cplAffiliate ? { cplAffiliate: true as const } : {}),
+  }));
 }
 
 /**
@@ -403,7 +466,11 @@ export async function fetchPublisherPayouts(
   const body = {
     reportStart: startDate,
     reportEnd: endDate,
-    groupByColumns: [{ column: "publisherName", displayName: "Publisher" }],
+    groupByColumns: [
+      { column: "publisherName", displayName: "Publisher" },
+      { column: "targetName", displayName: "Target" },
+      { column: "buyerName", displayName: "Buyer" },
+    ],
     valueColumns: [
       { column: "callCount", aggregateFunction: null },
       { column: "completedCalls", aggregateFunction: null },
@@ -432,9 +499,7 @@ export async function fetchPublisherPayouts(
     throw error;
   }
 
-  const rows = extractRawRows(response.data)
-    .map(normalizePublisherRow)
-    .filter((row): row is PublisherPayoutRow => row !== null);
+  const rows = aggregatePublisherPayoutRows(extractRawRows(response.data));
 
   rows.sort((a, b) => b.payoutAmount - a.payoutAmount);
 

@@ -555,6 +555,11 @@ app.get("/api/payment/stats/all", async (req, res) => {
       polyaresPublishers
     );
 
+    const publishersWithCpl = publishers.map((publisher) => ({
+      ...publisher,
+      cplAffiliate: publisher.cplAffiliate === true,
+    }));
+
     const ringbaTotalPayout = ringbaPublishers.reduce(
       (sum, row) => sum + row.payoutAmount,
       0
@@ -574,7 +579,7 @@ app.get("/api/payment/stats/all", async (req, res) => {
       ringbaTotalPayout,
       polyareasTotalPayout,
       grandTotalPayout,
-      publishers,
+      publishers: publishersWithCpl,
       outliers,
     });
   } catch (err) {
@@ -1417,6 +1422,7 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
     try {
       const payment = await payBill(prepared.billId, prepared.vendorId, amount, {
         newBankAccount: prepared.vendorCreated,
+        processDate: prepared.processDate,
       });
       markAffiliatePaidIfUnpaid(publisherName, months);
       trySendPaymentConfirmation(publisherName, amount, months, "Bill.com");
@@ -1451,6 +1457,7 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
         amount,
         publisherName,
         newBankAccount: prepared.vendorCreated,
+        processDate: prepared.processDate,
         months,
       });
 
@@ -1515,7 +1522,10 @@ app.post("/api/payment/billcom/mfa/verify", async (req, res) => {
       pending.billId,
       pending.vendorId,
       pending.amount,
-      { newBankAccount: pending.newBankAccount }
+      {
+        newBankAccount: pending.newBankAccount,
+        processDate: pending.processDate,
+      }
     );
     markAffiliatePaidIfUnpaid(pending.publisherName, pending.months);
     trySendPaymentConfirmation(

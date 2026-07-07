@@ -9,6 +9,7 @@ export interface PendingBillcomPay {
   amount: number;
   publisherName: string;
   newBankAccount: boolean;
+  processDate?: string;
   months: string[];
   createdAt: number;
 }
