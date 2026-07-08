@@ -1918,9 +1918,22 @@
         return /^\d+$/.test(String(meta.wiseRecipientId || "").trim());
       }
 
+      function isPlaceholderWiseEmailClient(email) {
+        const norm = String(email || "").trim().toLowerCase();
+        return !norm || norm === "affiliate@example.com" || norm.endsWith("@example.com");
+      }
+
+      function isPlaceholderWiseTagClient(tag) {
+        const norm = String(tag || "").trim().toLowerCase().replace(/^@/, "");
+        return !norm || norm === "username" || norm === "yourname";
+      }
+
       function hasWiseIdentifierClient(meta) {
-        return Boolean(
-          String(meta.wiseEmail || "").trim() || String(meta.wiseTag || "").trim()
+        const email = String(meta.wiseEmail || "").trim();
+        const tag = String(meta.wiseTag || "").trim();
+        return (
+          (email && !isPlaceholderWiseEmailClient(email)) ||
+          (tag && !isPlaceholderWiseTagClient(tag))
         );
       }
 

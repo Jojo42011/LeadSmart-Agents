@@ -1552,7 +1552,6 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
     const payout = await executeWisePayout(
       profileId,
       amount,
-      "LeadSmart Affiliate Payout",
       target
     );
     persistWiseRecipientIdFromPayout(publisherName, meta, target);
@@ -1839,7 +1838,6 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
       const transfer = await prepareWiseTransfer(
         profileId,
         amount,
-        "LeadSmart Affiliate Payout",
         target
       );
       pendingFunds.push({
