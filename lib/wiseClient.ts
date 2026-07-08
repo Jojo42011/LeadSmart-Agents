@@ -256,36 +256,155 @@ export async function getRecipients(profileId: string): Promise<WiseRecipient[]>
   return recipients;
 }
 
+function normalizeContactIdentifier(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+}
+
+function parseContactRow(value: unknown): WiseContact | null {
+  const row = Array.isArray(value) && value.length > 0 ? value[0] : value;
+  const record = asRecord(row);
+  if (!record) {
+    return null;
+  }
+
+  const contactId = readString(record, "contactId") ?? readString(record, "id");
+  if (!contactId) {
+    return null;
+  }
+
+  return {
+    contactId,
+    name: readString(record, "name") ?? "",
+  };
+}
+
+async function findContactByIdentifier(
+  profileId: string,
+  identifier: string
+): Promise<WiseContact | null> {
+  const client = createWiseClient();
+  const targetEmail = identifier.trim().toLowerCase();
+  const targetTag = normalizeContactIdentifier(identifier);
+
+  try {
+    const res = await client.get(`/v2/profiles/${profileId}/contacts`);
+    const rows = Array.isArray(res.data) ? res.data : [];
+
+    for (const item of rows) {
+      const record = asRecord(item);
+      if (!record) {
+        continue;
+      }
+
+      const rowIdentifier = readString(record, "identifier");
+      if (rowIdentifier) {
+        const normEmail = rowIdentifier.trim().toLowerCase();
+        const normTag = normalizeContactIdentifier(rowIdentifier);
+        if (
+          normEmail === targetEmail ||
+          normTag === targetTag ||
+          normEmail === targetTag
+        ) {
+          const parsed = parseContactRow(record);
+          if (parsed) {
+            return {
+              contactId: parsed.contactId,
+              name: parsed.name || rowIdentifier,
+            };
+          }
+        }
+      }
+
+      const parsed = parseContactRow(record);
+      if (!parsed) {
+        continue;
+      }
+      const nameNorm = parsed.name.trim().toLowerCase();
+      if (nameNorm === targetEmail || nameNorm === targetTag) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[Wise] Failed to list contacts:",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  return null;
+}
+
 /** Find a Wise profile by email or Wisetag and add as contact (no bank details). */
 export async function createContactFromIdentifier(
   profileId: string,
   identifier: string,
   targetCurrency = "USD"
 ): Promise<WiseContact> {
+  const existing = await findContactByIdentifier(profileId, identifier);
+  if (existing) {
+    console.log("[Wise] Reusing existing contact for identifier: %s", identifier);
+    return existing;
+  }
+
   const client = createWiseClient();
-  const res = await client.post(
-    `/v2/profiles/${profileId}/contacts`,
-    {
-      identifier,
-      targetCurrency,
-    },
-    { params: { isDirectIdentifierCreation: true } }
-  );
+  try {
+    const res = await client.post(
+      `/v2/profiles/${profileId}/contacts`,
+      {
+        identifier,
+        targetCurrency,
+      },
+      { params: { isDirectIdentifierCreation: true } }
+    );
 
-  const row = asRecord(res.data);
-  if (!row) {
-    throw new Error("Wise contact response was empty");
+    const parsed = parseContactRow(res.data);
+    if (parsed) {
+      return {
+        contactId: parsed.contactId,
+        name: parsed.name || identifier,
+      };
+    }
+
+    console.error(
+      "[Wise] Contact create returned unexpected body:",
+      JSON.stringify(res.data)
+    );
+    throw new Error(
+      "Wise contact response missing contactId — check server logs for response body"
+    );
+  } catch (err) {
+    if (axios.isAxiosError(err)) {
+      const fromBody = parseContactRow(err.response?.data);
+      if (fromBody) {
+        return {
+          contactId: fromBody.contactId,
+          name: fromBody.name || identifier,
+        };
+      }
+
+      if (err.response?.status === 409) {
+        const retry = await findContactByIdentifier(profileId, identifier);
+        if (retry) {
+          console.log(
+            "[Wise] Contact already exists, reusing for identifier: %s",
+            identifier
+          );
+          return retry;
+        }
+      }
+
+      const wiseMessage = asRecord(err.response?.data)?.message;
+      if (typeof wiseMessage === "string" && wiseMessage.trim()) {
+        throw new Error(`Wise contact creation failed: ${wiseMessage.trim()}`);
+      }
+    }
+
+    throw err instanceof Error ? err : new Error("Wise contact creation failed");
   }
-
-  const contactId = readString(row, "contactId");
-  if (!contactId) {
-    throw new Error("Wise contact response missing contactId");
-  }
-
-  return {
-    contactId,
-    name: readString(row, "name") ?? identifier,
-  };
 }
 
 /** Create a quote for a transfer. */

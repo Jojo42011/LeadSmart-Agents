@@ -292,12 +292,35 @@ function createClient(): AxiosInstance {
   });
 }
 
-function isoToMdY(isoDate: string): string {
-  const d = new Date(isoDate);
-  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  const year = d.getUTCFullYear();
-  return `${month}/${day}/${year}`;
+const CHICAGO_TZ = "America/Chicago";
+
+/** Format an ISO instant as MM/DD/YYYY in Chicago (matches monthToDateRange in server.ts). */
+function isoToChicagoMdY(isoDate: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(isoDate));
+  const read = (type: string) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return `${read("month")}/${read("day")}/${read("year")}`;
+}
+
+function aggregatePolyaresRows(rows: PublisherPayoutRow[]): PublisherPayoutRow[] {
+  const byName = new Map<string, PublisherPayoutRow>();
+
+  for (const row of rows) {
+    const key = normalizePublisherName(row.publisherName);
+    const existing = byName.get(key);
+    if (existing) {
+      existing.payoutAmount += row.payoutAmount;
+      continue;
+    }
+    byName.set(key, { ...row });
+  }
+
+  return Array.from(byName.values()).sort((a, b) => b.payoutAmount - a.payoutAmount);
 }
 
 function parseNumber(value: unknown): number {
@@ -1009,8 +1032,8 @@ export async function fetchPolyaresPayouts(
     throw error;
   }
 
-  const dateStart = isoToMdY(startDate);
-  const dateEnd = isoToMdY(endDate);
+  const dateStart = isoToChicagoMdY(startDate);
+  const dateEnd = isoToChicagoMdY(endDate);
   const exportUrl = `${POLYARES_BASE_URL}/reports/income-by-period/export?date_start=${encodeURIComponent(dateStart)}&date_end=${encodeURIComponent(dateEnd)}`;
 
   logPolyaresStep("step 4 — GET CSV export", {
@@ -1077,13 +1100,13 @@ export async function fetchPolyaresPayouts(
     });
   }
 
-  rows.sort((a, b) => b.payoutAmount - a.payoutAmount);
+  const aggregated = aggregatePolyaresRows(rows);
 
   console.log(
-    `[PaymentAgent] Polyares CSV parsed: ${rows.length} affiliates (${dateStart} – ${dateEnd})`
+    `[PaymentAgent] Polyares CSV parsed: ${aggregated.length} affiliates (${rows.length} raw rows, ${dateStart} – ${dateEnd})`
   );
 
-  return rows;
+  return aggregated;
 }
 
 /** Allowed payment method tags for affiliate metadata (payment portal). */
