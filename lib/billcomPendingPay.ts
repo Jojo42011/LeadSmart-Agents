@@ -10,7 +10,9 @@ export interface PendingBillcomPay {
   publisherName: string;
   newBankAccount: boolean;
   processDate?: string;
+  /** Period keys settled by this pay — YYYY-MM months, or Monday YYYY-MM-DD weeks. */
   months: string[];
+  periodType?: "month" | "week";
   createdAt: number;
 }
 

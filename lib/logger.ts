@@ -156,6 +156,16 @@ function getDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_affiliate_paid_months_month
       ON affiliate_paid_months (month);
+
+    CREATE TABLE IF NOT EXISTS affiliate_paid_weeks (
+      publisherName TEXT NOT NULL,
+      week TEXT NOT NULL,
+      paidAt TEXT NOT NULL,
+      PRIMARY KEY (publisherName, week)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_affiliate_paid_weeks_week
+      ON affiliate_paid_weeks (week);
   `);
 
   const row = db
@@ -176,6 +186,8 @@ function getDb(): Database.Database {
 }
 
 const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
+/** Week key is the Monday of the week (Mon–Sun) in Central Time as YYYY-MM-DD. */
+const WEEK_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function monthKeyFromIso(iso: string): string | null {
   const date = new Date(iso);
@@ -330,6 +342,8 @@ export interface AffiliateMetadata {
   paymentTerms: string | null;
   /** Paid months keyed by YYYY-MM → paidAt ISO timestamp. */
   paidMonths: Record<string, string>;
+  /** Paid weeks keyed by Monday YYYY-MM-DD → paidAt ISO timestamp. */
+  paidWeeks: Record<string, string>;
   isPaid: boolean;
   paidAt: string | null;
   updatedAt: string | null;
@@ -437,14 +451,35 @@ function loadPaidMonthsMap(
   return map;
 }
 
+function loadPaidWeeksMap(
+  database: Database.Database
+): Record<string, Record<string, string>> {
+  const rows = database
+    .prepare(
+      `SELECT publisherName, week, paidAt FROM affiliate_paid_weeks ORDER BY week`
+    )
+    .all() as Array<{ publisherName: string; week: string; paidAt: string }>;
+
+  const map: Record<string, Record<string, string>> = {};
+  for (const row of rows) {
+    if (!map[row.publisherName]) {
+      map[row.publisherName] = {};
+    }
+    map[row.publisherName][row.week] = row.paidAt;
+  }
+  return map;
+}
+
 function rowToAffiliateMetadata(
   row: AffiliateMetadataRow,
-  paidMonths: Record<string, string> = {}
+  paidMonths: Record<string, string> = {},
+  paidWeeks: Record<string, string> = {}
 ): AffiliateMetadata {
   return {
     paymentMethod: row.paymentMethod,
     paymentTerms: row.paymentTerms,
     paidMonths,
+    paidWeeks,
     isPaid: row.isPaid === 1,
     paidAt: row.paidAt,
     updatedAt: row.updatedAt,
@@ -475,6 +510,7 @@ function rowToAffiliateMetadata(
 export function getAllAffiliateMetadata(): Record<string, AffiliateMetadata> {
   const database = getDb();
   const paidByPublisher = loadPaidMonthsMap(database);
+  const paidWeeksByPublisher = loadPaidWeeksMap(database);
   const rows = database
     .prepare(`${AFFILIATE_METADATA_SELECT}`)
     .all() as AffiliateMetadataRow[];
@@ -483,7 +519,8 @@ export function getAllAffiliateMetadata(): Record<string, AffiliateMetadata> {
   for (const row of rows) {
     map[row.publisherName] = rowToAffiliateMetadata(
       row,
-      paidByPublisher[row.publisherName] ?? {}
+      paidByPublisher[row.publisherName] ?? {},
+      paidWeeksByPublisher[row.publisherName] ?? {}
     );
   }
   return map;
@@ -582,6 +619,101 @@ export function toggleAffiliatePaidForMonth(
   const paidMonths = paidByPublisher[publisherName] ?? {};
   const paidAt = paidMonths[month] ?? null;
   return { paid: paidAt !== null, paidAt, paidMonths };
+}
+
+export function isAffiliatePaidForWeek(
+  publisherName: string,
+  week: string
+): boolean {
+  if (!WEEK_KEY_RE.test(week)) {
+    return false;
+  }
+  const database = getDb();
+  const row = database
+    .prepare(
+      `SELECT 1 FROM affiliate_paid_weeks
+       WHERE publisherName = ? AND week = ? LIMIT 1`
+    )
+    .get(publisherName, week);
+  return row !== undefined;
+}
+
+export function getAffiliatePaidAtForWeek(
+  publisherName: string,
+  week: string
+): string | null {
+  if (!WEEK_KEY_RE.test(week)) {
+    return null;
+  }
+  const database = getDb();
+  const row = database
+    .prepare(
+      `SELECT paidAt FROM affiliate_paid_weeks
+       WHERE publisherName = ? AND week = ?`
+    )
+    .get(publisherName, week) as { paidAt: string } | undefined;
+  return row?.paidAt ?? null;
+}
+
+/** Marks an affiliate paid for one or more Monday-keyed weeks (skips already-paid weeks). */
+export function markAffiliatePaidForWeeks(
+  publisherName: string,
+  weeks: string[]
+): void {
+  const database = getDb();
+  const uniqueWeeks = [...new Set(weeks.filter((w) => WEEK_KEY_RE.test(w)))];
+  if (uniqueWeeks.length === 0) {
+    return;
+  }
+
+  const paidAt = new Date().toISOString();
+  const insert = database.prepare(
+    `INSERT OR IGNORE INTO affiliate_paid_weeks (publisherName, week, paidAt)
+     VALUES (?, ?, ?)`
+  );
+
+  for (const week of uniqueWeeks) {
+    insert.run(publisherName, week, paidAt);
+  }
+}
+
+/** Toggles paid status for one affiliate for a specific Monday-keyed week. */
+export function toggleAffiliatePaidForWeek(
+  publisherName: string,
+  week: string
+): { paid: boolean; paidAt: string | null; paidWeeks: Record<string, string> } {
+  if (!WEEK_KEY_RE.test(week)) {
+    throw new Error("week must be YYYY-MM-DD (Monday)");
+  }
+
+  const database = getDb();
+  const existing = database
+    .prepare(
+      `SELECT paidAt FROM affiliate_paid_weeks
+       WHERE publisherName = ? AND week = ?`
+    )
+    .get(publisherName, week) as { paidAt: string } | undefined;
+
+  if (existing) {
+    database
+      .prepare(
+        `DELETE FROM affiliate_paid_weeks WHERE publisherName = ? AND week = ?`
+      )
+      .run(publisherName, week);
+  } else {
+    const paidAt = new Date().toISOString();
+    database
+      .prepare(
+        `INSERT INTO affiliate_paid_weeks (publisherName, week, paidAt)
+         VALUES (?, ?, ?)`
+      )
+      .run(publisherName, week, paidAt);
+  }
+
+  const paidByPublisher = loadPaidWeeksMap(database);
+  const paidWeeks = paidByPublisher[publisherName] ?? {};
+  const paidAt = paidWeeks[week] ?? null;
+  return { paid: paidAt !== null, paidAt, paidWeeks };
 }
 
 /** Upserts payment method, terms, Bill.com vendor ID, and optional ACH fields. */
@@ -793,7 +925,12 @@ export function upsertAffiliateMetadata(
     .get(publisherName) as AffiliateMetadataRow;
 
   const paidByPublisher = loadPaidMonthsMap(database);
-  return rowToAffiliateMetadata(row, paidByPublisher[publisherName] ?? {});
+  const paidWeeksByPublisher = loadPaidWeeksMap(database);
+  return rowToAffiliateMetadata(
+    row,
+    paidByPublisher[publisherName] ?? {},
+    paidWeeksByPublisher[publisherName] ?? {}
+  );
 }
 
 /** Updates only the Bill.com vendor ID, preserving other metadata. */
@@ -828,7 +965,12 @@ export function setAffiliateBillcomVendorId(
     .get(publisherName) as AffiliateMetadataRow;
 
   const paidByPublisher = loadPaidMonthsMap(database);
-  return rowToAffiliateMetadata(row, paidByPublisher[publisherName] ?? {});
+  const paidWeeksByPublisher = loadPaidWeeksMap(database);
+  return rowToAffiliateMetadata(
+    row,
+    paidByPublisher[publisherName] ?? {},
+    paidWeeksByPublisher[publisherName] ?? {}
+  );
 }
 
 /** @deprecated Use toggleAffiliatePaidForMonth — legacy global toggle. */
@@ -853,6 +995,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
       paymentMethod: null,
       paymentTerms: null,
       paidMonths: {},
+      paidWeeks: {},
       isPaid: true,
       paidAt,
       updatedAt,
@@ -891,10 +1034,12 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     .run(nextPaid, paidAt, updatedAt, publisherName);
 
   const paidByPublisher = loadPaidMonthsMap(database);
+  const paidWeeksByPublisher = loadPaidWeeksMap(database);
   return {
     paymentMethod: existing.paymentMethod,
     paymentTerms: existing.paymentTerms,
     paidMonths: paidByPublisher[publisherName] ?? {},
+    paidWeeks: paidWeeksByPublisher[publisherName] ?? {},
     isPaid: nextPaid === 1,
     paidAt,
     updatedAt,
