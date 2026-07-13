@@ -9,6 +9,9 @@ import {
   toggleAffiliatePaidForMonth,
   markAffiliatePaidForMonths,
   isAffiliatePaidForMonth,
+  toggleAffiliatePaidForWeek,
+  markAffiliatePaidForWeeks,
+  isAffiliatePaidForWeek,
   setAffiliateBillcomVendorId,
   type AffiliateMetadata,
   type BillcomAchFieldUpdates,
@@ -28,6 +31,7 @@ import {
   PAYMENT_TERMS,
   sumPublisherPayoutAcrossMonths,
   matchWiseRecipientByName,
+  type MergedPublisherRow,
 } from "./agents/paymentAgent";
 import {
   getRecipients,
@@ -58,6 +62,7 @@ import {
 import { storePendingBillcomPay, takePendingBillcomPay } from "./lib/billcomPendingPay";
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
 import { sendPaymentConfirmationEmail } from "./lib/paymentEmail";
+import { chicagoDateParts } from "./lib/chicagoTime";
 
 import http from "http";
 import { handleDeepgramUpgrade } from "./hull/voice/deepgramProxy";
@@ -505,6 +510,104 @@ function monthToDateRange(month?: string): {
   };
 }
 
+const WEEK_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** Monday (YYYY-MM-DD) of the week containing the given calendar date. */
+function mondayKeyFromYmd(year: number, month: number, day: number): string {
+  const base = Date.UTC(year, month - 1, day);
+  const dow = new Date(base).getUTCDay(); // 0=Sun..6=Sat
+  const daysSinceMonday = (dow + 6) % 7;
+  const monday = new Date(base - daysSinceMonday * 86_400_000);
+  return `${monday.getUTCFullYear()}-${pad2(monday.getUTCMonth() + 1)}-${pad2(monday.getUTCDate())}`;
+}
+
+/** Monday key of the current week in Central Time. */
+function currentWeekMondayKey(): string {
+  const parts = chicagoDateParts(new Date());
+  return mondayKeyFromYmd(parts.year, parts.month, parts.day);
+}
+
+function buildWeekLabel(monday: Date, sunday: Date): string {
+  const fmt = (dt: Date, opts: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: "UTC", ...opts }).format(dt);
+  const left = fmt(monday, { month: "short", day: "numeric" });
+  const right = fmt(sunday, { month: "short", day: "numeric" });
+  return `${left} – ${right}, ${sunday.getUTCFullYear()}`;
+}
+
+/**
+ * Resolve a Mon–Sun week to a Central-Time instant range.
+ * Any date inside the week normalizes to that week's Monday key.
+ */
+function weekToDateRange(week?: string): {
+  week: string;
+  startDate: string;
+  endDate: string;
+  label: string;
+} {
+  let mondayKey: string;
+  if (week && WEEK_KEY_RE.test(week)) {
+    const [wy, wm, wd] = week.split("-").map((n) => parseInt(n, 10));
+    mondayKey = mondayKeyFromYmd(wy, wm, wd);
+  } else {
+    mondayKey = currentWeekMondayKey();
+  }
+
+  const [y, m, d] = mondayKey.split("-").map((n) => parseInt(n, 10));
+  const start = chicagoLocalToUtc(y, m, d, 0, 0, 0, 0);
+  const end = new Date(
+    chicagoLocalToUtc(y, m, d + 7, 0, 0, 0, 0).getTime() - 1
+  );
+
+  const mondayUtc = new Date(Date.UTC(y, m - 1, d));
+  const sundayUtc = new Date(Date.UTC(y, m - 1, d + 6));
+
+  return {
+    week: mondayKey,
+    startDate: start.toISOString(),
+    endDate: end.toISOString(),
+    label: buildWeekLabel(mondayUtc, sundayUtc),
+  };
+}
+
+/** Resolve the reporting range from a request: ?week=YYYY-MM-DD wins, else ?month=YYYY-MM. */
+function resolveRangeFromQuery(req: express.Request): {
+  periodType: "month" | "week";
+  key: string;
+  startDate: string;
+  endDate: string;
+  label?: string;
+} {
+  const weekParam =
+    typeof req.query.week === "string" && req.query.week.trim()
+      ? req.query.week.trim()
+      : undefined;
+  if (weekParam) {
+    const range = weekToDateRange(weekParam);
+    return {
+      periodType: "week",
+      key: range.week,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      label: range.label,
+    };
+  }
+
+  const monthParam =
+    typeof req.query.month === "string" ? req.query.month : undefined;
+  const range = monthToDateRange(monthParam);
+  return {
+    periodType: "month",
+    key: range.month,
+    startDate: range.startDate,
+    endDate: range.endDate,
+  };
+}
+
 app.get("/payment", (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "payment.html"));
 });
@@ -515,9 +618,7 @@ app.get("/payments", (_req, res) => {
 
 app.get("/api/payment/stats", async (req, res) => {
   try {
-    const monthParam =
-      typeof req.query.month === "string" ? req.query.month : undefined;
-    const range = monthToDateRange(monthParam);
+    const range = resolveRangeFromQuery(req);
     const publishers = await fetchPublisherPayouts(
       range.startDate,
       range.endDate
@@ -529,7 +630,10 @@ app.get("/api/payment/stats", async (req, res) => {
     );
 
     res.json({
-      month: range.month,
+      month: range.periodType === "month" ? range.key : undefined,
+      periodType: range.periodType,
+      periodKey: range.key,
+      periodLabel: range.label,
       startDate: range.startDate,
       endDate: range.endDate,
       lastUpdated: new Date().toISOString(),
@@ -546,9 +650,7 @@ app.get("/api/payment/stats", async (req, res) => {
 
 app.get("/api/payment/stats/all", async (req, res) => {
   try {
-    const monthParam =
-      typeof req.query.month === "string" ? req.query.month : undefined;
-    const range = monthToDateRange(monthParam);
+    const range = resolveRangeFromQuery(req);
 
     const [ringbaPublishers, polyaresPublishers] = await Promise.all([
       fetchPublisherPayouts(range.startDate, range.endDate),
@@ -576,7 +678,10 @@ app.get("/api/payment/stats/all", async (req, res) => {
     const grandTotalPayout = ringbaTotalPayout + polyareasTotalPayout;
 
     res.json({
-      month: range.month,
+      month: range.periodType === "month" ? range.key : undefined,
+      periodType: range.periodType,
+      periodKey: range.key,
+      periodLabel: range.label,
       startDate: range.startDate,
       endDate: range.endDate,
       lastUpdated: new Date().toISOString(),
@@ -1054,7 +1159,7 @@ function parsePaymentEmailUpdate(body: unknown): string | null | undefined {
 function trySendPaymentConfirmation(
   publisherName: string,
   amount: number,
-  months: string[],
+  period: { periodType: "month" | "week"; keys: string[] },
   method: "Wise" | "Bill.com"
 ): void {
   void (async () => {
@@ -1070,7 +1175,8 @@ function trySendPaymentConfirmation(
         publisherName,
         email,
         amount,
-        months,
+        months: period.keys,
+        periodType: period.periodType,
         method,
       });
       console.log(
@@ -1238,6 +1344,148 @@ function resolveBillcomAchForPay(
 
   return isBillcomAchComplete(merged) ? merged : null;
 }
+
+// ---- Aggregate unpaid earnings across all past months (excludes current month) ----
+
+interface MergedMonthCacheEntry {
+  at: number;
+  publishers: MergedPublisherRow[];
+}
+const mergedMonthCache = new Map<string, MergedMonthCacheEntry>();
+const MERGED_MONTH_TTL_MS = 10 * 60 * 1000;
+
+const DEFAULT_UNPAID_MIN_AMOUNT = 20;
+const DEFAULT_UNPAID_LOOKBACK_MONTHS = 12;
+const MAX_UNPAID_LOOKBACK_MONTHS = 36;
+
+function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const parsed = parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** Merged Ringba+Polyares affiliates for one month, cached briefly to limit API load. */
+async function getMergedForMonth(monthKey: string): Promise<MergedPublisherRow[]> {
+  const cached = mergedMonthCache.get(monthKey);
+  if (cached && Date.now() - cached.at < MERGED_MONTH_TTL_MS) {
+    return cached.publishers;
+  }
+  const range = monthToDateRange(monthKey);
+  const [ringba, poly] = await Promise.all([
+    fetchPublisherPayouts(range.startDate, range.endDate),
+    fetchPolyaresPayouts(range.startDate, range.endDate),
+  ]);
+  const { publishers } = mergeAffiliates(ringba, poly);
+  mergedMonthCache.set(monthKey, { at: Date.now(), publishers });
+  return publishers;
+}
+
+/** The `count` calendar months immediately before the current month (newest first). */
+function previousMonthKeys(count: number): string[] {
+  const current = monthToDateRange().month;
+  let [y, m] = current.split("-").map((n) => parseInt(n, 10));
+  const keys: string[] = [];
+  for (let i = 0; i < count; i++) {
+    m -= 1;
+    if (m === 0) {
+      m = 12;
+      y -= 1;
+    }
+    keys.push(`${y}-${String(m).padStart(2, "0")}`);
+  }
+  return keys;
+}
+
+interface UnpaidAffiliateEntry {
+  publisherName: string;
+  total: number;
+  cplAffiliate: boolean;
+  months: Array<{ month: string; amount: number }>;
+}
+
+app.get("/api/payment/unpaid-all", async (req, res) => {
+  try {
+    const minAmount =
+      typeof req.query.min === "string" && req.query.min.trim()
+        ? Math.max(0, parseFloat(req.query.min))
+        : envNumber("UNPAID_MIN_AMOUNT", DEFAULT_UNPAID_MIN_AMOUNT);
+
+    const lookbackRaw =
+      typeof req.query.lookback === "string" && req.query.lookback.trim()
+        ? parseInt(req.query.lookback, 10)
+        : envNumber("UNPAID_LOOKBACK_MONTHS", DEFAULT_UNPAID_LOOKBACK_MONTHS);
+    const lookback = Math.min(
+      MAX_UNPAID_LOOKBACK_MONTHS,
+      Math.max(1, Number.isFinite(lookbackRaw) ? lookbackRaw : DEFAULT_UNPAID_LOOKBACK_MONTHS)
+    );
+
+    const monthKeys = previousMonthKeys(lookback);
+    const byPublisher = new Map<string, UnpaidAffiliateEntry>();
+    const scannedMonths: string[] = [];
+    const failedMonths: string[] = [];
+
+    // Sequential to avoid opening many concurrent Polyares logins / Ringba calls.
+    for (const monthKey of monthKeys) {
+      let publishers: MergedPublisherRow[];
+      try {
+        publishers = await getMergedForMonth(monthKey);
+      } catch (err) {
+        console.warn(
+          `[Payment] unpaid-all: month ${monthKey} fetch failed — skipping:`,
+          err instanceof Error ? err.message : err
+        );
+        failedMonths.push(monthKey);
+        continue;
+      }
+      scannedMonths.push(monthKey);
+
+      for (const row of publishers) {
+        if (row.totalAmount <= 0) continue;
+        if (isAffiliatePaidForMonth(row.publisherName, monthKey)) continue;
+
+        const entry =
+          byPublisher.get(row.publisherName) ?? {
+            publisherName: row.publisherName,
+            total: 0,
+            cplAffiliate: false,
+            months: [],
+          };
+        entry.total += row.totalAmount;
+        entry.months.push({ month: monthKey, amount: row.totalAmount });
+        if (row.cplAffiliate) entry.cplAffiliate = true;
+        byPublisher.set(row.publisherName, entry);
+      }
+    }
+
+    const affiliates = [...byPublisher.values()]
+      .filter((entry) => entry.total >= minAmount)
+      .map((entry) => ({
+        ...entry,
+        total: Math.round(entry.total * 100) / 100,
+        months: entry.months.sort((a, b) => a.month.localeCompare(b.month)),
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      excludedMonth: monthToDateRange().month,
+      lookbackMonths: lookback,
+      minAmount,
+      monthsScanned: scannedMonths,
+      monthsFailed: failedMonths,
+      totalAffiliates: affiliates.length,
+      totalUnpaid:
+        Math.round(affiliates.reduce((sum, a) => sum + a.total, 0) * 100) / 100,
+      affiliates,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : "Failed to compile unpaid earnings",
+    });
+  }
+});
 
 app.get("/api/payment/metadata", (_req, res) => {
   try {
@@ -1409,6 +1657,51 @@ app.post("/api/payment/mark-paid/:name", (req, res) => {
   }
 });
 
+app.post("/api/payment/mark-paid-week/:name", (req, res) => {
+  try {
+    const publisherName = decodePublisherParam(req.params.name).trim();
+    if (!publisherName) {
+      res.status(400).json({ error: "Publisher name is required" });
+      return;
+    }
+
+    const weekRaw =
+      typeof req.body?.week === "string" && req.body.week.trim()
+        ? req.body.week.trim()
+        : typeof req.query.week === "string" && req.query.week.trim()
+          ? req.query.week.trim()
+          : currentWeekMondayKey();
+
+    if (!WEEK_KEY_RE.test(weekRaw)) {
+      res.status(400).json({ error: "Invalid week (expected YYYY-MM-DD Monday)" });
+      return;
+    }
+
+    // Normalize any in-week date to its Monday key so toggling is stable.
+    const weekKey = weekToDateRange(weekRaw).week;
+    const result = toggleAffiliatePaidForWeek(publisherName, weekKey);
+    const meta = affiliateMetadataFor(publisherName);
+    res.json({
+      ...(meta ?? {
+        paymentMethod: null,
+        paymentTerms: null,
+        isPaid: false,
+        paidAt: null,
+        updatedAt: null,
+      }),
+      week: weekKey,
+      paidWeeks: result.paidWeeks,
+      isPaid: result.paid,
+      paidAt: result.paidAt,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : "Failed to toggle weekly paid status",
+    });
+  }
+});
+
 function monthFromPayRequest(req: express.Request): string | undefined {
   if (typeof req.body?.month === "string" && req.body.month.trim()) {
     return req.body.month.trim();
@@ -1423,21 +1716,91 @@ function affiliateMetadataFor(name: string) {
   return getAllAffiliateMetadata()[name] ?? null;
 }
 
-function markAffiliatePaidIfUnpaid(
-  publisherName: string,
-  months: string[]
-): void {
-  markAffiliatePaidForMonths(publisherName, months);
+/** A billing period the pay flow settles against — a set of months or a set of weeks. */
+interface PayPeriod {
+  periodType: "month" | "week";
+  keys: string[];
+  ranges: Array<{ startDate: string; endDate: string }>;
 }
 
-function isAffiliatePaidForAllMonths(
+function parseWeekKeys(req: express.Request): string[] {
+  const body = req.body;
+  if (
+    body &&
+    typeof body === "object" &&
+    Array.isArray((body as { weeks?: unknown }).weeks)
+  ) {
+    const weeks = (body as { weeks: unknown[] }).weeks
+      .filter((w): w is string => typeof w === "string")
+      .map((w) => w.trim())
+      .filter((w) => WEEK_KEY_RE.test(w));
+    if (weeks.length > 0) {
+      return weeks;
+    }
+  }
+
+  const bodyWeek =
+    body && typeof body === "object" && typeof (body as { week?: unknown }).week === "string"
+      ? ((body as { week: string }).week).trim()
+      : "";
+  const queryWeek =
+    typeof req.query.week === "string" ? req.query.week.trim() : "";
+  const single = bodyWeek || queryWeek;
+  if (single && WEEK_KEY_RE.test(single)) {
+    return [single];
+  }
+  return [];
+}
+
+/** Resolve the pay request into a period (weeks win over months) with settlement ranges. */
+function parsePayPeriods(req: express.Request): PayPeriod {
+  const weeks = parseWeekKeys(req);
+  if (weeks.length > 0) {
+    const normalized = weeks.map((w) => weekToDateRange(w));
+    return {
+      periodType: "week",
+      keys: normalized.map((r) => r.week),
+      ranges: normalized.map((r) => ({
+        startDate: r.startDate,
+        endDate: r.endDate,
+      })),
+    };
+  }
+
+  const months = parsePayMonths(req);
+  return {
+    periodType: "month",
+    keys: months,
+    ranges: months.map((m) => {
+      const r = monthToDateRange(m);
+      return { startDate: r.startDate, endDate: r.endDate };
+    }),
+  };
+}
+
+function markAffiliatePaidIfUnpaid(
   publisherName: string,
-  months: string[]
+  period: { periodType: "month" | "week"; keys: string[] }
+): void {
+  if (period.periodType === "week") {
+    markAffiliatePaidForWeeks(publisherName, period.keys);
+  } else {
+    markAffiliatePaidForMonths(publisherName, period.keys);
+  }
+}
+
+function isAffiliatePaidForAllPeriods(
+  publisherName: string,
+  period: { periodType: "month" | "week"; keys: string[] }
 ): boolean {
-  if (months.length === 0) {
+  if (period.keys.length === 0) {
     return false;
   }
-  return months.every((month) => isAffiliatePaidForMonth(publisherName, month));
+  return period.keys.every((key) =>
+    period.periodType === "week"
+      ? isAffiliatePaidForWeek(publisherName, key)
+      : isAffiliatePaidForMonth(publisherName, key)
+  );
 }
 
 function parsePublisherNames(body: unknown): string[] {
@@ -1486,17 +1849,19 @@ function parsePayAmountOverride(req: express.Request): number | undefined {
 
 async function resolvePayAmount(
   publisherName: string,
-  req: express.Request
-): Promise<{ amount: number; months: string[] }> {
-  const months = parsePayMonths(req);
+  req: express.Request,
+  period: PayPeriod
+): Promise<{ amount: number }> {
   const override = parsePayAmountOverride(req);
   if (override !== undefined) {
-    return { amount: override, months };
+    return { amount: override };
   }
 
-  const ranges = months.map((month) => monthToDateRange(month));
-  const amount = await sumPublisherPayoutAcrossMonths(publisherName, ranges);
-  return { amount, months };
+  const amount = await sumPublisherPayoutAcrossMonths(
+    publisherName,
+    period.ranges
+  );
+  return { amount };
 }
 
 app.post("/api/payment/pay/wise/:name", async (req, res) => {
@@ -1507,10 +1872,10 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       return;
     }
 
-    const months = parsePayMonths(req);
+    const period = parsePayPeriods(req);
     const override = parsePayAmountOverride(req);
     console.log(
-      `[Payment] Wise pay request: ${publisherName} months=${months.join(",")} amount=${override ?? "auto"}`
+      `[Payment] Wise pay request: ${publisherName} ${period.periodType}s=${period.keys.join(",")} amount=${override ?? "auto"}`
     );
 
     const meta = affiliateMetadataFor(publisherName);
@@ -1518,14 +1883,14 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       res.status(400).json({ error: "Affiliate is not tagged for Wise payments" });
       return;
     }
-    if (isAffiliatePaidForAllMonths(publisherName, months)) {
+    if (isAffiliatePaidForAllPeriods(publisherName, period)) {
       res.status(400).json({
-        error: "Affiliate is already marked paid for the selected month(s)",
+        error: `Affiliate is already marked paid for the selected ${period.periodType}(s)`,
       });
       return;
     }
 
-    const { amount } = await resolvePayAmount(publisherName, req);
+    const { amount } = await resolvePayAmount(publisherName, req, period);
 
     const profileId = getWiseProfileIdFromEnv();
     const recipients = await getRecipients(profileId);
@@ -1555,8 +1920,8 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       target
     );
     persistWiseRecipientIdFromPayout(publisherName, meta, target);
-    markAffiliatePaidIfUnpaid(publisherName, months);
-    trySendPaymentConfirmation(publisherName, amount, months, "Wise");
+    markAffiliatePaidIfUnpaid(publisherName, period);
+    trySendPaymentConfirmation(publisherName, amount, period, "Wise");
 
     console.log(
       `[Payment] Wise pay success: ${publisherName} transferId=${payout.transferId} amount=${amount}`
@@ -1587,10 +1952,10 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       return;
     }
 
-    const months = parsePayMonths(req);
+    const period = parsePayPeriods(req);
     const override = parsePayAmountOverride(req);
     console.log(
-      `[Payment] Bill.com pay request: ${publisherName} months=${months.join(",")} amount=${override ?? "auto"}`
+      `[Payment] Bill.com pay request: ${publisherName} ${period.periodType}s=${period.keys.join(",")} amount=${override ?? "auto"}`
     );
 
     const meta = affiliateMetadataFor(publisherName);
@@ -1600,14 +1965,14 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       });
       return;
     }
-    if (isAffiliatePaidForAllMonths(publisherName, months)) {
+    if (isAffiliatePaidForAllPeriods(publisherName, period)) {
       res.status(400).json({
-        error: "Affiliate is already marked paid for the selected month(s)",
+        error: `Affiliate is already marked paid for the selected ${period.periodType}(s)`,
       });
       return;
     }
 
-    const { amount } = await resolvePayAmount(publisherName, req);
+    const { amount } = await resolvePayAmount(publisherName, req, period);
 
     let billcomVendorId = meta.billcomVendorId?.trim() ?? "";
     if (typeof req.body?.billcomVendorId === "string" && req.body.billcomVendorId.trim()) {
@@ -1662,8 +2027,8 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       const payment = await payBill(prepared.billId, prepared.vendorId, amount, {
         newBankAccount: prepared.vendorCreated,
       });
-      markAffiliatePaidIfUnpaid(publisherName, months);
-      trySendPaymentConfirmation(publisherName, amount, months, "Bill.com");
+      markAffiliatePaidIfUnpaid(publisherName, period);
+      trySendPaymentConfirmation(publisherName, amount, period, "Bill.com");
 
       console.log(
         `[Payment] Bill.com pay success: ${publisherName} paymentId=${payment.id} amount=${amount}`
@@ -1695,7 +2060,8 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
         amount,
         publisherName,
         newBankAccount: prepared.vendorCreated,
-        months,
+        months: period.keys,
+        periodType: period.periodType,
       });
 
       console.log(
@@ -1763,11 +2129,15 @@ app.post("/api/payment/billcom/mfa/verify", async (req, res) => {
         newBankAccount: pending.newBankAccount,
       }
     );
-    markAffiliatePaidIfUnpaid(pending.publisherName, pending.months);
+    const pendingPeriod = {
+      periodType: pending.periodType ?? ("month" as const),
+      keys: pending.months,
+    };
+    markAffiliatePaidIfUnpaid(pending.publisherName, pendingPeriod);
     trySendPaymentConfirmation(
       pending.publisherName,
       pending.amount,
-      pending.months,
+      pendingPeriod,
       "Bill.com"
     );
 
@@ -1800,9 +2170,9 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
     return;
   }
 
-  const months = parsePayMonths(req);
+  const period = parsePayPeriods(req);
   console.log(
-    `[Payment] Wise bulk pay request: ${publisherNames.length} affiliate(s) months=${months.join(",")}`
+    `[Payment] Wise bulk pay request: ${publisherNames.length} affiliate(s) ${period.periodType}s=${period.keys.join(",")}`
   );
 
   const succeeded: string[] = [];
@@ -1823,11 +2193,11 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
       if (!meta || meta.paymentMethod !== "Wise") {
         throw new Error("Affiliate is not tagged for Wise payments");
       }
-      if (isAffiliatePaidForAllMonths(publisherName, months)) {
-        throw new Error("Affiliate is already marked paid for the selected month(s)");
+      if (isAffiliatePaidForAllPeriods(publisherName, period)) {
+        throw new Error(`Affiliate is already marked paid for the selected ${period.periodType}(s)`);
       }
 
-      const { amount } = await resolvePayAmount(publisherName, req);
+      const { amount } = await resolvePayAmount(publisherName, req, period);
       const target = await resolveWisePayoutForAffiliate(
         profileId,
         recipients,
@@ -1863,11 +2233,11 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
         pending.meta,
         pending.target
       );
-      markAffiliatePaidIfUnpaid(pending.publisherName, months);
+      markAffiliatePaidIfUnpaid(pending.publisherName, period);
       trySendPaymentConfirmation(
         pending.publisherName,
         pending.amount,
-        months,
+        period,
         "Wise"
       );
       succeeded.push(pending.publisherName);
@@ -1892,9 +2262,9 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
     return;
   }
 
-  const months = parsePayMonths(req);
+  const period = parsePayPeriods(req);
   console.log(
-    `[Payment] Bill.com bulk pay request: ${publisherNames.length} affiliate(s) months=${months.join(",")}`
+    `[Payment] Bill.com bulk pay request: ${publisherNames.length} affiliate(s) ${period.periodType}s=${period.keys.join(",")}`
   );
 
   const succeeded: string[] = [];
@@ -1908,8 +2278,8 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
       if (!meta || meta.paymentMethod !== "Bill.com") {
         throw new Error("Affiliate is not tagged for Bill.com payments");
       }
-      if (isAffiliatePaidForAllMonths(publisherName, months)) {
-        throw new Error("Affiliate is already marked paid for the selected month(s)");
+      if (isAffiliatePaidForAllPeriods(publisherName, period)) {
+        throw new Error(`Affiliate is already marked paid for the selected ${period.periodType}(s)`);
       }
 
       const billcomVendorId = meta.billcomVendorId?.trim() ?? "";
@@ -1920,7 +2290,7 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
         );
       }
 
-      const { amount } = await resolvePayAmount(publisherName, req);
+      const { amount } = await resolvePayAmount(publisherName, req, period);
       const prepared = await prepareBillcomPayout(publisherName, amount, {
         billcomVendorId: billcomVendorId || null,
         achDetails,
@@ -1955,11 +2325,11 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
 
   for (const item of billPayments) {
     if (paidBillIds.has(item.billId)) {
-      markAffiliatePaidIfUnpaid(item.publisherName, months);
+      markAffiliatePaidIfUnpaid(item.publisherName, period);
       trySendPaymentConfirmation(
         item.publisherName,
         item.amount,
-        months,
+        period,
         "Bill.com"
       );
       succeeded.push(item.publisherName);

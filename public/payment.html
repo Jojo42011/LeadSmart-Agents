@@ -1336,9 +1336,17 @@
       </header>
 
       <section class="controls">
-        <div class="control-group">
+        <div class="control-group period-mode-group" id="periodModeGroup">
+          <button type="button" class="source-filter source-filter--active" data-period-mode="month">Monthly</button>
+          <button type="button" class="source-filter" data-period-mode="week">Weekly</button>
+        </div>
+        <div class="control-group" id="monthControlGroup">
           <span class="control-label">Month</span>
           <select class="select-month" id="monthSelect" aria-label="Select month"></select>
+        </div>
+        <div class="control-group hidden" id="weekControlGroup">
+          <span class="control-label">Week</span>
+          <select class="select-month" id="weekSelect" aria-label="Select week (Mon–Sun)"></select>
         </div>
         <button class="btn btn--amber" type="button" id="runNowBtn">Run Now</button>
         <span class="last-updated" id="lastUpdated">Last updated: —</span>
@@ -1367,6 +1375,7 @@
             <button type="button" class="source-filter" data-source="POLYERAS">POLYERAS</button>
             <button type="button" class="source-filter" data-source="BOTH">BOTH</button>
             <button type="button" class="source-filter" data-source="CPL">CPL</button>
+            <button type="button" class="source-filter" data-source="UNPAID_ALL" title="All unpaid earnings across past months (excludes current month)">ALL UNPAID</button>
             <button type="button" class="source-filter" data-source="PROFIT">PUBLISHER PROFIT</button>
           </div>
           <div class="source-filters payment-status-filters" id="paymentStatusFilters">
@@ -1399,7 +1408,7 @@
           <div class="pay-modal__panel">
             <h2 class="pay-modal__title" id="payModalTitle">Confirm payment</h2>
             <p class="pay-modal__subtitle" id="payModalSubtitle"></p>
-            <label class="pay-modal__section-label">Months to include</label>
+            <label class="pay-modal__section-label" id="payModalPeriodLabel">Months to include</label>
             <div class="pay-modal__months" id="payModalMonths"></div>
             <div id="payModalAmountSection">
               <label class="pay-modal__section-label" for="payModalAmount">Amount to pay (USD)</label>
@@ -1625,6 +1634,10 @@
       const loginError = document.getElementById("loginError");
       const logoutBtn = document.getElementById("logoutBtn");
       const monthSelect = document.getElementById("monthSelect");
+      const weekSelect = document.getElementById("weekSelect");
+      const periodModeGroup = document.getElementById("periodModeGroup");
+      const monthControlGroup = document.getElementById("monthControlGroup");
+      const weekControlGroup = document.getElementById("weekControlGroup");
       const runNowBtn = document.getElementById("runNowBtn");
       const lastUpdated = document.getElementById("lastUpdated");
       const affiliateCount = document.getElementById("affiliateCount");
@@ -1704,6 +1717,9 @@
       let isProfitLoading = false;
       let sourceFilter = "ALL";
       let paymentStatusFilter = "UNPAID";
+      let periodMode = "month"; // "month" | "week"
+      let previousSourceFilter = "ALL"; // restore point when leaving ALL UNPAID
+      let unpaidAllLoaded = false;
       let pageSize = 100;
       let currentPage = 1;
       let profitDataMonth = null;
@@ -1734,24 +1750,57 @@
         return sourceFilter === "PROFIT";
       }
 
+      function isWeekMode() {
+        return periodMode === "week";
+      }
+
       function getDashboardMonth() {
         return monthSelect.value;
       }
 
+      function getDashboardWeek() {
+        return weekSelect.value;
+      }
+
+      /** Current period key: Monday YYYY-MM-DD in week mode, else YYYY-MM. */
+      function getDashboardPeriodKey() {
+        return isWeekMode() ? weekSelect.value : monthSelect.value;
+      }
+
+      /** Query param for data endpoints: week=... in week mode, else month=... */
+      function getPeriodQueryParam() {
+        return isWeekMode()
+          ? "week=" + encodeURIComponent(weekSelect.value)
+          : "month=" + encodeURIComponent(monthSelect.value);
+      }
+
+      function isUnpaidAllView() {
+        return sourceFilter === "UNPAID_ALL";
+      }
+
       function isPaidForDashboardMonth(publisherName) {
         const meta = getAffiliateMeta(publisherName);
+        if (isWeekMode()) {
+          const week = getDashboardWeek();
+          return !!(meta.paidWeeks && meta.paidWeeks[week]);
+        }
         const month = getDashboardMonth();
         return !!(meta.paidMonths && meta.paidMonths[month]);
       }
 
       function paidAtForDashboardMonth(publisherName) {
         const meta = getAffiliateMeta(publisherName);
+        if (isWeekMode()) {
+          const week = getDashboardWeek();
+          return (meta.paidWeeks && meta.paidWeeks[week]) || null;
+        }
         const month = getDashboardMonth();
         return (meta.paidMonths && meta.paidMonths[month]) || null;
       }
 
       function syncPaymentStatusFiltersVisibility() {
-        if (isProfitView()) {
+        if (isProfitView() || isUnpaidAllView()) {
+          // Profit has no paid state; the All-Unpaid aggregate is inherently unpaid.
           paymentStatusFilters.classList.add("hidden");
         } else {
           paymentStatusFilters.classList.remove("hidden");
@@ -1791,6 +1840,69 @@
           monthSelect.appendChild(opt);
         }
         monthSelect.value = currentMonthValue();
+      }
+
+      function pad2Client(n) {
+        return String(n).padStart(2, "0");
+      }
+
+      /** Monday (YYYY-MM-DD) of the week containing the given local date. */
+      function mondayKeyOf(date) {
+        const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        const daysSinceMonday = (d.getDay() + 6) % 7; // getDay: 0=Sun..6=Sat
+        d.setDate(d.getDate() - daysSinceMonday);
+        return (
+          d.getFullYear() +
+          "-" +
+          pad2Client(d.getMonth() + 1) +
+          "-" +
+          pad2Client(d.getDate())
+        );
+      }
+
+      function weekLabelFromKey(key) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key || ""));
+        if (!m) return key;
+        const mon = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+        const sun = new Date(mon);
+        sun.setDate(mon.getDate() + 6);
+        const fmt = (dt) =>
+          dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        return fmt(mon) + " – " + fmt(sun) + ", " + sun.getFullYear();
+      }
+
+      function recentWeekKeys(count) {
+        const keys = [];
+        const base = new Date();
+        for (let i = 0; i < count; i++) {
+          const d = new Date(base);
+          d.setDate(base.getDate() - i * 7);
+          keys.push(mondayKeyOf(d));
+        }
+        return [...new Set(keys)];
+      }
+
+      function initWeekSelect() {
+        weekSelect.innerHTML = "";
+        const currentWeek = mondayKeyOf(new Date());
+        const keys = recentWeekKeys(14);
+        for (const key of keys) {
+          const opt = document.createElement("option");
+          opt.value = key;
+          opt.textContent =
+            weekLabelFromKey(key) +
+            (key === currentWeek ? " (in progress)" : "");
+          weekSelect.appendChild(opt);
+        }
+        // Default to the last COMPLETED week (weeks are payable after they close).
+        weekSelect.value = keys[1] || keys[0];
+      }
+
+      /** Human label for the active period (week range or month name). */
+      function dashboardPeriodLabel() {
+        return isWeekMode()
+          ? weekLabelFromKey(getDashboardWeek())
+          : monthLabel(getDashboardMonth());
       }
 
       function formatMoney(amount) {
@@ -1861,6 +1973,7 @@
         loginScreen.classList.add("hidden");
         dashboard.classList.remove("hidden");
         initMonthSelect();
+        initWeekSelect();
         void fetchAffiliateMetadata().then(() => {
           fetchStats();
         });
@@ -2679,6 +2792,64 @@
         }
       }
 
+      /** True when the pay modal should settle weeks (weekly mode, not the unpaid-all aggregate). */
+      function usePayWeeks() {
+        return isWeekMode() && !isUnpaidAllView();
+      }
+
+      /** Selected period keys from the modal (week keys, month keys, or unpaid months). */
+      function getSelectedPayPeriods() {
+        return getSelectedPayMonths();
+      }
+
+      /** Render modal period options: months normally, or the single active week in weekly mode. */
+      function renderPayModalPeriodOptions(defaultKey) {
+        const periodLabelEl = document.getElementById("payModalPeriodLabel");
+        if (!usePayWeeks()) {
+          if (periodLabelEl) periodLabelEl.textContent = "Months to include";
+          renderPayModalMonthOptions(defaultKey);
+          return;
+        }
+        if (periodLabelEl) periodLabelEl.textContent = "Week to pay (Mon–Sun)";
+        payModalMonths.innerHTML = "";
+        const label = document.createElement("label");
+        label.className = "pay-modal__month-option";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = defaultKey;
+        checkbox.checked = true;
+        checkbox.disabled = true; // single closed week — the one selected on the dashboard
+        const text = document.createElement("span");
+        text.textContent = weekLabelFromKey(defaultKey);
+        label.appendChild(checkbox);
+        label.appendChild(text);
+        payModalMonths.appendChild(label);
+      }
+
+      /** Render the affiliate's unpaid months (all checked) for the All-Unpaid pay flow. */
+      function renderPayModalUnpaidMonthOptions(months) {
+        const periodLabelEl = document.getElementById("payModalPeriodLabel");
+        if (periodLabelEl) periodLabelEl.textContent = "Unpaid months to pay";
+        payModalMonths.innerHTML = "";
+        for (const month of months) {
+          const label = document.createElement("label");
+          label.className = "pay-modal__month-option";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.value = month;
+          checkbox.checked = true;
+          checkbox.addEventListener("change", () => {
+            payAmountUserEdited = false;
+            syncPayModalAmountPreview();
+          });
+          const text = document.createElement("span");
+          text.textContent = monthLabel(month);
+          label.appendChild(checkbox);
+          label.appendChild(text);
+          payModalMonths.appendChild(label);
+        }
+      }
+
       async function calculatePublisherTotalForMonths(publisherName, months) {
         const target = normalizePublisherNameKey(publisherName);
         const viewMonth = monthSelect.value;
@@ -2728,12 +2899,33 @@
       function syncPayModalAmountPreview() {
         const months = getSelectedPayMonths();
         if (months.length === 0) {
-          payModalHint.textContent = "Select at least one month.";
+          payModalHint.textContent = usePayWeeks()
+            ? "No week selected."
+            : "Select at least one month.";
           payModalConfirm.disabled = true;
           return;
         }
 
         payModalConfirm.disabled = false;
+
+        // Weekly mode settles the single selected (closed) week — amount is the row's weekly total.
+        if (usePayWeeks()) {
+          if (payModalMode === "bulk") {
+            payModalHint.textContent =
+              "Paying each affiliate their total for " +
+              weekLabelFromKey(months[0]) +
+              ".";
+            return;
+          }
+          if (payModalRow && !payAmountUserEdited) {
+            payModalAmount.value = Number(payModalRow.totalAmount || 0).toFixed(2);
+          }
+          payModalHint.textContent =
+            "Using weekly total for " +
+            weekLabelFromKey(months[0]) +
+            ". Edit amount to override.";
+          return;
+        }
 
         if (payModalMode === "bulk") {
           payModalHint.textContent =
@@ -2890,7 +3082,15 @@
           row.publisherName + " via " + method;
         payModalAmountSection.classList.remove("hidden");
         syncPayModalPaymentFields(method, meta);
-        renderPayModalMonthOptions(monthSelect.value);
+        if (
+          isUnpaidAllView() &&
+          Array.isArray(row.unpaidMonths) &&
+          row.unpaidMonths.length
+        ) {
+          renderPayModalUnpaidMonthOptions(row.unpaidMonths);
+        } else {
+          renderPayModalPeriodOptions(getDashboardPeriodKey());
+        }
         payModalAmount.value = Number(row.totalAmount || 0).toFixed(2);
         payModalHint.textContent = "";
         payModal.classList.remove("hidden");
@@ -2917,7 +3117,7 @@
           billNames.length +
           " Bill.com affiliate(s)";
         payModalAmountSection.classList.add("hidden");
-        renderPayModalMonthOptions(monthSelect.value);
+        renderPayModalPeriodOptions(getDashboardPeriodKey());
         payModalHint.textContent = "";
         payModal.classList.remove("hidden");
         syncPayModalAmountPreview();
@@ -2931,8 +3131,8 @@
         return Math.round(parsed * 100) / 100;
       }
 
-      function buildPayPayload(months, amount, extras) {
-        const payload = { months };
+      function buildPayPayload(periods, amount, extras) {
+        const payload = usePayWeeks() ? { weeks: periods } : { months: periods };
         if (amount !== undefined && amount !== null) {
           payload.amount = amount;
         }
@@ -3000,9 +3200,11 @@
       }
 
       async function confirmPayModal() {
-        const months = getSelectedPayMonths();
-        if (months.length === 0) {
-          payModalHint.textContent = "Select at least one month.";
+        const periods = getSelectedPayPeriods();
+        if (periods.length === 0) {
+          payModalHint.textContent = usePayWeeks()
+            ? "No week selected."
+            : "Select at least one month.";
           return;
         }
 
@@ -3098,7 +3300,7 @@
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(
-                buildPayPayload(months, amount, {
+                buildPayPayload(periods, amount, {
                   billcomVendorId,
                   billcomAch,
                   wiseFields,
@@ -3162,7 +3364,7 @@
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  months,
+                  ...(usePayWeeks() ? { weeks: periods } : { months: periods }),
                   publisherNames: wiseNames,
                 }),
               });
@@ -3179,7 +3381,7 @@
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  months,
+                  ...(usePayWeeks() ? { weeks: periods } : { months: periods }),
                   publisherNames: billNames,
                 }),
               });
@@ -3253,19 +3455,24 @@
         checkbox.checked = paidForMonth;
         checkbox.title =
           paidForMonth && paidAtMonth
-            ? "Paid " + formatCstTimestamp(paidAtMonth) + " for " + monthLabel(getDashboardMonth())
-            : "Mark as paid for " + monthLabel(getDashboardMonth());
+            ? "Paid " + formatCstTimestamp(paidAtMonth) + " for " + dashboardPeriodLabel()
+            : "Mark as paid for " + dashboardPeriodLabel();
         checkbox.addEventListener("click", (e) => e.stopPropagation());
         checkbox.addEventListener("change", async () => {
           const previousPaid = isPaidForDashboardMonth(row.publisherName);
-          const month = getDashboardMonth();
+          const endpoint = isWeekMode()
+            ? "/api/payment/mark-paid-week/"
+            : "/api/payment/mark-paid/";
+          const body = isWeekMode()
+            ? { week: getDashboardWeek() }
+            : { month: getDashboardMonth() };
           try {
             const res = await fetch(
-              "/api/payment/mark-paid/" + encodeURIComponent(row.publisherName),
+              endpoint + encodeURIComponent(row.publisherName),
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ month }),
+                body: JSON.stringify(body),
               }
             );
             const data = await res.json();
@@ -3300,8 +3507,8 @@
           paidLabel.textContent = "PAID";
           paidLabel.title =
             paidAtMonth
-              ? "Paid " + formatCstTimestamp(paidAtMonth) + " for " + monthLabel(getDashboardMonth())
-              : "Paid for " + monthLabel(getDashboardMonth());
+              ? "Paid " + formatCstTimestamp(paidAtMonth) + " for " + dashboardPeriodLabel()
+              : "Paid for " + dashboardPeriodLabel();
           controls.appendChild(checkbox);
           controls.appendChild(editBtn);
           controls.appendChild(paidLabel);
@@ -3569,6 +3776,10 @@
       }
 
       async function fetchStats() {
+        if (isUnpaidAllView()) {
+          await loadUnpaidAll();
+          return;
+        }
         if (isLoading) return;
         setLoading(true);
         setBanner("loading", "Fetching publisher payout data...");
@@ -3576,7 +3787,7 @@
 
         const month = monthSelect.value;
         try {
-          const res = await fetch("/api/payment/stats/all?month=" + encodeURIComponent(month));
+          const res = await fetch("/api/payment/stats/all?" + getPeriodQueryParam());
           const data = await res.json();
           if (!res.ok) {
             throw new Error(data.error || "Failed to fetch payment stats");
@@ -3606,7 +3817,7 @@
           setBanner(null, "");
         } catch (err) {
           try {
-            const fallbackRes = await fetch("/api/payment/stats?month=" + encodeURIComponent(month));
+            const fallbackRes = await fetch("/api/payment/stats?" + getPeriodQueryParam());
             const fallbackData = await fallbackRes.json();
             if (!fallbackRes.ok) {
               throw new Error(fallbackData.error || "Fallback also failed");
@@ -3725,6 +3936,11 @@
       function applyFilterAndSort() {
         const q = searchInput.value.trim().toLowerCase();
         filteredPublishers = allPublishers.filter((row) => {
+          if (isUnpaidAllView()) {
+            // The aggregate is already all-unpaid across past months; only search filters.
+            if (!q) return true;
+            return String(row.publisherName || "").toLowerCase().includes(q);
+          }
           if (sourceFilter === "CPL") {
             if (!row.cplAffiliate) {
               return false;
@@ -3995,6 +4211,33 @@
           applyFilterAndSort();
         }
       });
+
+      weekSelect.addEventListener("change", async () => {
+        selectedRowIndex = -1;
+        currentPage = 1;
+        await fetchStats();
+      });
+
+      periodModeGroup.addEventListener("click", async (e) => {
+        const btn = e.target.closest("[data-period-mode]");
+        if (!btn) return;
+        const nextMode = btn.dataset.periodMode === "week" ? "week" : "month";
+        if (nextMode === periodMode) return;
+        periodMode = nextMode;
+        periodModeGroup.querySelectorAll("[data-period-mode]").forEach((el) => {
+          el.classList.toggle("source-filter--active", el === btn);
+        });
+        monthControlGroup.classList.toggle("hidden", isWeekMode());
+        weekControlGroup.classList.toggle("hidden", !isWeekMode());
+        selectedRowIndex = -1;
+        currentPage = 1;
+        // Weekly mode does not apply to the month-based Profit / All-Unpaid views.
+        if (isWeekMode() && (isProfitView() || isUnpaidAllView())) {
+          switchSourceFilter("ALL");
+          return;
+        }
+        await fetchStats();
+      });
       searchInput.addEventListener("input", () => {
         selectedRowIndex = -1;
         currentPage = 1;
@@ -4005,18 +4248,31 @@
         }
       });
 
-      sourceFilters.addEventListener("click", async (e) => {
-        const btn = e.target.closest(".source-filter[data-source]");
-        if (!btn) return;
-        const nextSource = btn.dataset.source || "ALL";
+      async function switchSourceFilter(nextSource) {
+        const leavingUnpaidAll =
+          sourceFilter === "UNPAID_ALL" && nextSource !== "UNPAID_ALL";
         sourceFilter = nextSource;
+        previousSourceFilter = nextSource;
         document.querySelectorAll(".source-filter[data-source]").forEach((el) => {
-          el.classList.toggle("source-filter--active", el === btn);
+          el.classList.toggle(
+            "source-filter--active",
+            el.dataset.source === nextSource
+          );
         });
         selectedRowIndex = -1;
         currentPage = 1;
         updateViewPanels();
+        syncPaymentStatusFiltersVisibility();
 
+        if (isUnpaidAllView()) {
+          await loadUnpaidAll();
+          return;
+        }
+        if (leavingUnpaidAll) {
+          // The aggregate replaced allPublishers \u2014 reload the normal period data.
+          await fetchStats();
+          return;
+        }
         if (isProfitView()) {
           affiliateCount.textContent =
             "Publishers: " + (allProfitRows.length || "\u2014");
@@ -4032,6 +4288,75 @@
         } else {
           applyFilterAndSort();
         }
+      }
+
+      async function loadUnpaidAll() {
+        if (isLoading) return;
+        setLoading(true);
+        setBanner("loading", "Compiling all unpaid earnings across past months...");
+        setWarning(null);
+        try {
+          const res = await fetch("/api/payment/unpaid-all");
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || "Failed to compile unpaid earnings");
+          }
+          const affiliates = Array.isArray(data.affiliates) ? data.affiliates : [];
+          allPublishers = affiliates.map((a) => ({
+            publisherName: a.publisherName,
+            ringbaAmount: 0,
+            polyaresAmount: 0,
+            totalAmount: Number(a.total || 0),
+            source: "BOTH",
+            cplAffiliate: !!a.cplAffiliate,
+            unpaidMonths: (a.months || []).map((m) => m.month),
+            unpaidBreakdown: a.months || [],
+          }));
+          allOutliers = [];
+          renderOutliers();
+          affiliateCount.textContent =
+            "Unpaid affiliates: " + affiliates.length;
+          updateHeaderTotals({
+            ringbaTotalPayout: 0,
+            polyareasTotalPayout: 0,
+            grandTotalPayout: Number(data.totalUnpaid || 0),
+          });
+          const scanned = Array.isArray(data.monthsScanned)
+            ? data.monthsScanned.length
+            : 0;
+          lastUpdated.textContent =
+            "Last updated: " +
+            (data.generatedAt ? formatCstTimestamp(data.generatedAt) : "\u2014") +
+            (scanned
+              ? " \u00b7 " +
+                scanned +
+                " month(s) scanned, excl. " +
+                (data.excludedMonth || "current") +
+                " \u00b7 min " +
+                formatMoney(data.minAmount)
+              : "");
+          unpaidAllLoaded = true;
+          currentPage = 1;
+          applyFilterAndSort();
+          setBanner(null, "");
+          if (Array.isArray(data.monthsFailed) && data.monthsFailed.length) {
+            setWarning(
+              "Some months could not be fetched: " + data.monthsFailed.join(", ")
+            );
+          }
+        } catch (err) {
+          setBanner("error", err.message || "Failed to compile unpaid earnings");
+          allPublishers = [];
+          applyFilterAndSort();
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      sourceFilters.addEventListener("click", async (e) => {
+        const btn = e.target.closest(".source-filter[data-source]");
+        if (!btn) return;
+        await switchSourceFilter(btn.dataset.source || "ALL");
       });
 
       paymentStatusFilters.addEventListener("click", (e) => {

@@ -5,7 +5,9 @@ export interface PaymentConfirmationParams {
   publisherName: string;
   email: string;
   amount: number;
+  /** Period keys: YYYY-MM months, or Monday YYYY-MM-DD weeks when periodType === "week". */
   months: string[];
+  periodType?: "month" | "week";
   method: "Wise" | "Bill.com";
 }
 
@@ -51,6 +53,37 @@ function formatMonthsLabel(months: string[]): string {
   return sorted.map(formatMonthLabel).join(", ");
 }
 
+/** Format a Monday YYYY-MM-DD week key as "Mon D – Sun D, YYYY". */
+function formatWeekLabel(weekKey: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(weekKey.trim());
+  if (!match) {
+    return weekKey;
+  }
+  const y = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10) - 1;
+  const d = parseInt(match[3], 10);
+  const monday = new Date(Date.UTC(y, m, d));
+  const sunday = new Date(Date.UTC(y, m, d + 6));
+  const fmt = (dt: Date) =>
+    new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    }).format(dt);
+  return `${fmt(monday)} – ${fmt(sunday)}, ${sunday.getUTCFullYear()}`;
+}
+
+function formatPeriodsLabel(params: PaymentConfirmationParams): string {
+  if (params.periodType === "week") {
+    const sorted = [...params.months].sort();
+    if (sorted.length === 0) {
+      return "Payment period";
+    }
+    return sorted.map(formatWeekLabel).join(", ");
+  }
+  return formatMonthsLabel(params.months);
+}
+
 function formatDateChicago(): string {
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "long",
@@ -60,7 +93,7 @@ function formatDateChicago(): string {
 }
 
 function buildHtmlBody(params: PaymentConfirmationParams): string {
-  const monthLabel = formatMonthsLabel(params.months);
+  const monthLabel = formatPeriodsLabel(params);
   const amountLabel = formatMoney(params.amount);
   const dateLabel = formatDateChicago();
   const displayName = params.publisherName;
@@ -134,7 +167,7 @@ function buildHtmlBody(params: PaymentConfirmationParams): string {
 }
 
 function buildTextBody(params: PaymentConfirmationParams): string {
-  const monthLabel = formatMonthsLabel(params.months);
+  const monthLabel = formatPeriodsLabel(params);
   const amountLabel = formatMoney(params.amount);
   const dateLabel = formatDateChicago();
 
@@ -174,7 +207,7 @@ export async function sendPaymentConfirmationEmail(
   const user = process.env.SMTP_USER!.trim();
   const pass = process.env.SMTP_PASS!.trim();
   const from = process.env.PAYMENT_EMAIL_FROM!.trim();
-  const monthLabel = formatMonthsLabel(params.months);
+  const monthLabel = formatPeriodsLabel(params);
 
   const transporter = nodemailer.createTransport({
     host,
