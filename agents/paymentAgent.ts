@@ -454,6 +454,27 @@ function collectCplPublisherKeys(rawRows: Record<string, unknown>[]): Set<string
   return keys;
 }
 
+const CPL_DETECTION_WINDOW_DAYS = 7;
+
+/**
+ * CPL calls only matter for the last 7 calendar days of the period — that is the
+ * window where Ringba has not finalized amounts (they show as $0). Earlier calls
+ * are already settled, so an affiliate with CPL calls only in earlier weeks must
+ * not be flagged. For a week-length range this collapses to the whole range.
+ */
+function cplDetectionWindow(
+  startDate: string,
+  endDate: string
+): { start: string; end: string } {
+  const startMs = new Date(startDate).getTime();
+  const endMs = new Date(endDate).getTime();
+  const windowStartMs = Math.max(
+    startMs,
+    endMs - CPL_DETECTION_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  );
+  return { start: new Date(windowStartMs).toISOString(), end: endDate };
+}
+
 function ringbaInsightsBaseBody(startDate: string, endDate: string) {
   return {
     reportStart: startDate,
@@ -490,8 +511,11 @@ export async function fetchPublisherPayouts(
     orderByColumns: [{ column: "payoutAmount", direction: "desc" }],
   };
 
+  const cplWindow = cplDetectionWindow(startDate, endDate);
   const cplBody = {
     ...baseBody,
+    reportStart: cplWindow.start,
+    reportEnd: cplWindow.end,
     groupByColumns: [
       { column: "publisherName", displayName: "Publisher" },
       { column: "targetName", displayName: "Target" },

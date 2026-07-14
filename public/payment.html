@@ -815,6 +815,18 @@
         background: rgba(0, 255, 136, 0.08);
       }
 
+      .held-label {
+        display: inline-block;
+        padding: 6px 10px;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        color: #ffb020;
+        border: 1px solid rgba(255, 176, 32, 0.4);
+        background: rgba(255, 176, 32, 0.08);
+        cursor: help;
+      }
+
       .btn-pay-all {
         font-family: var(--font);
         padding: 8px 14px;
@@ -1720,6 +1732,8 @@
       let periodMode = "month"; // "month" | "week"
       let previousSourceFilter = "ALL"; // restore point when leaving ALL UNPAID
       let unpaidAllLoaded = false;
+      let holdActive = false; // true while $0 CPL affiliates are held (before 2nd Monday)
+      let heldUntil = null; // YYYY-MM-DD cutoff (2nd Monday of the following month)
       let pageSize = 100;
       let currentPage = 1;
       let profitDataMonth = null;
@@ -2716,9 +2730,35 @@
         return method === "Wise" || method === "Bill.com";
       }
 
+      function formatHeldUntil(ymd) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ""));
+        if (!m) return ymd || "";
+        const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+        return d.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+      }
+
+      /**
+       * A row is held when its CPL amounts are not yet finalized: monthly view only,
+       * the affiliate is CPL-tagged, its total is $0, and today is before the second
+       * Monday of the following month. Held affiliates cannot be paid yet.
+       */
+      function isRowHeld(row) {
+        return (
+          !isWeekMode() &&
+          !isUnpaidAllView() &&
+          holdActive &&
+          !!row.cplAffiliate &&
+          Number(row.totalAmount || 0) <= 0
+        );
+      }
+
       function getPayableAffiliates() {
         return allPublishers.filter((row) => {
-          if (row.cplAffiliate) {
+          if (isRowHeld(row)) {
             return false;
           }
           if (sourceFilter !== "ALL" && sourceFilter !== "CPL" && row.source !== sourceFilter) {
@@ -3069,7 +3109,11 @@
       function openPayModalForRow(row) {
         const meta = getAffiliateMeta(row.publisherName);
         const method = meta.paymentMethod;
-        if (isPaidForDashboardMonth(row.publisherName) || !isAutoPayMethod(method)) {
+        if (
+          isPaidForDashboardMonth(row.publisherName) ||
+          !isAutoPayMethod(method) ||
+          isRowHeld(row)
+        ) {
           return;
         }
 
@@ -3512,6 +3556,17 @@
           controls.appendChild(checkbox);
           controls.appendChild(editBtn);
           controls.appendChild(paidLabel);
+        } else if (isRowHeld(row)) {
+          const heldLabel = document.createElement("span");
+          heldLabel.className = "held-label";
+          heldLabel.textContent = "HELD";
+          heldLabel.title =
+            "CPL amounts not finalized yet — held until " +
+            (heldUntil ? formatHeldUntil(heldUntil) : "the second Monday next month") +
+            ". Ringba updates the real amounts by then.";
+          controls.appendChild(checkbox);
+          controls.appendChild(editBtn);
+          controls.appendChild(heldLabel);
         } else {
           const payBtn = document.createElement("button");
           payBtn.type = "button";
@@ -3796,6 +3851,8 @@
           allPublishers = Array.isArray(data.publishers)
             ? data.publishers.map(normalizePublisherRow)
             : [];
+          holdActive = data.holdActive === true;
+          heldUntil = data.heldUntil || null;
           allOutliers = Array.isArray(data.outliers) ? data.outliers : [];
           affiliateCount.textContent = "Affiliates: " + (data.totalAffiliates ?? allPublishers.length);
           updateHeaderTotals(data);
@@ -3826,6 +3883,8 @@
             allPublishers = Array.isArray(fallbackData.publishers)
               ? fallbackData.publishers.map(normalizePublisherRow)
               : [];
+            holdActive = fallbackData.holdActive === true;
+            heldUntil = fallbackData.heldUntil || null;
             allOutliers = [];
             affiliateCount.textContent = "Affiliates: " + (fallbackData.totalAffiliates ?? allPublishers.length);
             updateHeaderTotals({
@@ -3926,7 +3985,10 @@
         if (sourceFilter === "CPL" && !isProfitView()) {
           cplBanner.classList.remove("hidden");
           cplBanner.textContent =
-            "CPL affiliates: amounts are updated in Ringba ~1 week after period close. Confirm final amounts before paying.";
+            "CPL = 33 Miles RTT / Inquirly calls in the last 7 days of the month (Ringba finalizes these later). " +
+            "$0 CPL affiliates are HELD" +
+            (holdActive && heldUntil ? " until " + formatHeldUntil(heldUntil) : " until the second Monday next month") +
+            "; CPL affiliates with a non-zero total are payable now.";
         } else {
           cplBanner.classList.add("hidden");
           cplBanner.textContent = "";
