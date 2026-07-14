@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LeadSmart · Fraud Station</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0a0a0a;
+        --bg-panel: #111111;
+        --bg-card: #161616;
+        --border: #1e1e1e;
+        --border-bright: #2e2e2e;
+        --text: #e8e8e8;
+        --text-dim: #6a6a6a;
+        --green: #00ff88;
+        --amber: #ffb000;
+        --purple: #b388ff;
+        --red: #ff4444;
+        --font: "JetBrains Mono", ui-monospace, monospace;
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      html, body {
+        min-height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      ::selection { background: rgba(255, 68, 68, 0.25); color: #fff; }
+      .hidden { display: none !important; }
+
+      /* ---------- LOGIN ---------- */
+      .login-screen {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .login-card {
+        width: 100%;
+        max-width: 380px;
+        background: var(--bg-panel);
+        border: 1px solid var(--border-bright);
+        padding: 32px 28px;
+        position: relative;
+      }
+      .login-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: 2px;
+        background: var(--red);
+      }
+      .login-card__title {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        margin-bottom: 4px;
+      }
+      .login-card__sub {
+        font-size: 10px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        margin-bottom: 24px;
+      }
+      .field-label {
+        display: block;
+        font-size: 10px;
+        letter-spacing: 2px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+      .login-input {
+        width: 100%;
+        background: var(--bg-card);
+        border: 1px solid var(--border-bright);
+        color: var(--text);
+        font-family: var(--font);
+        font-size: 13px;
+        padding: 10px 12px;
+        margin-bottom: 14px;
+        outline: none;
+      }
+      .login-input:focus { border-color: var(--red); }
+      .login-error { color: var(--red); font-size: 11px; min-height: 16px; margin-bottom: 10px; }
+
+      .btn {
+        font-family: var(--font);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 10px 16px;
+        cursor: pointer;
+        border: 1px solid var(--border-bright);
+        background: var(--bg-card);
+        color: var(--text);
+      }
+      .btn--primary { border-color: rgba(255, 68, 68, 0.5); color: var(--red); width: 100%; }
+      .btn--primary:hover { background: rgba(255, 68, 68, 0.1); }
+      .btn--amber { border-color: rgba(255, 176, 0, 0.5); color: var(--amber); }
+      .btn--amber:hover { background: rgba(255, 176, 0, 0.08); }
+      .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+      /* ---------- LAYOUT ---------- */
+      .wrap { max-width: 1500px; margin: 0 auto; padding: 20px 22px 60px; }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 14px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 18px;
+      }
+      .topbar__title { font-size: 15px; font-weight: 700; letter-spacing: 2px; }
+      .topbar__title span { color: var(--red); }
+      .topbar__sub { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; }
+      .topbar__spacer { flex: 1; }
+      .topbar a { color: var(--text-dim); font-size: 10px; letter-spacing: 1px; text-decoration: none; text-transform: uppercase; }
+      .topbar a:hover { color: var(--text); }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+      .stat {
+        background: var(--bg-panel);
+        border: 1px solid var(--border);
+        padding: 14px 16px;
+      }
+      .stat__label { font-size: 9px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px; }
+      .stat__value { font-size: 22px; font-weight: 700; }
+      .stat__value--red { color: var(--red); }
+      .stat__value--amber { color: var(--amber); }
+      .stat__value--green { color: var(--green); }
+      .stat__hint { font-size: 9px; color: var(--text-dim); margin-top: 4px; }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 26px 0 10px;
+      }
+      .section-head h2 { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim); }
+      .section-head .line { flex: 1; height: 1px; background: var(--border); }
+
+      .table-wrap { overflow-x: auto; border: 1px solid var(--border); background: var(--bg-panel); }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th {
+        text-align: left;
+        font-size: 9px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: var(--text-dim);
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border-bright);
+        white-space: nowrap;
+      }
+      td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+      tr:hover td { background: rgba(255, 255, 255, 0.02); }
+      .empty { color: var(--text-dim); text-align: center; padding: 26px 12px !important; }
+
+      .badge {
+        display: inline-block;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 3px 7px;
+        margin-right: 4px;
+        border: 1px solid;
+      }
+      .badge--voip { color: var(--red); border-color: rgba(255, 68, 68, 0.45); background: rgba(255, 68, 68, 0.08); }
+      .badge--shared { color: var(--amber); border-color: rgba(255, 176, 0, 0.45); background: rgba(255, 176, 0, 0.08); }
+      .badge--ai { color: var(--purple); border-color: rgba(179, 136, 255, 0.45); background: rgba(179, 136, 255, 0.08); }
+      .badge--status-clear { color: var(--green); border-color: rgba(0, 255, 136, 0.4); }
+      .badge--status-suspicious { color: var(--amber); border-color: rgba(255, 176, 0, 0.45); background: rgba(255, 176, 0, 0.08); }
+      .badge--status-blocked { color: var(--red); border-color: rgba(255, 68, 68, 0.5); background: rgba(255, 68, 68, 0.12); }
+
+      .sev { display: inline-flex; align-items: center; gap: 8px; }
+      .sev__bar { width: 70px; height: 6px; background: var(--bg-card); border: 1px solid var(--border-bright); position: relative; }
+      .sev__fill { position: absolute; inset: 0 auto 0 0; }
+      .sev--low .sev__fill { background: var(--green); }
+      .sev--mid .sev__fill { background: var(--amber); }
+      .sev--high .sev__fill { background: var(--red); }
+
+      .mono-dim { color: var(--text-dim); font-size: 11px; }
+
+      .btn-block {
+        font-family: var(--font);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 6px 12px;
+        cursor: pointer;
+        background: transparent;
+        border: 1px solid rgba(255, 68, 68, 0.55);
+        color: var(--red);
+      }
+      .btn-block:hover { background: rgba(255, 68, 68, 0.12); }
+      .btn-unblock { border-color: rgba(0, 255, 136, 0.45); color: var(--green); }
+      .btn-unblock:hover { background: rgba(0, 255, 136, 0.08); }
+
+      .detail-row td { background: var(--bg-card); font-size: 11px; color: var(--text-dim); }
+      .detail-row pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font); color: var(--text); font-size: 11px; }
+
+      .banner {
+        border: 1px solid var(--border-bright);
+        background: var(--bg-panel);
+        padding: 10px 14px;
+        font-size: 11px;
+        margin-bottom: 14px;
+      }
+      .banner--error { border-color: rgba(255, 68, 68, 0.5); color: var(--red); }
+
+      /* ---------- BLOCK MODAL ---------- */
+      .modal { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; }
+      .modal__backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.75); }
+      .modal__panel {
+        position: relative;
+        width: 100%;
+        max-width: 440px;
+        background: var(--bg-panel);
+        border: 1px solid rgba(255, 68, 68, 0.5);
+        padding: 26px 24px;
+        margin: 16px;
+      }
+      .modal__title { font-size: 13px; font-weight: 700; letter-spacing: 1px; margin-bottom: 8px; }
+      .modal__text { font-size: 11px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.6; }
+      .modal__text strong { color: var(--text); }
+      .modal__actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+      .modal__error { color: var(--red); font-size: 11px; min-height: 16px; margin-top: 10px; }
+
+      .toast {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        z-index: 70;
+        background: var(--bg-panel);
+        border: 1px solid rgba(0, 255, 136, 0.5);
+        color: var(--green);
+        padding: 12px 16px;
+        font-size: 11px;
+        max-width: 380px;
+      }
+      .toast--error { border-color: rgba(255, 68, 68, 0.5); color: var(--red); }
+    </style>
+  </head>
+  <body>
+    <!-- LOGIN -->
+    <div class="login-screen" id="loginScreen">
+      <div class="login-card">
+        <div class="login-card__title">LEADSMART // FRAUD STATION</div>
+        <div class="login-card__sub">System 3 · Authorized access only</div>
+        <form id="loginForm">
+          <label class="field-label" for="passwordInput">Password</label>
+          <input class="login-input" type="password" id="passwordInput" autocomplete="current-password" />
+          <div class="login-error" id="loginError"></div>
+          <button class="btn btn--primary" type="submit">Login</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div class="wrap hidden" id="dashboard">
+      <div class="topbar">
+        <div>
+          <div class="topbar__title">FRAUD <span>STATION</span></div>
+          <div class="topbar__sub">System 3 · VOIP detection · Caller cross-ref · AI analysis</div>
+        </div>
+        <div class="topbar__spacer"></div>
+        <a href="https://war-room-dashboard-livid.vercel.app/">War Room</a>
+        <a href="/">Scrub</a>
+        <a href="/payment">Payments</a>
+        <button class="btn btn--amber" type="button" id="scanNowBtn">SCAN NOW</button>
+      </div>
+
+      <div class="banner banner--error hidden" id="errorBanner"></div>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="stat__label">Flagged · 24h</div>
+          <div class="stat__value stat__value--red" id="statFlagged24h">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat__label">Flagged · Total</div>
+          <div class="stat__value" id="statFlaggedTotal">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat__label">Suspicious publishers</div>
+          <div class="stat__value stat__value--amber" id="statSuspicious">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat__label">Blocked publishers</div>
+          <div class="stat__value stat__value--red" id="statBlocked">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat__label">Last scan</div>
+          <div class="stat__value stat__value--green" id="statLastScan" style="font-size: 13px; padding-top: 5px;">—</div>
+          <div class="stat__hint" id="statScanState"></div>
+        </div>
+      </div>
+
+      <div class="section-head"><h2>Publisher risk</h2><div class="line"></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Publisher</th>
+              <th>Status</th>
+              <th>Risk score</th>
+              <th>Flagged / Total calls</th>
+              <th>Last update</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="publishersBody">
+            <tr><td class="empty" colspan="6">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section-head"><h2>Flagged call feed</h2><div class="line"></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Flagged at</th>
+              <th>Publisher</th>
+              <th>Caller</th>
+              <th>Reason</th>
+              <th>Severity</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="feedBody">
+            <tr><td class="empty" colspan="6">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- BLOCK CONFIRM MODAL -->
+    <div class="modal hidden" id="blockModal">
+      <div class="modal__backdrop" id="blockModalBackdrop"></div>
+      <div class="modal__panel">
+        <div class="modal__title" id="blockModalTitle">Block publisher</div>
+        <div class="modal__text" id="blockModalText"></div>
+        <label class="field-label" for="blockModalConfirmInput">Type the publisher name to confirm</label>
+        <input class="login-input" type="text" id="blockModalConfirmInput" autocomplete="off" />
+        <div class="modal__error" id="blockModalError"></div>
+        <div class="modal__actions">
+          <button class="btn" type="button" id="blockModalCancel">Cancel</button>
+          <button class="btn btn--primary" type="button" id="blockModalConfirm" style="width: auto;">CONFIRM</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast hidden" id="toast"></div>
+
+    <script>
+      (function () {
+        const PASSWORD = "leadsmart2026";
+        const AUTH_KEY = "ls_fraud_auth";
+
+        const loginScreen = document.getElementById("loginScreen");
+        const loginForm = document.getElementById("loginForm");
+        const passwordInput = document.getElementById("passwordInput");
+        const loginError = document.getElementById("loginError");
+        const dashboard = document.getElementById("dashboard");
+        const errorBanner = document.getElementById("errorBanner");
+        const scanNowBtn = document.getElementById("scanNowBtn");
+        const publishersBody = document.getElementById("publishersBody");
+        const feedBody = document.getElementById("feedBody");
+        const toast = document.getElementById("toast");
+
+        const blockModal = document.getElementById("blockModal");
+        const blockModalTitle = document.getElementById("blockModalTitle");
+        const blockModalText = document.getElementById("blockModalText");
+        const blockModalConfirmInput = document.getElementById("blockModalConfirmInput");
+        const blockModalError = document.getElementById("blockModalError");
+        const blockModalCancel = document.getElementById("blockModalCancel");
+        const blockModalConfirm = document.getElementById("blockModalConfirm");
+        const blockModalBackdrop = document.getElementById("blockModalBackdrop");
+
+        let modalPublisher = null;
+        let modalBlock = true;
+        let toastTimer = null;
+        let expandedCallId = null;
+
+        function esc(s) {
+          return String(s == null ? "" : s)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        }
+
+        function showToast(message, isError) {
+          toast.textContent = message;
+          toast.classList.toggle("toast--error", !!isError);
+          toast.classList.remove("hidden");
+          clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => toast.classList.add("hidden"), 6000);
+        }
+
+        function setError(message) {
+          if (!message) {
+            errorBanner.classList.add("hidden");
+            errorBanner.textContent = "";
+            return;
+          }
+          errorBanner.textContent = message;
+          errorBanner.classList.remove("hidden");
+        }
+
+        function fmtTime(iso) {
+          if (!iso) return "—";
+          const d = new Date(iso);
+          if (Number.isNaN(d.getTime())) return iso;
+          return d.toLocaleString("en-US", {
+            timeZone: "America/Chicago",
+            month: "short", day: "numeric",
+            hour: "numeric", minute: "2-digit",
+          }) + " CT";
+        }
+
+        function fmtCaller(num) {
+          if (!num) return "—";
+          const d = String(num).replace(/\D/g, "");
+          if (d.length === 11 && d[0] === "1") {
+            return "(" + d.slice(1, 4) + ") " + d.slice(4, 7) + "-" + d.slice(7);
+          }
+          return num;
+        }
+
+        function reasonBadge(reason) {
+          if (reason === "voip") return '<span class="badge badge--voip">VOIP</span>';
+          if (reason === "shared_caller") return '<span class="badge badge--shared">SHARED ID</span>';
+          if (reason === "ai_analysis") return '<span class="badge badge--ai">AI</span>';
+          return '<span class="badge">' + esc(reason) + "</span>";
+        }
+
+        function statusBadge(status) {
+          const cls =
+            status === "blocked" ? "badge--status-blocked" :
+            status === "suspicious" ? "badge--status-suspicious" : "badge--status-clear";
+          return '<span class="badge ' + cls + '">' + esc(String(status).toUpperCase()) + "</span>";
+        }
+
+        function severityCell(sev) {
+          const s = Math.max(0, Math.min(100, Number(sev) || 0));
+          const cls = s >= 75 ? "sev--high" : s >= 45 ? "sev--mid" : "sev--low";
+          return (
+            '<span class="sev ' + cls + '"><span class="sev__bar"><span class="sev__fill" style="width:' +
+            s + '%"></span></span>' + s + "</span>"
+          );
+        }
+
+        function detailHtml(detail) {
+          if (!detail) return "";
+          try {
+            if (typeof detail === "string") detail = JSON.parse(detail);
+          } catch { return esc(String(detail)); }
+          const parts = [];
+          if (Array.isArray(detail.signals) && detail.signals.length) {
+            parts.push("Signals: " + detail.signals.map(esc).join(", "));
+          }
+          if (detail.lineType) parts.push("Line: " + esc(detail.lineType));
+          if (detail.carrier) parts.push("Carrier: " + esc(detail.carrier));
+          if (detail.location) parts.push("Location: " + esc(detail.location));
+          if (typeof detail.fraudScore === "number") parts.push("IPQS score: " + detail.fraudScore);
+          if (Array.isArray(detail.publishers) && detail.publishers.length) {
+            parts.push("Publishers sharing this caller: " + detail.publishers.map(esc).join(" · "));
+          }
+          if (detail.verdict) parts.push("AI verdict: " + esc(detail.verdict));
+          if (Array.isArray(detail.reasons) && detail.reasons.length) {
+            parts.push("AI reasons: " + detail.reasons.map(esc).join("; "));
+          }
+          if (typeof detail.payoutAmount === "number" && detail.payoutAmount > 0) {
+            parts.push("Payout: $" + detail.payoutAmount.toFixed(2));
+          }
+          return parts.join("<br />");
+        }
+
+        async function fetchJson(url, options) {
+          const res = await fetch(url, options);
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || ("Request failed: " + url));
+          return data;
+        }
+
+        async function loadSummary() {
+          const s = await fetchJson("/api/fraud/summary");
+          document.getElementById("statFlagged24h").textContent = s.flaggedCalls24h;
+          document.getElementById("statFlaggedTotal").textContent = s.flaggedCallsTotal;
+          document.getElementById("statSuspicious").textContent = s.suspiciousPublishers;
+          document.getElementById("statBlocked").textContent = s.blockedPublishers;
+          document.getElementById("statLastScan").textContent = fmtTime(s.lastScanAt);
+          document.getElementById("statScanState").textContent = s.scanRunning ? "scan running…" : "";
+        }
+
+        async function loadPublishers() {
+          const data = await fetchJson("/api/fraud/publishers");
+          const rows = data.publishers || [];
+          if (!rows.length) {
+            publishersBody.innerHTML =
+              '<tr><td class="empty" colspan="6">No publishers scanned yet — run a scan.</td></tr>';
+            return;
+          }
+          publishersBody.innerHTML = "";
+          for (const p of rows) {
+            const tr = document.createElement("tr");
+            const blocked = p.status === "blocked";
+            tr.innerHTML =
+              "<td>" + esc(p.publisherName) + "</td>" +
+              "<td>" + statusBadge(p.status) + "</td>" +
+              "<td>" + severityCell(p.riskScore) + "</td>" +
+              "<td>" + p.flaggedCalls + " / " + p.totalCalls + "</td>" +
+              '<td class="mono-dim">' + fmtTime(p.updatedAt) + "</td>" +
+              "<td></td>";
+            const actionTd = tr.lastElementChild;
+            const btn = document.createElement("button");
+            btn.className = "btn-block" + (blocked ? " btn-unblock" : "");
+            btn.textContent = blocked ? "UNBLOCK" : "BLOCK";
+            btn.addEventListener("click", () => openBlockModal(p.publisherName, !blocked));
+            actionTd.appendChild(btn);
+            publishersBody.appendChild(tr);
+          }
+        }
+
+        async function loadFeed() {
+          const data = await fetchJson("/api/fraud/feed?limit=100");
+          const flags = data.flags || [];
+          if (!flags.length) {
+            feedBody.innerHTML =
+              '<tr><td class="empty" colspan="6">No flagged calls. Either traffic is clean or a scan has not run yet.</td></tr>';
+            return;
+          }
+          feedBody.innerHTML = "";
+          for (const f of flags) {
+            const tr = document.createElement("tr");
+            tr.style.cursor = "pointer";
+            tr.innerHTML =
+              '<td class="mono-dim">' + fmtTime(f.createdAt) + "</td>" +
+              "<td>" + esc(f.publisherName) + "</td>" +
+              "<td>" + esc(fmtCaller(f.callerNumber)) + "</td>" +
+              "<td>" + reasonBadge(f.reason) + "</td>" +
+              "<td>" + severityCell(f.severity) + "</td>" +
+              '<td class="mono-dim">' + (expandedCallId === f.inboundCallId ? "▲" : "▼") + "</td>";
+            tr.addEventListener("click", () => toggleDetail(f, tr));
+            feedBody.appendChild(tr);
+
+            if (expandedCallId === f.inboundCallId) {
+              const dr = document.createElement("tr");
+              dr.className = "detail-row";
+              dr.innerHTML =
+                '<td colspan="6"><pre>' +
+                "Call ID: " + esc(f.inboundCallId) + "\n" +
+                (f.callDt ? "Call time: " + esc(fmtTime(f.callDt)) + "\n" : "") +
+                "</pre><div id=\"detail-" + esc(f.id) + "\">" + detailHtml(f.detail) + "</div></td>";
+              feedBody.appendChild(dr);
+            }
+          }
+        }
+
+        async function toggleDetail(flag) {
+          if (expandedCallId === flag.inboundCallId) {
+            expandedCallId = null;
+            await loadFeed();
+            return;
+          }
+          expandedCallId = flag.inboundCallId;
+          await loadFeed();
+          try {
+            const d = await fetchJson("/api/fraud/call/" + encodeURIComponent(flag.inboundCallId));
+            const el = document.getElementById("detail-" + flag.id);
+            if (!el) return;
+            const extra = [];
+            if (d.analysis && d.analysis.transcript) {
+              extra.push("<br /><strong style=\"color:#b388ff\">AI ANALYSIS</strong>");
+              if (d.analysis.aiScore != null) extra.push("Fake-call score: " + d.analysis.aiScore + "/100 (" + esc(d.analysis.verdict || "") + ")");
+              try {
+                const reasons = JSON.parse(d.analysis.reasons || "[]");
+                if (reasons.length) extra.push("Reasons: " + reasons.map(esc).join("; "));
+              } catch {}
+              extra.push("<br /><strong style=\"color:#6a6a6a\">TRANSCRIPT</strong><br />" +
+                esc(String(d.analysis.transcript).slice(0, 1500)));
+            }
+            if (d.intel) {
+              extra.push("<br /><strong style=\"color:#ff4444\">CALLER INTEL</strong>");
+              extra.push("Line: " + esc(d.intel.lineType || "?") + " · Carrier: " + esc(d.intel.carrier || "?") +
+                " · IPQS: " + (d.intel.fraudScore != null ? d.intel.fraudScore : "?") +
+                " · " + esc((d.intel.city || "") + ", " + (d.intel.region || "")));
+            }
+            if (extra.length) el.innerHTML += "<br />" + extra.join("<br />");
+          } catch {
+            /* detail fetch is best-effort */
+          }
+        }
+
+        // ---------- BLOCK / UNBLOCK ----------
+
+        function openBlockModal(publisherName, block) {
+          modalPublisher = publisherName;
+          modalBlock = block;
+          blockModalTitle.textContent = (block ? "Block" : "Unblock") + " publisher";
+          blockModalText.innerHTML = block
+            ? "This pauses <strong>" + esc(publisherName) + "</strong> in Ringba (affiliate disabled) — " +
+              "their calls stop routing account-wide until unblocked. Make sure you investigated first."
+            : "This re-enables <strong>" + esc(publisherName) + "</strong> in Ringba and their calls resume.";
+          blockModalConfirmInput.value = "";
+          blockModalError.textContent = "";
+          blockModalConfirm.disabled = false;
+          blockModal.classList.remove("hidden");
+          blockModalConfirmInput.focus();
+        }
+
+        function closeBlockModal() {
+          blockModal.classList.add("hidden");
+          modalPublisher = null;
+        }
+
+        async function confirmBlockModal() {
+          const typed = blockModalConfirmInput.value.trim();
+          if (typed !== modalPublisher) {
+            blockModalError.textContent = "Name does not match — type it exactly as shown.";
+            return;
+          }
+          blockModalConfirm.disabled = true;
+          blockModalError.textContent = (modalBlock ? "Blocking" : "Unblocking") + " in Ringba…";
+          try {
+            const path = modalBlock ? "block" : "unblock";
+            await fetchJson("/api/fraud/" + path + "/" + encodeURIComponent(modalPublisher), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ confirm: modalPublisher }),
+            });
+            showToast((modalBlock ? "Blocked " : "Unblocked ") + modalPublisher, false);
+            closeBlockModal();
+            await refresh();
+          } catch (err) {
+            blockModalConfirm.disabled = false;
+            blockModalError.textContent = err.message || "Request failed";
+          }
+        }
+
+        blockModalCancel.addEventListener("click", closeBlockModal);
+        blockModalBackdrop.addEventListener("click", closeBlockModal);
+        blockModalConfirm.addEventListener("click", () => { void confirmBlockModal(); });
+        blockModalConfirmInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { e.preventDefault(); void confirmBlockModal(); }
+        });
+
+        // ---------- SCAN + REFRESH LOOP ----------
+
+        scanNowBtn.addEventListener("click", async () => {
+          scanNowBtn.disabled = true;
+          scanNowBtn.textContent = "SCANNING…";
+          setError(null);
+          try {
+            const data = await fetchJson("/api/fraud/scan", { method: "POST" });
+            const r = data.result || {};
+            showToast(
+              "Scan done: " + (r.callsProcessed ?? 0) + " new calls, " +
+              ((r.voipFlags ?? 0) + (r.sharedCallerFlags ?? 0) + (r.aiFlags ?? 0)) + " new flags",
+              false
+            );
+            await refresh();
+          } catch (err) {
+            setError(err.message || "Scan failed");
+          } finally {
+            scanNowBtn.disabled = false;
+            scanNowBtn.textContent = "SCAN NOW";
+          }
+        });
+
+        async function refresh() {
+          try {
+            await Promise.all([loadSummary(), loadPublishers(), loadFeed()]);
+            setError(null);
+          } catch (err) {
+            setError(err.message || "Failed to load fraud data");
+          }
+        }
+
+        function showDashboard() {
+          sessionStorage.setItem(AUTH_KEY, "1");
+          loginScreen.classList.add("hidden");
+          dashboard.classList.remove("hidden");
+          void refresh();
+          setInterval(() => { void refresh(); }, 30_000);
+        }
+
+        loginForm.addEventListener("submit", (e) => {
+          e.preventDefault();
+          if (passwordInput.value === PASSWORD) {
+            showDashboard();
+          } else {
+            loginError.textContent = "Wrong password";
+          }
+        });
+
+        if (sessionStorage.getItem(AUTH_KEY) === "1") {
+          showDashboard();
+        }
+      })();
+    </script>
+  </body>
+</html>

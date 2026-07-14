@@ -63,6 +63,24 @@ import { storePendingBillcomPay, takePendingBillcomPay } from "./lib/billcomPend
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
 import { sendPaymentConfirmationEmail } from "./lib/paymentEmail";
 import { chicagoDateParts, secondMondayHoldForMonth } from "./lib/chicagoTime";
+import {
+  fraudSummary,
+  listFlaggedCalls,
+  listPublisherFraud,
+  getPublisherFraud,
+  getCallAnalysis,
+  flaggedCallsForCall,
+  getPhoneIntel,
+  setPublisherBlocked,
+  setPublisherRingbaAffiliateId,
+} from "./lib/fraudDb";
+import {
+  listRingbaAffiliates,
+  matchAffiliateByName,
+  setRingbaAffiliateEnabled,
+} from "./lib/ringbaFraudClient";
+import { runFraudScan, isFraudScanRunning } from "./agents/fraudAgent";
+import { startFraudScheduler } from "./lib/fraudScheduler";
 
 import http from "http";
 import { handleDeepgramUpgrade } from "./hull/voice/deepgramProxy";
@@ -2409,6 +2427,165 @@ app.get("/api/debug/failed-scrubs", (req, res) => {
   }
 });
 
+// ==================== System 3 — Fraud Detection ====================
+
+app.get("/fraud", (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "fraud.html"));
+});
+
+/** War room station + dashboard header: live flagged counts. */
+app.get("/api/fraud/summary", (_req, res) => {
+  try {
+    res.json({ ...fraudSummary(), scanRunning: isFraudScanRunning() });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read fraud summary",
+    });
+  }
+});
+
+app.get("/api/fraud/feed", (req, res) => {
+  try {
+    const limit = parseInt(String(req.query.limit ?? "100"), 10) || 100;
+    const flags = listFlaggedCalls(limit).map((flag) => {
+      let detail: unknown = null;
+      try {
+        detail = flag.detail ? JSON.parse(flag.detail) : null;
+      } catch {
+        detail = flag.detail;
+      }
+      return { ...flag, detail };
+    });
+    res.json({ flags });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read fraud feed",
+    });
+  }
+});
+
+app.get("/api/fraud/publishers", (_req, res) => {
+  try {
+    res.json({ publishers: listPublisherFraud() });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : "Failed to read publisher risk",
+    });
+  }
+});
+
+app.get("/api/fraud/call/:id", (req, res) => {
+  try {
+    const inboundCallId = String(req.params.id || "").trim();
+    if (!inboundCallId) {
+      res.status(400).json({ error: "call id required" });
+      return;
+    }
+    const flags = flaggedCallsForCall(inboundCallId);
+    const analysis = getCallAnalysis(inboundCallId);
+    const callerNumber = flags.find((f) => f.callerNumber)?.callerNumber ?? null;
+    const intel = callerNumber ? getPhoneIntel(callerNumber) : null;
+    res.json({ inboundCallId, flags, analysis, intel });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read call detail",
+    });
+  }
+});
+
+app.post("/api/fraud/scan", async (_req, res) => {
+  try {
+    if (isFraudScanRunning()) {
+      res.status(409).json({ error: "A fraud scan is already running" });
+      return;
+    }
+    const result = await runFraudScan();
+    res.json({ ok: true, result });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Fraud scan failed",
+    });
+  }
+});
+
+/**
+ * Manual publisher block/unblock — flips the affiliate's `enabled` flag in
+ * Ringba (the platform's publisher pause) and records it locally. Requires the
+ * caller to echo the exact publisher name as confirmation.
+ */
+async function handleFraudBlockToggle(
+  req: express.Request,
+  res: express.Response,
+  block: boolean
+): Promise<void> {
+  const publisherName = decodePublisherParam(req.params.name).trim();
+  if (!publisherName) {
+    res.status(400).json({ error: "Publisher name is required" });
+    return;
+  }
+
+  const confirm =
+    typeof req.body?.confirm === "string" ? req.body.confirm.trim() : "";
+  if (confirm !== publisherName) {
+    res.status(400).json({
+      error: "Confirmation mismatch — send the exact publisher name in `confirm`",
+    });
+    return;
+  }
+
+  try {
+    let affiliateId = getPublisherFraud(publisherName)?.ringbaAffiliateId ?? null;
+    if (!affiliateId) {
+      const affiliates = await listRingbaAffiliates();
+      const match = matchAffiliateByName(affiliates, publisherName);
+      if (!match) {
+        res.status(404).json({
+          error: `No Ringba publisher matches "${publisherName}" — check the name in Ringba`,
+        });
+        return;
+      }
+      affiliateId = match.id;
+      setPublisherRingbaAffiliateId(publisherName, affiliateId);
+    }
+
+    await setRingbaAffiliateEnabled(affiliateId, !block);
+    const row = setPublisherBlocked(publisherName, block);
+
+    console.log(
+      "[Fraud] %s %s (ringba affiliate %s)",
+      block ? "BLOCKED" : "UNBLOCKED",
+      publisherName,
+      affiliateId
+    );
+
+    res.json({ ok: true, publisher: row, ringbaAffiliateId: affiliateId });
+  } catch (err) {
+    console.error(
+      "[Fraud] %s failed for %s:",
+      block ? "block" : "unblock",
+      publisherName,
+      err instanceof Error ? err.message : err
+    );
+    res.status(500).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : `Failed to ${block ? "block" : "unblock"} publisher`,
+    });
+  }
+}
+
+app.post("/api/fraud/block/:name", (req, res) => {
+  void handleFraudBlockToggle(req, res, true);
+});
+
+app.post("/api/fraud/unblock/:name", (req, res) => {
+  void handleFraudBlockToggle(req, res, false);
+});
+
+// ====================================================================
+
 app.post("/jarvis/tts", async (req, res) => {
   const text = sanitizeSpeech(String(req.body?.text || ""));
   if (!text) return res.status(400).json({ error: "text required" });
@@ -2614,4 +2791,5 @@ server.on("upgrade", (request, socket, head) => {
 server.listen(PORT, "0.0.0.0", () => {
   warnMissingPaymentEnvVars();
   console.log(`[Dashboard] listening on 0.0.0.0:${PORT}`);
+  startFraudScheduler();
 });
