@@ -113,3 +113,37 @@ export function chicagoAddBusinessDaysYmd(
 export function chicagoBillcomProcessDateYmd(at: Date = new Date()): string {
   return chicagoNextBusinessDayYmd(at);
 }
+
+/** Second Monday (YYYY-MM-DD) of the given calendar month (month is 1-12). */
+export function chicagoSecondMondayYmd(year: number, month: number): string {
+  // getUTCDay of the 1st is calendar-correct regardless of time zone.
+  const firstDow = new Date(Date.UTC(year, month - 1, 1)).getUTCDay(); // 0=Sun..6=Sat
+  const daysUntilMonday = (1 - firstDow + 7) % 7;
+  const secondMondayDay = 1 + daysUntilMonday + 7;
+  return chicagoYmd(year, month, secondMondayDay);
+}
+
+/**
+ * Payout hold for a month (YYYY-MM): $0 CPL affiliates are held until the second
+ * Monday of the FOLLOWING month in Central Time, by which point Ringba has
+ * finalized the late CPL amounts. Returns the cutoff date and whether the hold is
+ * still active as of `now`.
+ */
+export function secondMondayHoldForMonth(
+  monthKey: string,
+  now: Date = new Date()
+): { heldUntil: string; active: boolean } {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthKey.trim());
+  if (!match) {
+    return { heldUntil: "", active: false };
+  }
+  let year = parseInt(match[1], 10);
+  let month = parseInt(match[2], 10) + 1; // following month
+  if (month === 13) {
+    month = 1;
+    year += 1;
+  }
+  const heldUntil = chicagoSecondMondayYmd(year, month);
+  const today = chicagoTodayYmd(now);
+  return { heldUntil, active: today < heldUntil };
+}

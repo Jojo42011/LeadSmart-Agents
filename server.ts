@@ -62,7 +62,7 @@ import {
 import { storePendingBillcomPay, takePendingBillcomPay } from "./lib/billcomPendingPay";
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
 import { sendPaymentConfirmationEmail } from "./lib/paymentEmail";
-import { chicagoDateParts } from "./lib/chicagoTime";
+import { chicagoDateParts, secondMondayHoldForMonth } from "./lib/chicagoTime";
 
 import http from "http";
 import { handleDeepgramUpgrade } from "./hull/voice/deepgramProxy";
@@ -629,6 +629,11 @@ app.get("/api/payment/stats", async (req, res) => {
       0
     );
 
+    const hold =
+      range.periodType === "month"
+        ? secondMondayHoldForMonth(range.key)
+        : { heldUntil: "", active: false };
+
     res.json({
       month: range.periodType === "month" ? range.key : undefined,
       periodType: range.periodType,
@@ -639,6 +644,8 @@ app.get("/api/payment/stats", async (req, res) => {
       lastUpdated: new Date().toISOString(),
       totalAffiliates: publishers.length,
       totalPayout,
+      holdActive: hold.active,
+      heldUntil: hold.heldUntil || null,
       publishers,
     });
   } catch (err) {
@@ -677,6 +684,11 @@ app.get("/api/payment/stats/all", async (req, res) => {
     );
     const grandTotalPayout = ringbaTotalPayout + polyareasTotalPayout;
 
+    const hold =
+      range.periodType === "month"
+        ? secondMondayHoldForMonth(range.key)
+        : { heldUntil: "", active: false };
+
     res.json({
       month: range.periodType === "month" ? range.key : undefined,
       periodType: range.periodType,
@@ -689,6 +701,8 @@ app.get("/api/payment/stats/all", async (req, res) => {
       ringbaTotalPayout,
       polyareasTotalPayout,
       grandTotalPayout,
+      holdActive: hold.active,
+      heldUntil: hold.heldUntil || null,
       publishers: publishersWithCpl,
       outliers,
     });
