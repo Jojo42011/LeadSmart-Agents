@@ -804,3 +804,81 @@ export async function executeWisePayoutToRecipient(
 export function getWiseProfileIdFromEnv(): string {
   return wiseProfileId();
 }
+
+/**
+ * A saved Wise recipient for the linking UI. Bank details are masked HERE so
+ * full account numbers never leave this module — the dashboard only ever sees
+ * the last 4 digits.
+ */
+export interface WiseRecipientSummary {
+  id: number;
+  accountHolderName: string;
+  currency: string;
+  country: string;
+  type: string;
+  active: boolean;
+  accountLast4: string | null;
+  city: string | null;
+  state: string | null;
+}
+
+function maskLast4(accountNumber: unknown): string | null {
+  const digits = String(accountNumber ?? "").replace(/\D/g, "");
+  if (!digits) {
+    return null;
+  }
+  return digits.slice(-4);
+}
+
+/**
+ * Every recipient saved on the profile, in one call:
+ * GET /v1/accounts?profile={id}&currency=USD (plain array, unpaginated).
+ * Accept-Minor-Version: 1 extends items with name/email fields where present.
+ */
+export async function listWiseRecipientsV1(
+  profileId: string,
+  currency = "USD"
+): Promise<WiseRecipientSummary[]> {
+  return runWiseStep("recipient list", async () => {
+    const client = createWiseClient();
+    const res = await client.get<unknown>("/v1/accounts", {
+      params: { profile: profileId, currency },
+      headers: { "Accept-Minor-Version": "1" },
+    });
+
+    const rows = Array.isArray(res.data) ? res.data : [];
+    const recipients: WiseRecipientSummary[] = [];
+
+    for (const item of rows) {
+      const row = asRecord(item);
+      if (!row) {
+        continue;
+      }
+      const id = readNumber(row, "id");
+      const accountHolderName = readString(row, "accountHolderName");
+      if (id === null || !accountHolderName) {
+        continue;
+      }
+      const details = asRecord(row.details) ?? {};
+      const address = asRecord(details.address) ?? {};
+
+      recipients.push({
+        id,
+        accountHolderName,
+        currency: readString(row, "currency") ?? currency,
+        country: readString(row, "country") ?? "",
+        type: readString(row, "type") ?? "",
+        active: row.active !== false,
+        accountLast4: maskLast4(details.accountNumber),
+        city: readString(address, "city"),
+        state: readString(address, "state"),
+      });
+    }
+
+    console.log(
+      "[Wise] Listed %d recipients for profile (v1 accounts)",
+      recipients.length
+    );
+    return recipients;
+  });
+}
