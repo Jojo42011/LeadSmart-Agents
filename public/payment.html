@@ -1549,6 +1549,14 @@
               stored recipient ID directly — no lookups.
             </p>
             <p class="pay-modal__hint" id="wiseLinkStatus"></p>
+            <input
+              class="search-input"
+              type="search"
+              id="wiseLinkSearch"
+              placeholder="Search affiliates by name..."
+              aria-label="Filter Wise affiliates"
+              style="width: 100%; margin-bottom: 12px;"
+            />
             <div id="wiseLinkBody"></div>
             <div class="pay-modal__actions">
               <button type="button" class="pay-modal__btn" id="wiseLinkClose">Close</button>
@@ -1721,6 +1729,7 @@
       const wiseLinkModal = document.getElementById("wiseLinkModal");
       const wiseLinkBackdrop = document.getElementById("wiseLinkBackdrop");
       const wiseLinkStatus = document.getElementById("wiseLinkStatus");
+      const wiseLinkSearch = document.getElementById("wiseLinkSearch");
       const wiseLinkBody = document.getElementById("wiseLinkBody");
       const wiseLinkClose = document.getElementById("wiseLinkClose");
       const pageSizeControls = document.getElementById("pageSizeControls");
@@ -2525,16 +2534,13 @@
             if (methodSelect.value === "Wise") {
               // ACH entry moved out of this popup — send only ID/email/tag.
               // Empty strings leave any stored ACH untouched server-side.
+              // Tagging as Wise always saves; payout details are validated
+              // at PAY time, not here.
               wiseFields = collectWisePayload({
                 recipientId: wiseRecipientInput.value,
                 email: wiseEmailInput.value,
                 tag: wiseTagInput.value,
               });
-              if (!hasWisePayableFields(wiseFields) && !hasWisePayableClient(meta)) {
-                throw new Error(
-                  "Wise requires a recipient ID (use LINK WISE) or email/tag for Wise-to-Wise"
-                );
-              }
             }
             const data = await saveAffiliateMetadata(
               publisherName,
@@ -3377,10 +3383,11 @@
         );
       }
 
-      async function assignWiseRecipient(publisherName, recipientId, statusEl) {
+      async function setWiseRecipientLink(publisherName, recipientId, statusEl) {
         if (wiseLinkAssigning) return;
         wiseLinkAssigning = true;
-        if (statusEl) statusEl.textContent = "Assigning…";
+        const unlinking = recipientId === null;
+        if (statusEl) statusEl.textContent = unlinking ? "Unlinking…" : "Assigning…";
         try {
           const meta = getAffiliateMeta(publisherName);
           const data = await saveAffiliateMetadata(
@@ -3389,12 +3396,14 @@
             meta.paymentTerms || "Untagged",
             undefined,
             null,
-            { wiseRecipientId: String(recipientId) },
+            { wiseRecipientId: unlinking ? null : String(recipientId) },
             undefined
           );
           affiliateMetadataMap[publisherName] = data;
           showPaymentToast(
-            "Linked " + publisherName + " → Wise recipient #" + recipientId,
+            unlinking
+              ? "Unlinked " + publisherName + " — no Wise recipient assigned"
+              : "Linked " + publisherName + " → Wise recipient #" + recipientId,
             false
           );
           renderTable();
@@ -3402,15 +3411,19 @@
         } catch (err) {
           if (statusEl) {
             statusEl.textContent =
-              err instanceof Error ? err.message : "Assign failed";
+              err instanceof Error ? err.message : "Update failed";
           }
           showPaymentToast(
-            err instanceof Error ? err.message : "Assign failed",
+            err instanceof Error ? err.message : "Update failed",
             true
           );
         } finally {
           wiseLinkAssigning = false;
         }
+      }
+
+      function assignWiseRecipient(publisherName, recipientId, statusEl) {
+        return setWiseRecipientLink(publisherName, recipientId, statusEl);
       }
 
       function renderWiseLinkModal() {
@@ -3428,7 +3441,20 @@
           return;
         }
 
-        for (const affiliate of affiliates) {
+        const query = String(wiseLinkSearch.value || "").trim().toLowerCase();
+        const visibleAffiliates = affiliates.filter(
+          (a) => !query || a.publisherName.toLowerCase().includes(query)
+        );
+
+        if (!visibleAffiliates.length) {
+          const p = document.createElement("p");
+          p.className = "pay-modal__hint";
+          p.textContent = 'No Wise affiliates match "' + query + '".';
+          wiseLinkBody.appendChild(p);
+          return;
+        }
+
+        for (const affiliate of visibleAffiliates) {
           const row = document.createElement("div");
           row.style.cssText =
             "border:1px solid var(--border-bright);padding:12px 14px;margin-bottom:10px;";
@@ -3439,12 +3465,39 @@
           row.appendChild(nameEl);
 
           if (affiliate.wiseRecipientId) {
+            const linkedRow = document.createElement("div");
+            linkedRow.style.cssText =
+              "display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;";
             const linkedEl = document.createElement("div");
             linkedEl.style.cssText = "font-size:11px;color:var(--green);";
             linkedEl.textContent =
               "✓ Linked to #" + affiliate.wiseRecipientId +
               (affiliate.linkedHolderName ? " — " + affiliate.linkedHolderName : "");
-            row.appendChild(linkedEl);
+            const linkedStatusEl = document.createElement("div");
+            linkedStatusEl.style.cssText =
+              "font-size:11px;color:var(--red);min-height:14px;width:100%;";
+            const unlinkBtn = document.createElement("button");
+            unlinkBtn.type = "button";
+            unlinkBtn.className = "btn-metadata-save";
+            unlinkBtn.style.cssText =
+              "border-color:rgba(255,68,68,0.5);color:var(--red);";
+            unlinkBtn.textContent = "UNLINK";
+            unlinkBtn.title = "Clear the assigned Wise recipient for this affiliate";
+            unlinkBtn.addEventListener("click", () => {
+              if (
+                !confirm(
+                  "Unlink " + affiliate.publisherName + " from Wise recipient #" +
+                    affiliate.wiseRecipientId + "? They cannot be paid via Wise until re-linked."
+                )
+              ) {
+                return;
+              }
+              void setWiseRecipientLink(affiliate.publisherName, null, linkedStatusEl);
+            });
+            linkedRow.appendChild(linkedEl);
+            linkedRow.appendChild(unlinkBtn);
+            row.appendChild(linkedRow);
+            row.appendChild(linkedStatusEl);
             wiseLinkBody.appendChild(row);
             continue;
           }
@@ -3562,12 +3615,14 @@
       function openWiseLinkModal() {
         wiseLinkModal.classList.remove("hidden");
         wiseLinkBody.innerHTML = "";
+        wiseLinkSearch.value = "";
         void loadWiseLinkData();
       }
 
       linkWiseBtn.addEventListener("click", openWiseLinkModal);
       wiseLinkClose.addEventListener("click", closeWiseLinkModal);
       wiseLinkBackdrop.addEventListener("click", closeWiseLinkModal);
+      wiseLinkSearch.addEventListener("input", renderWiseLinkModal);
 
       function buildActionCell(row) {
         const meta = getAffiliateMeta(row.publisherName);

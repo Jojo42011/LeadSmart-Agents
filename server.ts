@@ -1015,18 +1015,21 @@ function parseWiseFieldUpdates(
     hasUpdate = true;
   }
 
-  const recipientRaw = readOptionalString(body, "wiseRecipientId");
-  if (recipientRaw !== undefined) {
-    if (!recipientRaw.trim()) {
+  // Read wiseRecipientId raw (not via readOptionalString, which swallows
+  // empty strings) so an explicit null or "" UNLINKS the stored recipient.
+  if ("wiseRecipientId" in (body as Record<string, unknown>)) {
+    const raw = (body as { wiseRecipientId?: unknown }).wiseRecipientId;
+    if (raw === null || (typeof raw === "string" && !raw.trim())) {
       updates.wiseRecipientId = null;
-    } else {
-      const parsed = parseWiseRecipientIdInput(recipientRaw);
+      hasUpdate = true;
+    } else if (typeof raw === "string") {
+      const parsed = parseWiseRecipientIdInput(raw);
       if (parsed === null) {
         throw new Error("Wise recipient ID must be a positive number");
       }
       updates.wiseRecipientId = formatWiseRecipientIdForStorage(parsed);
+      hasUpdate = true;
     }
-    hasUpdate = true;
   }
 
   const accountHolder = readOptionalString(body, "wiseAccountHolderName");
@@ -1078,40 +1081,6 @@ function parseWiseFieldUpdates(
   }
 
   return hasUpdate ? updates : null;
-}
-
-function mergedWiseAchDetails(
-  meta: AffiliateMetadata | null,
-  updates: WiseFieldUpdates | null
-): Partial<WiseAchDetails> {
-  const merged: Partial<WiseAchDetails> = {
-    ...wiseAchDetailsFromMetadata(meta),
-  };
-  if (!updates) {
-    return merged;
-  }
-  if (updates.wiseAccountHolderName !== undefined) {
-    merged.accountHolderName = updates.wiseAccountHolderName ?? undefined;
-  }
-  if (updates.wiseRoutingNumber !== undefined) {
-    merged.routingNumber = updates.wiseRoutingNumber ?? undefined;
-  }
-  if (updates.wiseAccountNumber !== undefined) {
-    merged.accountNumber = updates.wiseAccountNumber ?? undefined;
-  }
-  if (updates.wiseAddressLine1 !== undefined) {
-    merged.addressLine1 = updates.wiseAddressLine1 ?? undefined;
-  }
-  if (updates.wiseAddressCity !== undefined) {
-    merged.city = updates.wiseAddressCity ?? undefined;
-  }
-  if (updates.wiseAddressState !== undefined) {
-    merged.state = updates.wiseAddressState ?? undefined;
-  }
-  if (updates.wiseAddressZip !== undefined) {
-    merged.zip = updates.wiseAddressZip ?? undefined;
-  }
-  return merged;
 }
 
 function hasWisePayoutDetails(
@@ -1684,28 +1653,8 @@ app.post("/api/payment/metadata/:name", (req, res) => {
       return;
     }
 
-    if (paymentMethod === "Wise") {
-      const nextEmail =
-        wiseFields?.wiseEmail !== undefined
-          ? wiseFields.wiseEmail
-          : existingMeta?.wiseEmail ?? null;
-      const nextTag =
-        wiseFields?.wiseTag !== undefined
-          ? wiseFields.wiseTag
-          : existingMeta?.wiseTag ?? null;
-      const nextAch = mergedWiseAchDetails(existingMeta, wiseFields);
-      const nextRecipientId =
-        wiseFields?.wiseRecipientId !== undefined
-          ? wiseFields.wiseRecipientId
-          : existingMeta?.wiseRecipientId ?? null;
-      if (!hasWisePayoutDetails(nextEmail, nextTag, nextAch, nextRecipientId)) {
-        res.status(400).json({
-          error:
-            "Wise requires recipient ID, email/tag (Wise-to-Wise), or full ACH + US address (other platforms)",
-        });
-        return;
-      }
-    }
+    // Tagging an affiliate as Wise is always allowed — payout details are
+    // validated at PAY time (resolveWisePayoutForAffiliate), not at save time.
 
     if (
       paymentMethod !== null &&
