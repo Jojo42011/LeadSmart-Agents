@@ -105,6 +105,53 @@ export function listSyntheses(limit = 20) {
     .all(Math.min(Math.max(limit, 1), 50));
 }
 
+/**
+ * The complete knowledge graph for the neural map: every node with its degree
+ * plus every edge. Capped by degree so a huge graph still renders.
+ */
+export function getFullGraph(maxNodes = 1500) {
+  const db = getHullDb();
+
+  const nodes = db
+    .prepare(
+      `SELECT n.id, n.name, n.type,
+              (SELECT COUNT(*) FROM edges e WHERE e.source_id = n.id OR e.target_id = n.id) AS degree
+       FROM nodes n
+       ORDER BY degree DESC
+       LIMIT ?`
+    )
+    .all(Math.min(Math.max(maxNodes, 10), 5000)) as Array<{
+    id: string;
+    name: string;
+    type: string;
+    degree: number;
+  }>;
+
+  const kept = new Set(nodes.map((n) => n.id));
+  const edges = (
+    db
+      .prepare(
+        `SELECT source_id AS source, target_id AS target, relationship, strength FROM edges`
+      )
+      .all() as Array<{
+      source: string;
+      target: string;
+      relationship: string;
+      strength: number;
+    }>
+  ).filter((e) => kept.has(e.source) && kept.has(e.target));
+
+  const factCount = (
+    db
+      .prepare(
+        "SELECT COUNT(*) AS c FROM facts WHERE superseded_by IS NULL"
+      )
+      .get() as { c: number }
+  ).c;
+
+  return { nodes, edges, factCount };
+}
+
 export function getGraphForEntity(entity: string) {
   const db = getHullDb();
   const node = db

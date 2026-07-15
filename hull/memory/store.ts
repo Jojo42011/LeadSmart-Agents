@@ -92,6 +92,31 @@ function initSchema(database: Database.Database): void {
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS documents (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      source TEXT,
+      chars INTEGER NOT NULL DEFAULT 0,
+      chunkCount INTEGER NOT NULL DEFAULT 0,
+      chunksDone INTEGER NOT NULL DEFAULT 0,
+      factsExtracted INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'processing',
+      error TEXT,
+      createdAt TEXT NOT NULL,
+      completedAt TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_session
+      ON conversations(session_id, id);
+
     CREATE INDEX IF NOT EXISTS idx_facts_strength ON facts(strength DESC);
     CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
     CREATE INDEX IF NOT EXISTS idx_episodes_ts ON episodes(timestamp DESC);
@@ -102,6 +127,21 @@ function initSchema(database: Database.Database): void {
   `);
 }
 
+/** Additive column migrations for databases created before these fields existed. */
+function migrateFactColumns(database: Database.Database): void {
+  const columns = database
+    .prepare("PRAGMA table_info(facts)")
+    .all() as Array<{ name: string }>;
+  const names = new Set(columns.map((c) => c.name));
+
+  if (!names.has("importance")) {
+    database.exec("ALTER TABLE facts ADD COLUMN importance INTEGER DEFAULT 5");
+  }
+  if (!names.has("source_document")) {
+    database.exec("ALTER TABLE facts ADD COLUMN source_document TEXT");
+  }
+}
+
 export function getHullDb(): Database.Database {
   if (db) return db;
   const dbPath = resolveHullDbPath();
@@ -109,6 +149,7 @@ export function getHullDb(): Database.Database {
   db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   initSchema(db);
+  migrateFactColumns(db);
   return db;
 }
 

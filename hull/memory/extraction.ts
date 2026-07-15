@@ -37,6 +37,13 @@ export function safeJsonParse(text: string): unknown | null {
   return null;
 }
 
+const EXTRACTION_SCHEMA = `Return ONLY valid JSON with keys:
+facts (array of {content, category, keywords, importance}) — importance is 1-10 (10 = critical durable business fact, 5 = normal, 1 = trivia),
+nodes (array of {name, type}),
+edges (array of {source, relationship, target}),
+rules_reinforced (array of {trigger, action}),
+episode ({summary, tone, decisions, entities}).`;
+
 export async function runPostConversationExtraction(
   sessionId: string,
   transcript: TranscriptTurn[],
@@ -46,12 +53,7 @@ export async function runPostConversationExtraction(
   if (!client) return;
   const lines = transcript.map((t) => `${t.role}: ${t.text}`).join("\n");
 
-  const prompt = `Extract structured memory from this conversation transcript. Return ONLY valid JSON with keys:
-facts (array of {content, category, keywords}),
-nodes (array of {name, type}),
-edges (array of {source, relationship, target}),
-rules_reinforced (array of {trigger, action}),
-episode ({summary, tone, decisions, entities}).
+  const prompt = `Extract structured memory from this conversation transcript. ${EXTRACTION_SCHEMA}
 
 Transcript:
 ${lines.slice(0, 12000)}`;
@@ -75,6 +77,47 @@ ${lines.slice(0, 12000)}`;
   }
 }
 
+/**
+ * Extract memory from arbitrary long-form content (documents, pasted notes,
+ * reports) rather than a conversation. Facts are tagged with the source
+ * document id so they can be traced and bulk-retracted.
+ * Returns the number of facts written, or null when extraction is unavailable.
+ */
+export async function runContentExtraction(
+  sourceDocumentId: string,
+  sourceTitle: string,
+  content: string,
+): Promise<number | null> {
+  const client = getOpenAIClient();
+  if (!client) return null;
+
+  const prompt = `Extract structured, durable memory from this document for LeadSmart's operations assistant. Capture concrete facts, people, relationships, and operating rules — skip filler. ${EXTRACTION_SCHEMA}
+
+Document title: ${sourceTitle}
+
+Content:
+${content.slice(0, 12000)}`;
+
+  const res = await client.chat.completions.create({
+    model: getFastModel(),
+    max_tokens: 1800,
+    messages: [{ role: "user", content: prompt }],
+  });
+  const text = res.choices[0]?.message?.content?.trim() || "";
+  const parsed = safeJsonParse(text) as Record<string, unknown> | null;
+  if (!parsed) {
+    console.warn("[hull/extraction] document JSON parse failed for %s", sourceDocumentId);
+    return 0;
+  }
+  const written = await applyExtraction(
+    `doc-${sourceDocumentId}`,
+    parsed,
+    sourceDocumentId,
+  );
+  broadcastHullEvent({ type: "memory_updated" });
+  return written;
+}
+
 /** SQLite bind values must be scalars — better-sqlite3 expands arrays into extra parameters. */
 function sqlText(value: unknown, fallback = ""): string {
   if (value == null) return fallback;
@@ -89,12 +132,28 @@ function sqlNullableText(value: unknown): string | null {
   return sqlText(value);
 }
 
-async function applyExtraction(sessionId: string, data: Record<string, unknown>): Promise<void> {
+function clampImportance(value: unknown): number {
+  const num = typeof value === "number" ? value : parseInt(String(value ?? ""), 10);
+  if (Number.isNaN(num)) return 5;
+  return Math.max(1, Math.min(10, Math.round(num)));
+}
+
+async function applyExtraction(
+  sessionId: string,
+  data: Record<string, unknown>,
+  sourceDocumentId: string | null = null,
+): Promise<number> {
   const db = getHullDb();
   const now = new Date().toISOString();
+  let factsWritten = 0;
 
   const facts =
-    (data.facts as { content: unknown; category?: unknown; keywords?: unknown }[]) || [];
+    (data.facts as {
+      content: unknown;
+      category?: unknown;
+      keywords?: unknown;
+      importance?: unknown;
+    }[]) || [];
   for (const f of facts) {
     const content = sqlText(f.content).trim();
     if (!content) continue;
@@ -102,18 +161,21 @@ async function applyExtraction(sessionId: string, data: Record<string, unknown>)
     const vec = await embedText(content);
     const category = sqlText(f.category, "general");
     db.prepare(
-      `INSERT INTO facts (id, content, category, keywords, strength, access_count, last_accessed, created_at, embedding)
-       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+      `INSERT INTO facts (id, content, category, keywords, strength, importance, source_document, access_count, last_accessed, created_at, embedding)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
     ).run(
       id,
       content,
       category,
       sqlText(f.keywords, ""),
       category === "identity" ? 1.5 : 1.0,
+      clampImportance(f.importance),
+      sourceDocumentId,
       now,
       now,
       vec ? float32ToBlob(vec) : null,
     );
+    factsWritten += 1;
   }
 
   const nodes = (data.nodes as { name: unknown; type?: unknown }[]) || [];
@@ -182,4 +244,6 @@ async function applyExtraction(sessionId: string, data: Record<string, unknown>)
       now,
     );
   }
+
+  return factsWritten;
 }

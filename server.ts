@@ -88,8 +88,18 @@ import http from "http";
 import { handleDeepgramUpgrade } from "./hull/voice/deepgramProxy";
 import { generateTTS } from "./hull/voice/tts";
 import { sanitizeSpeech } from "./hull/voice/sanitizeSpeech";
-import { handleChatCompletions, handleVoiceCommand } from "./hull/brain/agent-loop";
+import {
+  handleChatCompletions,
+  handleVoiceCommand,
+  handleChatMessage,
+} from "./hull/brain/agent-loop";
 import { runPostConversationExtraction } from "./hull/memory/extraction";
+import {
+  startIngestion,
+  listDocuments,
+  retractDocument,
+} from "./hull/memory/ingestion";
+import { getFullGraph } from "./hull/memory/readApi";
 import { buildMemoryPacketForQuery } from "./hull/brain/tools";
 import { handleActivation } from "./hull/briefing";
 import {
@@ -2775,6 +2785,80 @@ app.post("/api/memory/extract-voice", express.json({ limit: "512kb" }), async (r
       error: err instanceof Error ? err.message : "Extraction failed",
     });
   }
+});
+
+app.post("/api/jarvis/chat", express.json({ limit: "256kb" }), (req, res) => {
+  void handleChatMessage(req, res);
+});
+
+app.post(
+  "/api/memory/ingest",
+  express.json({ limit: "8mb" }),
+  (req, res) => {
+    try {
+      const title =
+        typeof req.body?.title === "string" ? req.body.title.trim() : "";
+      const source =
+        typeof req.body?.source === "string" ? req.body.source.trim() : null;
+      const text = typeof req.body?.text === "string" ? req.body.text : "";
+      if (!text.trim()) {
+        res.status(400).json({ error: "text is required" });
+        return;
+      }
+      const doc = startIngestion(title || "Untitled", source, text);
+      res.json({ ok: true, document: doc });
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : "Ingestion failed",
+      });
+    }
+  }
+);
+
+app.get("/api/memory/documents", (req, res) => {
+  try {
+    const limit = parseInt(String(req.query.limit ?? "50"), 10) || 50;
+    res.json({ documents: listDocuments(limit) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to list documents",
+    });
+  }
+});
+
+app.delete("/api/memory/documents/:id", (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) {
+      res.status(400).json({ error: "document id required" });
+      return;
+    }
+    const result = retractDocument(id);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to retract document";
+    res.status(message === "Document not found" ? 404 : 500).json({ error: message });
+  }
+});
+
+app.get("/api/memory/graph/full", (req, res) => {
+  try {
+    const maxNodes = parseInt(String(req.query.max ?? "1500"), 10) || 1500;
+    res.json(getFullGraph(maxNodes));
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read graph",
+    });
+  }
+});
+
+app.get("/jarvis-chat", (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "jarvis-chat.html"));
+});
+
+app.get("/memory-map", (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "memory-map.html"));
 });
 
 app.get("/api/memory/overview", (_req, res) => {

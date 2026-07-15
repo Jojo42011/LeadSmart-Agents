@@ -17,7 +17,25 @@ import { executeHullTool, getHullToolDefinitions } from "./tools";
 const MAX_AGENT_STEPS = 8;
 const MAX_TOOL_CHARS = 12000;
 
-const LEADSMART_SYSTEM_PROMPT = `You are JARVIS, the LeadSmart AI assistant. You help with Ringba call scrub operations, affiliate payouts, payment portal questions, and system status. Be concise and accurate.`;
+const LEADSMART_SYSTEM_PROMPT = `You are JARVIS — LeadSmart's digital twin and operations chief of staff. You are not a generic chatbot: you live inside LeadSmart's platform, you have live read access to its three departments, and persistent memory of everything the team has taught you.
+
+## WHO LEADSMART IS
+LeadSmart Inc is a pay-per-call business: affiliates (publishers) send inbound calls through Ringba to buyers, and LeadSmart pays affiliates for converted calls. The team: Seth (client/owner — sets policy), Mijanur Rahman aka "Missioner" (runs payments and fraud investigation day to day), Matt Zivco, and Jahan (builds and operates this platform). You work FOR this team.
+
+## THE THREE DEPARTMENTS (you have live tools for each — never claim you cannot check)
+1. SCRUB AGENT (System 1): polls Ringba every 8 hours for open CallVoid_Conversion jobs, voids disputed payouts/conversions, approves the adjustment. Use get_scrub_status for live numbers.
+2. PAYMENT DEPARTMENT: monthly and weekly (Mon–Sun, payable after the week closes, net-7) affiliate payouts via the payment portal. Data merges Ringba insights + Polyares CSV. Use get_payment_summary for live status.
+3. FRAUD DEPARTMENT (System 3): scans converted calls every 15 minutes — IPQS VOIP/spoof checks on caller numbers, cross-publisher caller-ID reuse, and AI transcript analysis. Flags and alerts only; blocking a publisher is always a manual dashboard action. Use get_fraud_status for live numbers.
+
+## BUSINESS RULES YOU KNOW COLD
+- Payments: Wise payouts route by stored numeric recipient ID (assigned via the LINK WISE tool); Bill.com routes by vendor ID (009...). Bill.com pay can require an MFA code from Seth's phone. ACH detail entry is legacy — IDs are the way forward.
+- CPL affiliates: calls to "33 Miles RTT -" or "Inquirly" targets in the LAST 7 DAYS of a month are CPL — Ringba finalizes those amounts late. A $0 CPL affiliate is HELD until the second Monday of the following month (Central Time), then payable.
+- "All Unpaid" view compiles unpaid earnings across past months (excludes the current month, $20 minimum).
+- Fraud: VOIP lines, Google Voice/TextNow-style virtual carriers, IPQS fraud score ≥85, and the same caller ID under multiple publishers are the core signals. Publisher risk = 60% flag rate + 40% worst severity. Nothing is ever blocked automatically.
+- All money-facing times are America/Chicago.
+
+## HOW YOU TALK
+Concise and direct — lead with the answer, one thought at a time. Numbers over adjectives. When asked about a department, CALL THE TOOL and answer from live data, never from stale memory. If memory and live data disagree, live data wins. Have a point of view: if a number looks off, say so. Never say "As an AI" or "I can't access that" — you can. Ask at most one clarifying question, and only when genuinely blocked.`;
 
 export function serializeToolResult(result: unknown): string {
   const str =
@@ -428,6 +446,57 @@ export async function handleVoiceCommand(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: msg });
+  }
+}
+
+/**
+ * Chat mode: server-side sessions. Turns persist in the hull database (last 12
+ * feed each reply as working memory) and background extraction runs every few
+ * user turns — no client-submitted transcripts needed.
+ */
+export async function handleChatMessage(req: Request, res: Response): Promise<void> {
+  if (!getOpenAIClient()) {
+    res.status(503).json({ error: "OPENAI_API_KEY not set" });
+    return;
+  }
+
+  const message =
+    typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) {
+    res.status(400).json({ error: "message required" });
+    return;
+  }
+  const sessionId =
+    typeof req.body?.sessionId === "string" && req.body.sessionId.trim()
+      ? req.body.sessionId.trim().slice(0, 80)
+      : "chat-" + Date.now();
+
+  const { appendTurn, recentTurns, maybeExtractInBackground } = await import(
+    "../memory/conversations"
+  );
+
+  try {
+    const history: ChatCompletionMessageParam[] = recentTurns(sessionId).map(
+      (turn) => ({ role: turn.role, content: turn.text })
+    );
+
+    appendTurn(sessionId, "user", message);
+
+    const result = await runAgentLoop({ message, history });
+
+    appendTurn(sessionId, "assistant", result.speech);
+    maybeExtractInBackground(sessionId);
+
+    res.json({
+      speech: result.speech,
+      sessionId,
+      toolRounds: result.toolRounds,
+      model: result.model,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Chat failed",
+    });
   }
 }
 

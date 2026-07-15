@@ -2,12 +2,14 @@ import { bootstrapHullMemory } from "./memory/bootstrap";
 import { backfillEmbeddings } from "./memory/embeddings";
 import { scheduleDailyDecay } from "./memory/decay";
 import { scheduleWeeklySynthesis } from "./memory/synthesis";
+import { scheduleReflection } from "./memory/reflection";
 
 export function initHull(): void {
   bootstrapHullMemory();
   void backfillEmbeddings(100);
   scheduleDailyDecay();
   scheduleWeeklySynthesis();
+  scheduleReflection();
   console.log("[hull] Aethon Intelligence hull initialized");
 }
 

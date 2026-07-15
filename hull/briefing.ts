@@ -41,6 +41,14 @@ export async function generateBrief(memoryPacket: string): Promise<string> {
   const client = getOpenAIClient();
   if (!client) return getTimeAwareGreeting() + " Systems are online.";
 
+  let opsSnapshot = "";
+  try {
+    const { buildOpsBriefText } = await import("./brain/opsData");
+    opsSnapshot = buildOpsBriefText();
+  } catch {
+    opsSnapshot = "";
+  }
+
   try {
     const res = await client.chat.completions.create({
       model: getFastModel(),
@@ -48,7 +56,7 @@ export async function generateBrief(memoryPacket: string): Promise<string> {
       messages: [
         {
           role: "user",
-          content: `Generate a brief activation greeting for JARVIS, the LeadSmart AI operator (Ringba scrub, affiliate payouts, payment portal). Max 4 sentences, spoken aloud. Most urgent first. Max 3 items. Open with a time-aware greeting. If nothing notable: "All clear. What do you need?" Context:\n${memoryPacket.slice(0, 2000)}`,
+          content: `Generate a brief activation greeting for JARVIS, LeadSmart's operations chief of staff (scrub agent, affiliate payouts, fraud detection). Max 4 sentences, spoken aloud. Most urgent first. Max 3 items. Open with a time-aware greeting. If nothing notable: "All clear. What do you need?"${opsSnapshot ? `\n\nLIVE OPS SNAPSHOT:\n${opsSnapshot}` : ""}\n\nMEMORY CONTEXT:\n${memoryPacket.slice(0, 1600)}`,
         },
       ],
     });

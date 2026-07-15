@@ -16,56 +16,97 @@ function daysSince(iso: string | null): number {
   return (Date.now() - t) / (86400 * 1000);
 }
 
+interface FactRow {
+  id: string;
+  content: string;
+  category: string;
+  strength: number;
+  importance: number | null;
+  access_count: number;
+  last_accessed: string | null;
+  keywords: string;
+  embedding: Buffer | null;
+}
+
+/** Keyword recall is trusted (embedding skipped) above this top-score. */
+const KEYWORD_CONFIDENT_SCORE = 0.32;
+const KEYWORD_CONFIDENT_HITS = 4;
+
+/**
+ * Latency-aware hybrid retrieval: score by keywords first (pure in-memory,
+ * free), and only pay the embedding round-trip when keyword recall looks thin.
+ * Retrieved facts are reinforced — recall strengthens memory.
+ */
 export async function searchFacts(query: string, limit = 8): Promise<RetrievedFact[]> {
   const db = getHullDb();
   const rows = db
     .prepare(
-      "SELECT id, content, category, strength, access_count, last_accessed, keywords, embedding FROM facts WHERE superseded_by IS NULL",
+      "SELECT id, content, category, strength, importance, access_count, last_accessed, keywords, embedding FROM facts WHERE superseded_by IS NULL",
     )
-    .all() as {
-    id: string;
-    content: string;
-    category: string;
-    strength: number;
-    access_count: number;
-    last_accessed: string | null;
-    keywords: string;
-    embedding: Buffer | null;
-  }[];
+    .all() as FactRow[];
 
-  const qVec = await embedText(query);
   const qLower = query.toLowerCase();
 
-  const scored = rows.map((row) => {
-    let semantic = 0;
-    if (qVec && row.embedding) {
-      const vec = blobToFloat32(row.embedding);
-      if (vec) semantic = cosineSimilarity(qVec, vec);
-    }
-    const keyword =
+  const keywordScored = rows.map((row) => {
+    const keyword = Math.min(
       wordOverlapScore(qLower, row.content.toLowerCase()) +
-      wordOverlapScore(qLower, (row.keywords || "").toLowerCase());
+        wordOverlapScore(qLower, (row.keywords || "").toLowerCase()),
+      1,
+    );
     const strength = row.strength ?? 1;
     const recency = 1 / (daysSince(row.last_accessed) + 1);
+    const importance = (row.importance ?? 5) / 10;
     const score =
-      semantic * 0.5 + Math.min(keyword, 1) * 0.25 + strength * 0.15 + recency * 0.1;
-    return { ...row, score };
+      keyword * 0.5 + strength * 0.15 + recency * 0.1 + importance * 0.25;
+    return { row, keyword, score };
   });
 
-  scored.sort((a, b) => b.score - a.score);
-  const top = scored.slice(0, limit);
+  keywordScored.sort((a, b) => b.score - a.score);
+  const strongHits = keywordScored.filter((s) => s.keyword > 0).length;
+  const keywordConfident =
+    query.length < 12 ||
+    (strongHits >= KEYWORD_CONFIDENT_HITS &&
+      (keywordScored[0]?.keyword ?? 0) >= KEYWORD_CONFIDENT_SCORE);
 
+  let top: Array<{ row: FactRow; score: number }>;
+
+  if (keywordConfident) {
+    top = keywordScored.slice(0, limit).map((s) => ({ row: s.row, score: s.score }));
+  } else {
+    const qVec = await embedText(query);
+    const scored = keywordScored.map(({ row, keyword }) => {
+      let semantic = 0;
+      if (qVec && row.embedding) {
+        const vec = blobToFloat32(row.embedding);
+        if (vec) semantic = cosineSimilarity(qVec, vec);
+      }
+      const strength = row.strength ?? 1;
+      const recency = 1 / (daysSince(row.last_accessed) + 1);
+      const importance = (row.importance ?? 5) / 10;
+      const score =
+        semantic * 0.45 +
+        keyword * 0.2 +
+        strength * 0.1 +
+        recency * 0.05 +
+        importance * 0.2;
+      return { row, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    top = scored.slice(0, limit);
+  }
+
+  // Reinforce on recall: recency + access count + a small strength bump (cap 1.5).
   const bump = db.prepare(
-    "UPDATE facts SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
+    "UPDATE facts SET access_count = access_count + 1, last_accessed = ?, strength = MIN(1.5, strength + 0.02) WHERE id = ?",
   );
   const now = new Date().toISOString();
-  for (const f of top) bump.run(now, f.id);
+  for (const f of top) bump.run(now, f.row.id);
 
   return top.map((f) => ({
-    id: f.id,
-    content: f.content,
-    category: f.category,
-    strength: f.strength,
+    id: f.row.id,
+    content: f.row.content,
+    category: f.row.category,
+    strength: f.row.strength,
     score: f.score,
   }));
 }
