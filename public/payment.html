@@ -1395,6 +1395,7 @@
             <button type="button" class="source-filter payment-status-filter" data-payment-status="PAID">PAID</button>
           </div>
           <button type="button" class="btn-pay-all hidden" id="payAllBtn">PAY ALL</button>
+          <button type="button" class="btn btn--amber" id="linkWiseBtn" title="Assign saved Wise recipients to affiliates">LINK WISE</button>
           <input
             class="search-input"
             type="search"
@@ -1534,6 +1535,23 @@
             <div class="pay-modal__actions">
               <button type="button" class="pay-modal__btn" id="payModalCancel">Cancel</button>
               <button type="button" class="pay-modal__btn pay-modal__btn--primary" id="payModalConfirm">Confirm pay</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- WISE RECIPIENT LINKING -->
+        <div class="pay-modal hidden" id="wiseLinkModal" role="dialog" aria-modal="true" aria-labelledby="wiseLinkTitle">
+          <div class="pay-modal__backdrop" id="wiseLinkBackdrop"></div>
+          <div class="pay-modal__panel" style="max-width: 720px; max-height: 82vh; overflow-y: auto;">
+            <h2 class="pay-modal__title" id="wiseLinkTitle">Link Wise recipients</h2>
+            <p class="pay-modal__subtitle" id="wiseLinkSubtitle">
+              Assign each Wise-tagged affiliate to a saved Wise recipient. PAY then uses the
+              stored recipient ID directly — no lookups.
+            </p>
+            <p class="pay-modal__hint" id="wiseLinkStatus"></p>
+            <div id="wiseLinkBody"></div>
+            <div class="pay-modal__actions">
+              <button type="button" class="pay-modal__btn" id="wiseLinkClose">Close</button>
             </div>
           </div>
         </div>
@@ -1699,6 +1717,12 @@
       const payModalWiseCity = document.getElementById("payModalWiseCity");
       const payModalWiseState = document.getElementById("payModalWiseState");
       const payModalWiseZip = document.getElementById("payModalWiseZip");
+      const linkWiseBtn = document.getElementById("linkWiseBtn");
+      const wiseLinkModal = document.getElementById("wiseLinkModal");
+      const wiseLinkBackdrop = document.getElementById("wiseLinkBackdrop");
+      const wiseLinkStatus = document.getElementById("wiseLinkStatus");
+      const wiseLinkBody = document.getElementById("wiseLinkBody");
+      const wiseLinkClose = document.getElementById("wiseLinkClose");
       const pageSizeControls = document.getElementById("pageSizeControls");
       const paginationInfo = document.getElementById("paginationInfo");
       const prevBtn = document.getElementById("prevBtn");
@@ -2397,82 +2421,20 @@
         const billcomHint = document.createElement("p");
         billcomHint.className = "metadata-popover__billcom-hint";
         billcomHint.textContent =
-          "Vendor ID OR full ACH + address required. Same bank for multiple affiliates? Paste the same 009... ID on each.";
+          "Vendor ID (009...) is how Bill.com payments route. Same bank for multiple affiliates? Paste the same ID on each.";
 
         const vendorIdLabel = document.createElement("label");
         vendorIdLabel.textContent = "Bill.com Vendor ID";
         const vendorIdInput = document.createElement("input");
         vendorIdInput.type = "text";
-        vendorIdInput.placeholder = "009... (optional if ACH filled)";
+        vendorIdInput.placeholder = "009...";
         vendorIdInput.value = meta.billcomVendorId || "";
         vendorIdInput.autocomplete = "off";
         vendorIdInput.spellcheck = false;
 
-        function addAchField(labelText, placeholder, value) {
-          const label = document.createElement("label");
-          label.textContent = labelText;
-          const input = document.createElement("input");
-          input.type = "text";
-          input.placeholder = placeholder || "";
-          input.value = value || "";
-          input.autocomplete = "off";
-          vendorIdWrap.appendChild(label);
-          vendorIdWrap.appendChild(input);
-          return input;
-        }
-
         vendorIdWrap.appendChild(billcomHint);
         vendorIdWrap.appendChild(vendorIdLabel);
         vendorIdWrap.appendChild(vendorIdInput);
-
-        const payeeInput = addAchField("Payee name (on ACH)", "Name on payment", meta.billcomPayeeName);
-        const holderInput = addAchField(
-          "Account holder name",
-          "Name on bank account",
-          meta.billcomAccountHolderName
-        );
-        const routingInput = addAchField("Routing number", "9 digits", meta.billcomRoutingNumber);
-        const accountInput = addAchField("Account number", "", meta.billcomAccountNumber);
-        const addressInput = addAchField("Street address", "", meta.billcomAddressLine1);
-
-        const cityStateZipRow = document.createElement("div");
-        cityStateZipRow.className = "metadata-popover__row";
-
-        const cityWrap = document.createElement("div");
-        const cityLabel = document.createElement("label");
-        cityLabel.textContent = "City";
-        const cityInput = document.createElement("input");
-        cityInput.type = "text";
-        cityInput.value = meta.billcomAddressCity || "";
-        cityInput.autocomplete = "off";
-        cityWrap.appendChild(cityLabel);
-        cityWrap.appendChild(cityInput);
-
-        const stateWrap = document.createElement("div");
-        const stateLabel = document.createElement("label");
-        stateLabel.textContent = "State";
-        const stateInput = document.createElement("input");
-        stateInput.type = "text";
-        stateInput.maxLength = 2;
-        stateInput.value = meta.billcomAddressState || "";
-        stateInput.autocomplete = "off";
-        stateWrap.appendChild(stateLabel);
-        stateWrap.appendChild(stateInput);
-
-        const zipWrap = document.createElement("div");
-        const zipLabel = document.createElement("label");
-        zipLabel.textContent = "ZIP";
-        const zipInput = document.createElement("input");
-        zipInput.type = "text";
-        zipInput.value = meta.billcomAddressZip || "";
-        zipInput.autocomplete = "off";
-        zipWrap.appendChild(zipLabel);
-        zipWrap.appendChild(zipInput);
-
-        cityStateZipRow.appendChild(cityWrap);
-        cityStateZipRow.appendChild(stateWrap);
-        cityStateZipRow.appendChild(zipWrap);
-        vendorIdWrap.appendChild(cityStateZipRow);
 
         const wiseWrap = document.createElement("div");
         wiseWrap.className = "metadata-popover__wise-section";
@@ -2483,7 +2445,8 @@
         const wiseHint = document.createElement("p");
         wiseHint.className = "metadata-popover__billcom-hint";
         wiseHint.textContent =
-          "Numeric recipient ID (API) is checked first. Wise-to-Wise: email or tag. Other platforms: ACH + full US address. Dashboard URLs use UUIDs and will not work.";
+          "Numeric recipient ID is how Wise payments route — use LINK WISE to assign from saved recipients. " +
+          "Email/tag only for Wise-to-Wise. Dashboard URLs use UUIDs and will not work.";
 
         const wiseRecipientLabel = document.createElement("label");
         wiseRecipientLabel.textContent = "Wise recipient ID (numeric API id)";
@@ -2511,73 +2474,6 @@
         wiseTagInput.autocomplete = "off";
         wiseTagInput.spellcheck = false;
 
-        const wiseAchLabel = document.createElement("label");
-        wiseAchLabel.textContent = "Account holder name (ACH / other platform)";
-        const wiseHolderInput = document.createElement("input");
-        wiseHolderInput.type = "text";
-        wiseHolderInput.value = meta.wiseAccountHolderName || "";
-        wiseHolderInput.autocomplete = "off";
-
-        const wiseRoutingLabel = document.createElement("label");
-        wiseRoutingLabel.textContent = "Routing number";
-        const wiseRoutingInput = document.createElement("input");
-        wiseRoutingInput.type = "text";
-        wiseRoutingInput.placeholder = "9 digits";
-        wiseRoutingInput.value = meta.wiseRoutingNumber || "";
-        wiseRoutingInput.autocomplete = "off";
-
-        const wiseAccountLabel = document.createElement("label");
-        wiseAccountLabel.textContent = "Account number";
-        const wiseAccountInput = document.createElement("input");
-        wiseAccountInput.type = "text";
-        wiseAccountInput.value = meta.wiseAccountNumber || "";
-        wiseAccountInput.autocomplete = "off";
-
-        const wiseAddressLabel = document.createElement("label");
-        wiseAddressLabel.textContent = "Street address";
-        const wiseAddressInput = document.createElement("input");
-        wiseAddressInput.type = "text";
-        wiseAddressInput.value = meta.wiseAddressLine1 || "";
-        wiseAddressInput.autocomplete = "off";
-
-        const wiseCityStateZipRow = document.createElement("div");
-        wiseCityStateZipRow.className = "metadata-popover__row";
-
-        const wiseCityWrap = document.createElement("div");
-        const wiseCityLabel = document.createElement("label");
-        wiseCityLabel.textContent = "City";
-        const wiseCityInput = document.createElement("input");
-        wiseCityInput.type = "text";
-        wiseCityInput.value = meta.wiseAddressCity || "";
-        wiseCityInput.autocomplete = "off";
-        wiseCityWrap.appendChild(wiseCityLabel);
-        wiseCityWrap.appendChild(wiseCityInput);
-
-        const wiseStateWrap = document.createElement("div");
-        const wiseStateLabel = document.createElement("label");
-        wiseStateLabel.textContent = "State";
-        const wiseStateInput = document.createElement("input");
-        wiseStateInput.type = "text";
-        wiseStateInput.maxLength = 2;
-        wiseStateInput.value = meta.wiseAddressState || "";
-        wiseStateInput.autocomplete = "off";
-        wiseStateWrap.appendChild(wiseStateLabel);
-        wiseStateWrap.appendChild(wiseStateInput);
-
-        const wiseZipWrap = document.createElement("div");
-        const wiseZipLabel = document.createElement("label");
-        wiseZipLabel.textContent = "ZIP";
-        const wiseZipInput = document.createElement("input");
-        wiseZipInput.type = "text";
-        wiseZipInput.value = meta.wiseAddressZip || "";
-        wiseZipInput.autocomplete = "off";
-        wiseZipWrap.appendChild(wiseZipLabel);
-        wiseZipWrap.appendChild(wiseZipInput);
-
-        wiseCityStateZipRow.appendChild(wiseCityWrap);
-        wiseCityStateZipRow.appendChild(wiseStateWrap);
-        wiseCityStateZipRow.appendChild(wiseZipWrap);
-
         wiseWrap.appendChild(wiseHint);
         wiseWrap.appendChild(wiseRecipientLabel);
         wiseWrap.appendChild(wiseRecipientInput);
@@ -2585,15 +2481,6 @@
         wiseWrap.appendChild(wiseEmailInput);
         wiseWrap.appendChild(wiseTagLabel);
         wiseWrap.appendChild(wiseTagInput);
-        wiseWrap.appendChild(wiseAchLabel);
-        wiseWrap.appendChild(wiseHolderInput);
-        wiseWrap.appendChild(wiseRoutingLabel);
-        wiseWrap.appendChild(wiseRoutingInput);
-        wiseWrap.appendChild(wiseAccountLabel);
-        wiseWrap.appendChild(wiseAccountInput);
-        wiseWrap.appendChild(wiseAddressLabel);
-        wiseWrap.appendChild(wiseAddressInput);
-        wiseWrap.appendChild(wiseCityStateZipRow);
 
         methodSelect.addEventListener("change", () => {
           if (methodSelect.value === "Bill.com") {
@@ -2620,7 +2507,6 @@
           saveBtn.disabled = true;
           try {
             let billcomVendorId;
-            let billcomAch;
             let wiseFields;
             if (methodSelect.value === "Bill.com") {
               const parsed = normalizeBillcomVendorIdInput(vendorIdInput.value);
@@ -2628,38 +2514,25 @@
                 throw new Error("Bill.com vendor ID must start with 009");
               }
               billcomVendorId = parsed;
-              billcomAch = collectBillcomAchPayload({
-                payeeName: payeeInput.value,
-                accountHolder: holderInput.value,
-                routing: routingInput.value,
-                account: accountInput.value,
-                address: addressInput.value,
-                city: cityInput.value,
-                state: stateInput.value,
-                zip: zipInput.value,
-              });
-              if (!billcomVendorId && !isBillcomAchCompleteClient(billcomAch)) {
-                throw new Error(
-                  "Add a Bill.com vendor ID (009...) or fill in all ACH + address fields"
-                );
+              // Legacy affiliates with full stored ACH can still save without an ID.
+              if (
+                !billcomVendorId &&
+                !isBillcomAchCompleteClient(meta)
+              ) {
+                throw new Error("Add a Bill.com vendor ID (009...)");
               }
             }
             if (methodSelect.value === "Wise") {
+              // ACH entry moved out of this popup — send only ID/email/tag.
+              // Empty strings leave any stored ACH untouched server-side.
               wiseFields = collectWisePayload({
                 recipientId: wiseRecipientInput.value,
                 email: wiseEmailInput.value,
                 tag: wiseTagInput.value,
-                accountHolder: wiseHolderInput.value,
-                routing: wiseRoutingInput.value,
-                account: wiseAccountInput.value,
-                address: wiseAddressInput.value,
-                city: wiseCityInput.value,
-                state: wiseStateInput.value,
-                zip: wiseZipInput.value,
               });
-              if (!hasWisePayableFields(wiseFields)) {
+              if (!hasWisePayableFields(wiseFields) && !hasWisePayableClient(meta)) {
                 throw new Error(
-                  "Wise requires recipient ID, email/tag (Wise-to-Wise), or full ACH + US address (other platforms)"
+                  "Wise requires a recipient ID (use LINK WISE) or email/tag for Wise-to-Wise"
                 );
               }
             }
@@ -2668,7 +2541,7 @@
               methodSelect.value,
               termsSelect.value,
               billcomVendorId,
-              billcomAch,
+              null,
               wiseFields,
               paymentEmailInput.value.trim()
             );
@@ -3481,6 +3354,220 @@
       function payAllAffiliates() {
         openPayModalForBulk();
       }
+
+      /* ---------- WISE RECIPIENT LINKING ---------- */
+
+      let wiseLinkData = null;
+      let wiseLinkAssigning = false;
+
+      function closeWiseLinkModal() {
+        wiseLinkModal.classList.add("hidden");
+        wiseLinkBody.innerHTML = "";
+        wiseLinkData = null;
+      }
+
+      function wiseRecipientLabel(recipient) {
+        const last4 = recipient.accountLast4 ? "••" + recipient.accountLast4 : "no acct";
+        const loc = [recipient.city, recipient.state].filter(Boolean).join(", ");
+        return (
+          recipient.accountHolderName +
+          " · " + last4 +
+          (loc ? " · " + loc : "") +
+          " · #" + recipient.id
+        );
+      }
+
+      async function assignWiseRecipient(publisherName, recipientId, statusEl) {
+        if (wiseLinkAssigning) return;
+        wiseLinkAssigning = true;
+        if (statusEl) statusEl.textContent = "Assigning…";
+        try {
+          const meta = getAffiliateMeta(publisherName);
+          const data = await saveAffiliateMetadata(
+            publisherName,
+            meta.paymentMethod || "Wise",
+            meta.paymentTerms || "Untagged",
+            undefined,
+            null,
+            { wiseRecipientId: String(recipientId) },
+            undefined
+          );
+          affiliateMetadataMap[publisherName] = data;
+          showPaymentToast(
+            "Linked " + publisherName + " → Wise recipient #" + recipientId,
+            false
+          );
+          renderTable();
+          await loadWiseLinkData();
+        } catch (err) {
+          if (statusEl) {
+            statusEl.textContent =
+              err instanceof Error ? err.message : "Assign failed";
+          }
+          showPaymentToast(
+            err instanceof Error ? err.message : "Assign failed",
+            true
+          );
+        } finally {
+          wiseLinkAssigning = false;
+        }
+      }
+
+      function renderWiseLinkModal() {
+        if (!wiseLinkData) return;
+        const { affiliates, recipients, totalRecipients, linked, unlinked } = wiseLinkData;
+        wiseLinkStatus.textContent =
+          totalRecipients + " Wise recipients · " + linked + " linked · " + unlinked + " to assign";
+        wiseLinkBody.innerHTML = "";
+
+        if (!affiliates.length) {
+          const p = document.createElement("p");
+          p.className = "pay-modal__hint";
+          p.textContent = "No affiliates are tagged with the Wise payment method yet.";
+          wiseLinkBody.appendChild(p);
+          return;
+        }
+
+        for (const affiliate of affiliates) {
+          const row = document.createElement("div");
+          row.style.cssText =
+            "border:1px solid var(--border-bright);padding:12px 14px;margin-bottom:10px;";
+
+          const nameEl = document.createElement("div");
+          nameEl.style.cssText = "font-weight:700;margin-bottom:6px;";
+          nameEl.textContent = affiliate.publisherName;
+          row.appendChild(nameEl);
+
+          if (affiliate.wiseRecipientId) {
+            const linkedEl = document.createElement("div");
+            linkedEl.style.cssText = "font-size:11px;color:var(--green);";
+            linkedEl.textContent =
+              "✓ Linked to #" + affiliate.wiseRecipientId +
+              (affiliate.linkedHolderName ? " — " + affiliate.linkedHolderName : "");
+            row.appendChild(linkedEl);
+            wiseLinkBody.appendChild(row);
+            continue;
+          }
+
+          const statusEl = document.createElement("div");
+          statusEl.style.cssText = "font-size:11px;color:var(--red);min-height:14px;margin-top:6px;";
+
+          const suggestions = affiliate.suggestions || [];
+          if (suggestions.length) {
+            const sugLabel = document.createElement("div");
+            sugLabel.style.cssText =
+              "font-size:10px;letter-spacing:1px;color:var(--text-dim);text-transform:uppercase;margin:4px 0 6px;";
+            sugLabel.textContent = "Suggested matches";
+            row.appendChild(sugLabel);
+
+            for (const s of suggestions) {
+              const line = document.createElement("div");
+              line.style.cssText =
+                "display:flex;align-items:center;gap:10px;margin-bottom:5px;flex-wrap:wrap;";
+              const text = document.createElement("span");
+              text.style.cssText = "font-size:11px;";
+              text.textContent =
+                wiseRecipientLabel(s) + "  (" + Math.round(s.score * 100) + "% match)";
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = "btn-metadata-save";
+              btn.textContent = "ASSIGN";
+              btn.addEventListener("click", () => {
+                void assignWiseRecipient(affiliate.publisherName, s.id, statusEl);
+              });
+              line.appendChild(btn);
+              line.appendChild(text);
+              row.appendChild(line);
+            }
+          } else {
+            const none = document.createElement("div");
+            none.style.cssText = "font-size:11px;color:var(--text-dim);margin:4px 0 6px;";
+            none.textContent = "No close name matches — pick from the full list:";
+            row.appendChild(none);
+          }
+
+          // Full-list picker: type-to-filter over every recipient.
+          const pickerWrap = document.createElement("div");
+          pickerWrap.style.cssText = "display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;";
+          const search = document.createElement("input");
+          search.type = "search";
+          search.placeholder = "Search all recipients…";
+          search.className = "search-input";
+          search.style.cssText = "flex:1;min-width:220px;";
+          const select = document.createElement("select");
+          select.className = "select-month";
+          select.style.cssText = "max-width:320px;";
+
+          const fillSelect = (query) => {
+            const q = String(query || "").trim().toLowerCase();
+            select.innerHTML = "";
+            const matches = recipients.filter(
+              (r) => !q || r.accountHolderName.toLowerCase().includes(q)
+            );
+            for (const r of matches.slice(0, 50)) {
+              const opt = document.createElement("option");
+              opt.value = String(r.id);
+              opt.textContent = wiseRecipientLabel(r);
+              select.appendChild(opt);
+            }
+            if (!matches.length) {
+              const opt = document.createElement("option");
+              opt.value = "";
+              opt.textContent = "(no matches)";
+              select.appendChild(opt);
+            }
+          };
+          fillSelect("");
+          search.addEventListener("input", () => fillSelect(search.value));
+
+          const assignBtn = document.createElement("button");
+          assignBtn.type = "button";
+          assignBtn.className = "btn-metadata-save";
+          assignBtn.textContent = "ASSIGN SELECTED";
+          assignBtn.addEventListener("click", () => {
+            const id = select.value;
+            if (!id) {
+              statusEl.textContent = "Pick a recipient first.";
+              return;
+            }
+            void assignWiseRecipient(affiliate.publisherName, id, statusEl);
+          });
+
+          pickerWrap.appendChild(search);
+          pickerWrap.appendChild(select);
+          pickerWrap.appendChild(assignBtn);
+          row.appendChild(pickerWrap);
+          row.appendChild(statusEl);
+          wiseLinkBody.appendChild(row);
+        }
+      }
+
+      async function loadWiseLinkData() {
+        wiseLinkStatus.textContent = "Loading Wise recipients…";
+        try {
+          const res = await fetch("/api/admin/wise-recipients");
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || "Failed to load Wise recipients");
+          }
+          wiseLinkData = data;
+          renderWiseLinkModal();
+        } catch (err) {
+          wiseLinkStatus.textContent =
+            err instanceof Error ? err.message : "Failed to load Wise recipients";
+          wiseLinkBody.innerHTML = "";
+        }
+      }
+
+      function openWiseLinkModal() {
+        wiseLinkModal.classList.remove("hidden");
+        wiseLinkBody.innerHTML = "";
+        void loadWiseLinkData();
+      }
+
+      linkWiseBtn.addEventListener("click", openWiseLinkModal);
+      wiseLinkClose.addEventListener("click", closeWiseLinkModal);
+      wiseLinkBackdrop.addEventListener("click", closeWiseLinkModal);
 
       function buildActionCell(row) {
         const meta = getAffiliateMeta(row.publisherName);

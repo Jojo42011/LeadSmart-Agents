@@ -44,6 +44,8 @@ import {
   isWiseAchComplete,
   parseWiseRecipientIdInput,
   formatWiseRecipientIdForStorage,
+  listWiseRecipientsV1,
+  type WiseRecipientSummary,
   type WiseAchDetails,
   type WiseRecipient,
   type WisePayoutTarget,
@@ -1515,6 +1517,110 @@ app.get("/api/payment/unpaid-all", async (req, res) => {
     res.status(500).json({
       error:
         err instanceof Error ? err.message : "Failed to compile unpaid earnings",
+    });
+  }
+});
+
+// ---- Wise recipient linking (manual assign UI in the payment dashboard) ----
+
+function matchTokens(name: string): Set<string> {
+  return new Set(
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+  );
+}
+
+function diceSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) {
+    return 0;
+  }
+  let inter = 0;
+  for (const token of a) {
+    if (b.has(token)) {
+      inter += 1;
+    }
+  }
+  return (2 * inter) / (a.size + b.size);
+}
+
+/**
+ * Publisher-vs-recipient name similarity (0-1). Ringba publisher names often
+ * carry suffix tags ("Ramzan Ali - GMB") that Wise holder names never have, so
+ * the score is the best of the full name and the pre-dash prefix.
+ */
+function recipientNameSimilarity(publisherName: string, holderName: string): number {
+  const holder = matchTokens(holderName);
+  const full = diceSimilarity(matchTokens(publisherName), holder);
+  const prefix = publisherName.includes(" - ")
+    ? diceSimilarity(matchTokens(publisherName.split(" - ")[0]), holder)
+    : 0;
+  let score = Math.max(full, prefix);
+
+  const pubNorm = publisherName.trim().toLowerCase();
+  const holderNorm = holderName.trim().toLowerCase();
+  if (pubNorm && holderNorm && (pubNorm.includes(holderNorm) || holderNorm.includes(pubNorm))) {
+    score = Math.max(score, 0.85);
+  }
+  return Math.round(score * 100) / 100;
+}
+
+const WISE_LINK_SUGGESTIONS = 3;
+
+app.get("/api/admin/wise-recipients", async (_req, res) => {
+  try {
+    const profileId = getWiseProfileIdFromEnv();
+    const all = await listWiseRecipientsV1(profileId);
+    const recipients = all.filter((recipient) => recipient.active);
+
+    const metadata = getAllAffiliateMetadata();
+    const wiseAffiliates = Object.entries(metadata)
+      .filter(([, meta]) => meta.paymentMethod === "Wise")
+      .map(([publisherName, meta]) => {
+        const linkedId = meta.wiseRecipientId?.trim() || null;
+        const linkedRecipient = linkedId
+          ? recipients.find((r) => String(r.id) === linkedId) ?? null
+          : null;
+
+        let suggestions: Array<WiseRecipientSummary & { score: number }> = [];
+        if (!linkedId) {
+          suggestions = recipients
+            .map((recipient) => ({
+              ...recipient,
+              score: recipientNameSimilarity(publisherName, recipient.accountHolderName),
+            }))
+            .filter((candidate) => candidate.score >= 0.4)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, WISE_LINK_SUGGESTIONS);
+        }
+
+        return {
+          publisherName,
+          wiseRecipientId: linkedId,
+          linkedHolderName: linkedRecipient?.accountHolderName ?? null,
+          suggestions,
+        };
+      })
+      .sort((a, b) => {
+        if (!a.wiseRecipientId !== !b.wiseRecipientId) {
+          return a.wiseRecipientId ? 1 : -1; // unlinked first
+        }
+        return a.publisherName.localeCompare(b.publisherName);
+      });
+
+    res.json({
+      totalRecipients: recipients.length,
+      linked: wiseAffiliates.filter((a) => a.wiseRecipientId).length,
+      unlinked: wiseAffiliates.filter((a) => !a.wiseRecipientId).length,
+      affiliates: wiseAffiliates,
+      recipients,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : "Failed to list Wise recipients",
     });
   }
 });
