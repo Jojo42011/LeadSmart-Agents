@@ -4,6 +4,7 @@ import { embedText, float32ToBlob } from "../memory/embeddings";
 import { findSimilarNode } from "../memory/nodes";
 import { searchFacts, getMemoryPacket } from "../memory/retrieval";
 import { getHullDb } from "../memory/store";
+import { getScrubStatus, getPaymentSummary, getFraudStatus } from "./opsData";
 
 function tool(
   name: string,
@@ -57,8 +58,29 @@ const WEB_SEARCH_TOOL = tool(
   ["query"]
 );
 
+const OPS_TOOLS: ChatCompletionTool[] = [
+  tool(
+    "get_scrub_status",
+    "Live status of the Ringba scrub agent (System 1): lifetime voids, payout/revenue recovered, last-24h activity, last poll time, recent problems. Call whenever asked how the scrub agent or call scrubbing is doing.",
+    {},
+    []
+  ),
+  tool(
+    "get_payment_summary",
+    "Live payment department status: affiliates by payment method, how many were paid this month, weekly (net-7) payments in the last 7 days, Wise recipient-ID link coverage, most recent payments. Call whenever asked about affiliate payouts or the payment portal.",
+    {},
+    []
+  ),
+  tool(
+    "get_fraud_status",
+    "Live fraud department status (System 3): flagged calls (24h and total), suspicious/blocked publisher counts, top-risk publishers, most recent flags, last scan time. Call whenever asked about fraud, flagged calls, or blocked publishers.",
+    {},
+    []
+  ),
+];
+
 export function getHullToolDefinitions(): ChatCompletionTool[] {
-  const tools = [...MEMORY_TOOLS];
+  const tools = [...MEMORY_TOOLS, ...OPS_TOOLS];
   if (process.env.BRAVE_SEARCH_API_KEY?.trim()) {
     tools.push(WEB_SEARCH_TOOL);
   }
@@ -116,6 +138,18 @@ export async function executeHullTool(
       )
       .all(node.id, node.id);
     return { entity: node.name, connections: edges };
+  }
+
+  if (name === "get_scrub_status") {
+    return getScrubStatus();
+  }
+
+  if (name === "get_payment_summary") {
+    return getPaymentSummary();
+  }
+
+  if (name === "get_fraud_status") {
+    return getFraudStatus();
   }
 
   if (name === "web_search") {

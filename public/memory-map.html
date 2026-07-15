@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JARVIS · Neural Map</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #060608;
+        --panel: #101014;
+        --border: #1e1e26;
+        --text: #e8e8e8;
+        --dim: #62626e;
+        --green: #00ff88;
+        --amber: #ffb000;
+        --cyan: #00d4ff;
+        --purple: #b388ff;
+        --red: #ff4757;
+        --font: "JetBrains Mono", ui-monospace, monospace;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; }
+
+      #canvas { position: fixed; inset: 0; display: block; cursor: grab; }
+      #canvas.dragging { cursor: grabbing; }
+
+      .hud {
+        position: fixed; top: 0; left: 0; right: 0; z-index: 5;
+        display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+        padding: 14px 20px; pointer-events: none;
+      }
+      .hud > * { pointer-events: auto; }
+      .hud__title { font-size: 14px; font-weight: 700; letter-spacing: 3px; }
+      .hud__title span { color: var(--cyan); }
+      .hud__sub { font-size: 9px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; }
+      .hud__spacer { flex: 1; }
+      .hud a { color: var(--dim); font-size: 10px; letter-spacing: 1px; text-decoration: none; text-transform: uppercase; }
+      .hud a:hover { color: var(--text); }
+      .hud__search {
+        background: rgba(16, 16, 20, 0.9); border: 1px solid var(--border); color: var(--text);
+        font-family: var(--font); font-size: 12px; padding: 8px 12px; outline: none; width: 230px;
+      }
+      .hud__search:focus { border-color: rgba(0, 212, 255, 0.5); }
+
+      .legend {
+        position: fixed; left: 20px; bottom: 18px; z-index: 5;
+        background: rgba(16, 16, 20, 0.85); border: 1px solid var(--border);
+        padding: 12px 14px; font-size: 10px; letter-spacing: 1px;
+        backdrop-filter: blur(4px);
+      }
+      .legend__row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+      .legend__row:last-child { margin-bottom: 0; }
+      .legend__dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+      .legend__stats { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--dim); line-height: 1.6; }
+
+      .hint {
+        position: fixed; right: 20px; bottom: 18px; z-index: 5;
+        color: var(--dim); font-size: 9px; letter-spacing: 1px; text-align: right; line-height: 1.7;
+      }
+
+      /* focus side panel */
+      .panel {
+        position: fixed; top: 64px; right: 16px; bottom: 70px; width: 340px; z-index: 6;
+        background: rgba(13, 13, 18, 0.94); border: 1px solid var(--border);
+        padding: 16px; overflow-y: auto; backdrop-filter: blur(6px);
+        transform: translateX(370px); transition: transform 0.25s ease;
+      }
+      .panel--open { transform: translateX(0); }
+      .panel__type { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+      .panel__name { font-size: 16px; font-weight: 700; margin-bottom: 12px; }
+      .panel__section { font-size: 9px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; margin: 14px 0 6px; }
+      .panel__item { font-size: 11px; line-height: 1.55; padding: 7px 9px; margin-bottom: 6px; background: rgba(255,255,255,0.02); border-left: 2px solid var(--border); }
+      .panel__close {
+        position: absolute; top: 10px; right: 12px; background: none; border: none;
+        color: var(--dim); font-family: var(--font); font-size: 14px; cursor: pointer;
+      }
+      .panel__close:hover { color: var(--text); }
+      .panel__conn { color: var(--dim); }
+      .panel__conn b { color: var(--text); font-weight: 500; }
+
+      .loading {
+        position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+        z-index: 10; color: var(--cyan); font-size: 11px; letter-spacing: 3px;
+        background: var(--bg); transition: opacity 0.5s;
+      }
+      .loading.done { opacity: 0; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+
+    <div class="hud">
+      <div>
+        <div class="hud__title">JARVIS <span>// NEURAL MAP</span></div>
+        <div class="hud__sub">LeadSmart memory graph · live</div>
+      </div>
+      <input class="hud__search" id="search" type="search" placeholder="Search memory… (Enter to fly)" />
+      <div class="hud__spacer"></div>
+      <a href="/jarvis-chat">Chat</a>
+      <a href="/memory">Memory Browser</a>
+      <a href="/jarvis">Voice</a>
+    </div>
+
+    <div class="legend" id="legend"></div>
+    <div class="hint">
+      DRAG to pan · SCROLL to zoom<br />
+      HOVER for labels · CLICK a node to focus<br />
+      ESC or click empty space to exit focus
+    </div>
+
+    <div class="panel" id="panel">
+      <button class="panel__close" id="panelClose" type="button">✕</button>
+      <div class="panel__type" id="panelType"></div>
+      <div class="panel__name" id="panelName"></div>
+      <div class="panel__section">Connections</div>
+      <div id="panelConnections"></div>
+      <div class="panel__section">Related memory</div>
+      <div id="panelFacts"></div>
+    </div>
+
+    <div class="loading" id="loading">INITIALIZING NEURAL MAP…</div>
+
+    <script>
+      (function () {
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d");
+        const panel = document.getElementById("panel");
+        const loading = document.getElementById("loading");
+        const search = document.getElementById("search");
+
+        // ---------- sectors: the organizing principle ----------
+        // Every node is gravity-bound to a fixed sector anchor by domain, so the
+        // macro layout is deterministic (no hairball) while nodes float freely
+        // within their sector.
+        const SECTORS = [
+          { key: "people",   label: "PEOPLE",        color: "#00d4ff" },
+          { key: "payments", label: "PAYMENTS",      color: "#00ff88" },
+          { key: "fraud",    label: "FRAUD",         color: "#ff4757" },
+          { key: "scrub",    label: "SCRUB",         color: "#ffb000" },
+          { key: "system",   label: "SYSTEM / INFRA", color: "#b388ff" },
+          { key: "knowledge", label: "KNOWLEDGE",    color: "#8a94a6" },
+        ];
+        const sectorIndex = Object.fromEntries(SECTORS.map((s, i) => [s.key, i]));
+
+        const SECTOR_RULES = [
+          { key: "people", test: (n) => n.type === "person" || /seth|mijanur|missioner|jahan|matt|user|team/i.test(n.name) },
+          { key: "payments", test: (n) => /pay|wise|bill\.?com|polyares|payout|affiliate|vendor|invoice|cpl/i.test(n.name) },
+          { key: "fraud", test: (n) => /fraud|ipqs|voip|block|flag|spoof|caller/i.test(n.name) },
+          { key: "scrub", test: (n) => /scrub|void|ringba|call ?log|conversion|jobqueue/i.test(n.name) },
+          { key: "system", test: (n) => n.type === "system" || /dashboard|database|sqlite|api|deepgram|three|websocket|server|jarvis|leadsmart|elevenlabs|openai/i.test(n.name) },
+        ];
+
+        function classify(node) {
+          for (const rule of SECTOR_RULES) {
+            if (rule.test(node)) return rule.key;
+          }
+          return "knowledge";
+        }
+
+        // ---------- state ----------
+        let nodes = [];
+        let edges = [];
+        let adjacency = new Map();
+        let factCount = 0;
+        let cam = { x: 0, y: 0, zoom: 1 };
+        let hovered = null;
+        let focused = null;
+        let focusSet = null;
+        let dragging = false;
+        let dragStart = null;
+        let W = 0, H = 0, DPR = 1;
+
+        function resize() {
+          DPR = window.devicePixelRatio || 1;
+          W = window.innerWidth;
+          H = window.innerHeight;
+          canvas.width = W * DPR;
+          canvas.height = H * DPR;
+          canvas.style.width = W + "px";
+          canvas.style.height = H + "px";
+        }
+        window.addEventListener("resize", resize);
+        resize();
+
+        function sectorAnchor(index) {
+          const angle = (index / SECTORS.length) * Math.PI * 2 - Math.PI / 2;
+          const radius = Math.min(W, H) * 0.30;
+          return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+        }
+
+        // ---------- physics (pre-relaxed, then gentle drift) ----------
+        function initPositions() {
+          for (const node of nodes) {
+            const anchor = sectorAnchor(sectorIndex[node.sector]);
+            const jitter = 90;
+            node.x = anchor.x + (Math.random() - 0.5) * jitter * 2;
+            node.y = anchor.y + (Math.random() - 0.5) * jitter * 2;
+            node.vx = 0;
+            node.vy = 0;
+            node.r = 4 + Math.min(14, Math.sqrt(node.degree + 1) * 3);
+          }
+        }
+
+        function step(alpha) {
+          // sector gravity
+          for (const node of nodes) {
+            const anchor = sectorAnchor(sectorIndex[node.sector]);
+            node.vx += (anchor.x - node.x) * 0.012 * alpha;
+            node.vy += (anchor.y - node.y) * 0.012 * alpha;
+          }
+          // springs along edges
+          for (const edge of edges) {
+            const a = edge.a, b = edge.b;
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const dist = Math.max(Math.hypot(dx, dy), 1);
+            const target = a.sector === b.sector ? 70 : 240;
+            const force = ((dist - target) / dist) * 0.008 * alpha;
+            a.vx += dx * force; a.vy += dy * force;
+            b.vx -= dx * force; b.vy -= dy * force;
+          }
+          // repulsion within sectors (keeps O(n²) small per sector)
+          const bySector = new Map();
+          for (const node of nodes) {
+            if (!bySector.has(node.sector)) bySector.set(node.sector, []);
+            bySector.get(node.sector).push(node);
+          }
+          for (const group of bySector.values()) {
+            for (let i = 0; i < group.length; i++) {
+              for (let j = i + 1; j < group.length; j++) {
+                const a = group[i], b = group[j];
+                const dx = b.x - a.x, dy = b.y - a.y;
+                const distSq = Math.max(dx * dx + dy * dy, 25);
+                const minDist = (a.r + b.r) * 2.2;
+                if (distSq < minDist * minDist * 4) {
+                  const dist = Math.sqrt(distSq);
+                  const force = (520 / distSq) * alpha;
+                  const fx = (dx / dist) * force, fy = (dy / dist) * force;
+                  a.vx -= fx; a.vy -= fy;
+                  b.vx += fx; b.vy += fy;
+                }
+              }
+            }
+          }
+          for (const node of nodes) {
+            node.vx *= 0.82; node.vy *= 0.82;
+            node.x += node.vx; node.y += node.vy;
+          }
+        }
+
+        // ---------- rendering ----------
+        let tick = 0;
+        function draw() {
+          tick += 1;
+          ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+          ctx.clearRect(0, 0, W, H);
+
+          // subtle grid backdrop
+          ctx.save();
+          ctx.strokeStyle = "rgba(255,255,255,0.022)";
+          ctx.lineWidth = 1;
+          const grid = 55 * cam.zoom;
+          const ox = ((W / 2 + cam.x * cam.zoom) % grid + grid) % grid;
+          const oy = ((H / 2 + cam.y * cam.zoom) % grid + grid) % grid;
+          for (let x = ox; x < W; x += grid) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+          for (let y = oy; y < H; y += grid) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+          ctx.restore();
+
+          ctx.save();
+          ctx.translate(W / 2, H / 2);
+          ctx.scale(cam.zoom, cam.zoom);
+          ctx.translate(cam.x, cam.y);
+
+          // sector rings + labels
+          for (let i = 0; i < SECTORS.length; i++) {
+            const anchor = sectorAnchor(i);
+            ctx.beginPath();
+            ctx.arc(anchor.x, anchor.y, 130, 0, Math.PI * 2);
+            ctx.strokeStyle = SECTORS[i].color + "14";
+            ctx.lineWidth = 1.5 / cam.zoom;
+            ctx.stroke();
+            ctx.font = `700 ${11 / cam.zoom}px JetBrains Mono`;
+            ctx.fillStyle = SECTORS[i].color + "55";
+            ctx.textAlign = "center";
+            ctx.fillText(SECTORS[i].label, anchor.x, anchor.y - 140);
+          }
+
+          const inFocus = (node) => !focusSet || focusSet.has(node.id);
+
+          // edges
+          for (const edge of edges) {
+            const visible = inFocus(edge.a) && inFocus(edge.b);
+            const alpha = visible ? Math.min(0.5, 0.1 + (edge.strength || 1) * 0.18) : 0.02;
+            const grad = ctx.createLinearGradient(edge.a.x, edge.a.y, edge.b.x, edge.b.y);
+            grad.addColorStop(0, SECTORS[sectorIndex[edge.a.sector]].color + alphaHex(alpha));
+            grad.addColorStop(1, SECTORS[sectorIndex[edge.b.sector]].color + alphaHex(alpha));
+            ctx.beginPath();
+            ctx.moveTo(edge.a.x, edge.a.y);
+            ctx.lineTo(edge.b.x, edge.b.y);
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = (visible ? 1.1 : 0.6) / cam.zoom;
+            ctx.stroke();
+          }
+
+          // nodes
+          for (const node of nodes) {
+            const color = SECTORS[sectorIndex[node.sector]].color;
+            const visible = inFocus(node);
+            const isFocusCenter = focused && node.id === focused.id;
+            const pulse = isFocusCenter ? 1 + Math.sin(tick * 0.08) * 0.16 : 1;
+            const radius = node.r * pulse;
+
+            ctx.globalAlpha = visible ? 1 : 0.08;
+
+            const glow = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, radius * 3);
+            glow.addColorStop(0, color + "40");
+            glow.addColorStop(1, color + "00");
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, radius * 3, 0, Math.PI * 2);
+            ctx.fillStyle = glow;
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, radius * 0.45, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffffffcc";
+            ctx.fill();
+
+            // labels: hubs always (zoom-gated), others on hover/focus
+            const showLabel =
+              node === hovered || isFocusCenter ||
+              (visible && (node.degree >= 4 || cam.zoom > 1.7));
+            if (showLabel) {
+              ctx.font = `${(node === hovered || isFocusCenter ? 12 : 10) / cam.zoom}px JetBrains Mono`;
+              ctx.fillStyle = node === hovered || isFocusCenter ? "#ffffff" : "#c9c9d4";
+              ctx.textAlign = "center";
+              ctx.fillText(truncate(node.name, 26), node.x, node.y - radius - 7 / cam.zoom);
+            }
+            ctx.globalAlpha = 1;
+          }
+          ctx.restore();
+        }
+
+        function alphaHex(a) {
+          return Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+        }
+        function truncate(s, n) {
+          return s.length > n ? s.slice(0, n - 1) + "…" : s;
+        }
+
+        function animate() {
+          step(0.28); // gentle continuous drift keeps it feeling alive
+          draw();
+          requestAnimationFrame(animate);
+        }
+
+        // ---------- interaction ----------
+        function screenToWorld(sx, sy) {
+          return {
+            x: (sx - W / 2) / cam.zoom - cam.x,
+            y: (sy - H / 2) / cam.zoom - cam.y,
+          };
+        }
+        function nodeAt(sx, sy) {
+          const p = screenToWorld(sx, sy);
+          let best = null, bestDist = Infinity;
+          for (const node of nodes) {
+            const d = Math.hypot(node.x - p.x, node.y - p.y);
+            if (d < Math.max(node.r + 6, 12) && d < bestDist) {
+              best = node; bestDist = d;
+            }
+          }
+          return best;
+        }
+
+        canvas.addEventListener("mousedown", (e) => {
+          dragging = true;
+          dragStart = { x: e.clientX, y: e.clientY, camX: cam.x, camY: cam.y, moved: false };
+          canvas.classList.add("dragging");
+        });
+        window.addEventListener("mousemove", (e) => {
+          if (dragging && dragStart) {
+            const dx = e.clientX - dragStart.x, dy = e.clientY - dragStart.y;
+            if (Math.abs(dx) + Math.abs(dy) > 4) dragStart.moved = true;
+            cam.x = dragStart.camX + dx / cam.zoom;
+            cam.y = dragStart.camY + dy / cam.zoom;
+          } else {
+            hovered = nodeAt(e.clientX, e.clientY);
+            canvas.style.cursor = hovered ? "pointer" : "grab";
+          }
+        });
+        window.addEventListener("mouseup", (e) => {
+          canvas.classList.remove("dragging");
+          if (dragging && dragStart && !dragStart.moved) {
+            const node = nodeAt(e.clientX, e.clientY);
+            if (node) focusNode(node);
+            else clearFocus();
+          }
+          dragging = false;
+          dragStart = null;
+        });
+        canvas.addEventListener("wheel", (e) => {
+          e.preventDefault();
+          const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+          cam.zoom = Math.max(0.35, Math.min(4, cam.zoom * factor));
+        }, { passive: false });
+        window.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") clearFocus();
+        });
+
+        // ---------- focus mode + side panel ----------
+        function egoSet(node, hops) {
+          const set = new Set([node.id]);
+          let frontier = [node.id];
+          for (let h = 0; h < hops; h++) {
+            const next = [];
+            for (const id of frontier) {
+              for (const neighbor of adjacency.get(id) || []) {
+                if (!set.has(neighbor.node.id)) {
+                  set.add(neighbor.node.id);
+                  next.push(neighbor.node.id);
+                }
+              }
+            }
+            frontier = next;
+          }
+          return set;
+        }
+
+        async function focusNode(node) {
+          focused = node;
+          focusSet = egoSet(node, 2);
+          const sector = SECTORS[sectorIndex[node.sector]];
+          document.getElementById("panelType").textContent = sector.label + " · " + (node.type || "entity");
+          document.getElementById("panelType").style.color = sector.color;
+          document.getElementById("panelName").textContent = node.name;
+
+          const connections = (adjacency.get(node.id) || []).slice(0, 12);
+          document.getElementById("panelConnections").innerHTML = connections.length
+            ? connections.map((c) =>
+                '<div class="panel__item panel__conn">' + escapeHtml(c.relationship) +
+                " → <b>" + escapeHtml(c.node.name) + "</b></div>"
+              ).join("")
+            : '<div class="panel__item panel__conn">No connections</div>';
+
+          panel.classList.add("panel--open");
+          document.getElementById("panelFacts").innerHTML =
+            '<div class="panel__item panel__conn">Loading…</div>';
+          try {
+            const res = await fetch("/api/memory/facts?q=" + encodeURIComponent(node.name) + "&limit=6");
+            const data = await res.json();
+            const facts = data.facts || [];
+            document.getElementById("panelFacts").innerHTML = facts.length
+              ? facts.map((f) => '<div class="panel__item">' + escapeHtml(f.content) + "</div>").join("")
+              : '<div class="panel__item panel__conn">No related facts</div>';
+          } catch {
+            document.getElementById("panelFacts").innerHTML =
+              '<div class="panel__item panel__conn">Failed to load facts</div>';
+          }
+        }
+
+        function clearFocus() {
+          focused = null;
+          focusSet = null;
+          panel.classList.remove("panel--open");
+        }
+        document.getElementById("panelClose").addEventListener("click", clearFocus);
+
+        search.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") return;
+          const q = search.value.trim().toLowerCase();
+          if (!q) return;
+          const node = nodes.find((n) => n.name.toLowerCase().includes(q));
+          if (node) {
+            cam.x = -node.x;
+            cam.y = -node.y;
+            cam.zoom = Math.max(cam.zoom, 1.6);
+            void focusNode(node);
+          }
+        });
+
+        function escapeHtml(s) {
+          return String(s == null ? "" : s)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        // ---------- boot ----------
+        async function boot() {
+          try {
+            const res = await fetch("/api/memory/graph/full");
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "graph load failed");
+
+            const byId = new Map();
+            nodes = (data.nodes || []).map((n) => {
+              const node = { ...n, sector: classify(n) };
+              byId.set(node.id, node);
+              return node;
+            });
+            edges = (data.edges || [])
+              .map((e) => ({ ...e, a: byId.get(e.source), b: byId.get(e.target) }))
+              .filter((e) => e.a && e.b);
+            factCount = data.factCount || 0;
+
+            adjacency = new Map();
+            for (const edge of edges) {
+              if (!adjacency.has(edge.a.id)) adjacency.set(edge.a.id, []);
+              if (!adjacency.has(edge.b.id)) adjacency.set(edge.b.id, []);
+              adjacency.get(edge.a.id).push({ node: edge.b, relationship: edge.relationship });
+              adjacency.get(edge.b.id).push({ node: edge.a, relationship: edge.relationship });
+            }
+
+            initPositions();
+            for (let i = 0; i < 220; i++) step(1 - i / 260); // pre-relax before first paint
+
+            // legend
+            const counts = {};
+            for (const node of nodes) counts[node.sector] = (counts[node.sector] || 0) + 1;
+            document.getElementById("legend").innerHTML =
+              SECTORS.map((s) =>
+                '<div class="legend__row"><span class="legend__dot" style="color:' + s.color +
+                ";background:" + s.color + '"></span>' + s.label +
+                ' <span style="color:var(--dim)">' + (counts[s.key] || 0) + "</span></div>"
+              ).join("") +
+              '<div class="legend__stats">' + nodes.length + " entities · " + edges.length +
+              " links<br />" + factCount + " facts in memory</div>";
+
+            loading.classList.add("done");
+            animate();
+          } catch (err) {
+            loading.textContent = "FAILED TO LOAD MEMORY GRAPH — " + (err.message || "");
+          }
+        }
+        void boot();
+      })();
+    </script>
+  </body>
+</html>

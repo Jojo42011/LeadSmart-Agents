@@ -17,12 +17,77 @@ const DIMENSIONS = [
   "ENERGY",
 ];
 
+/**
+ * Digital-twin seed (v2) — the business knowledge Jarvis should hold as
+ * durable memory, not just prompt text. Idempotent via a system_state marker,
+ * runs on top of any existing memory.
+ */
+function seedDigitalTwinV2(db: ReturnType<typeof getHullDb>): void {
+  const marker = db
+    .prepare("SELECT value FROM system_state WHERE key = 'seed_v2'")
+    .get() as { value: string } | undefined;
+  if (marker) return;
+
+  const now = new Date().toISOString();
+  const insertFact = db.prepare(
+    `INSERT INTO facts (id, content, category, keywords, strength, importance, access_count, last_accessed, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+  );
+
+  const facts: Array<{ content: string; category: string; keywords: string; importance: number }> = [
+    { content: "Seth is LeadSmart's client/owner and sets payment and fraud policy", category: "people", keywords: "seth,owner,client,policy", importance: 9 },
+    { content: "Mijanur Rahman (Missioner) runs affiliate payments and fraud investigation day to day", category: "people", keywords: "mijanur,missioner,payments,fraud,operator", importance: 9 },
+    { content: "Jahan builds and operates the LeadSmart platform", category: "people", keywords: "jahan,builder,admin,platform", importance: 8 },
+    { content: "Weekly affiliates are paid Monday–Sunday weeks after the week closes (net-7)", category: "payments", keywords: "weekly,net7,monday,sunday,payout", importance: 9 },
+    { content: "CPL affiliates have calls to 33 Miles RTT or Inquirly targets in the last 7 days of a month; Ringba finalizes those amounts late", category: "payments", keywords: "cpl,33 miles,inquirly,last week", importance: 9 },
+    { content: "$0 CPL affiliates are held until the second Monday of the following month (Central Time), then payable", category: "payments", keywords: "cpl,hold,second monday,zero", importance: 9 },
+    { content: "Wise payouts route by stored numeric recipient ID assigned via the LINK WISE tool; Bill.com routes by 009 vendor ID", category: "payments", keywords: "wise,recipient id,billcom,vendor id,link wise", importance: 9 },
+    { content: "Bill.com payments can require an MFA code from Seth's phone", category: "payments", keywords: "billcom,mfa,seth,phone", importance: 7 },
+    { content: "The All Unpaid view compiles unpaid earnings across past months, excludes the current month, with a $20 minimum", category: "payments", keywords: "unpaid,all months,20 minimum", importance: 8 },
+    { content: "Fraud detection scans converted calls every 15 minutes: IPQS VOIP checks, cross-publisher caller-ID reuse, AI transcript analysis", category: "fraud", keywords: "fraud,ipqs,voip,shared caller,ai analysis,15 minutes", importance: 9 },
+    { content: "Publisher blocking is always manual from the fraud dashboard — it pauses the affiliate in Ringba; nothing blocks automatically", category: "fraud", keywords: "block,manual,ringba,pause,publisher", importance: 9 },
+    { content: "Publisher fraud risk score is 60% flag rate plus 40% worst severity", category: "fraud", keywords: "risk score,formula,flag rate,severity", importance: 7 },
+    { content: "All money-facing dates and cutoffs use America/Chicago time", category: "system", keywords: "chicago,timezone,central", importance: 8 },
+  ];
+
+  const relations: Array<[string, string, string, string, string]> = [
+    ["Seth", "person", "owns", "LeadSmart", "system"],
+    ["Mijanur Rahman", "person", "operates", "Payment Portal", "system"],
+    ["Mijanur Rahman", "person", "operates", "Fraud Station", "system"],
+    ["Jahan", "person", "builds", "LeadSmart", "system"],
+    ["LeadSmart", "system", "has_component", "Fraud Station", "system"],
+    ["Fraud Station", "system", "uses", "IPQS", "system"],
+    ["Payment Portal", "system", "pays_via", "Wise", "system"],
+    ["Payment Portal", "system", "pays_via", "Bill.com", "system"],
+  ];
+
+  const tx = db.transaction(() => {
+    for (const f of facts) {
+      insertFact.run(randomUUID(), f.content, f.category, f.keywords, 1.3, f.importance, now, now);
+    }
+    for (const [aName, aType, rel, bName, bType] of relations) {
+      const aId = upsertNode(aName, aType);
+      const bId = upsertNode(bName, bType);
+      db.prepare(
+        `INSERT INTO edges (id, source_id, target_id, relationship, strength, created_at, last_reinforced)
+         VALUES (?, ?, ?, ?, 1.0, ?, ?)`,
+      ).run(randomUUID(), aId, bId, rel, now, now);
+    }
+    db.prepare(
+      "INSERT INTO system_state (key, value) VALUES ('seed_v2', ?)",
+    ).run(now);
+  });
+  tx();
+  console.log("[hull/memory] Digital-twin seed v2 applied (%d facts)", facts.length);
+}
+
 export function bootstrapHullMemory(): void {
   const db = getHullDb();
 
   const factCount = (db.prepare("SELECT COUNT(*) as c FROM facts").get() as { c: number }).c;
   if (factCount > 0) {
     console.log("[hull/memory] Already bootstrapped with", factCount, "facts");
+    seedDigitalTwinV2(db);
     return;
   }
 
@@ -109,5 +174,6 @@ export function bootstrapHullMemory(): void {
   });
 
   tx();
+  seedDigitalTwinV2(db);
   console.log("[hull/memory] Bootstrap complete");
 }
