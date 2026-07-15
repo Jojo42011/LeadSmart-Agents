@@ -2858,7 +2858,7 @@ app.get("/jarvis-chat", (_req, res) => {
 });
 
 app.get("/memory-map", (_req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, "memory-map.html"));
+  res.redirect("/memory");
 });
 
 app.get("/api/memory/overview", (_req, res) => {
@@ -2958,8 +2958,9 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// Memory IS the neural map.
 app.get("/memory", (_req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, "memory.html"));
+  res.sendFile(path.join(PUBLIC_DIR, "memory-map.html"));
 });
 
 app.get("*", (_req, res) => {
