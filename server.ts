@@ -385,7 +385,15 @@ app.post(
   }
 );
 
-app.use(express.json());
+// Default JSON parser (100kb). The CPL preview route carries a base64-encoded
+// upload and mounts its own higher-limit parser (express.json({ limit: "25mb" })),
+// so skip the global one for it — otherwise the 100kb default rejects a normal
+// weekly file with PayloadTooLargeError before the route parser is reached.
+const globalJsonParser = express.json();
+app.use((req, res, next) => {
+  if (req.path === "/api/cpl/preview") return next();
+  return globalJsonParser(req, res, next);
+});
 app.use(express.static(PUBLIC_DIR));
 
 console.log(`[Dashboard] Public dir: ${PUBLIC_DIR}`);
