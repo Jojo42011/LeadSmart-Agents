@@ -3,10 +3,17 @@ import { last10, type CplCall } from "./ringbaCplClient";
 import type { CplRowInput } from "./cplDb";
 
 /**
- * Parse a 33 Miles RTT / Inquirly CPL xlsx and match its rows to Ringba calls.
- * Columns: Service Type, Duration, Date, Time (EST), Caller ID, Cost Per Lead.
- * The "EST" time column is parsed as America/New_York, so July files correctly
- * resolve as EDT (UTC-4), not literal EST.
+ * Parse a 33 Miles RTT / Inquirly CPL file (xlsx OR csv) and match its rows to
+ * Ringba calls. XLSX.read auto-detects the format from the buffer, so both work
+ * with no branching. Columns are resolved by name (findKey substring match) in
+ * any order, and any extra columns are ignored, so both the original layout
+ *   Service Type, Duration, Date, Time (EST), Caller ID, Cost Per Lead
+ * and the newer CSV layout
+ *   Account Name, Service Type, Date, Time (EST), Tracking Number,
+ *   Caller ID, Duration, Cost Per Lead, Zip Code
+ * parse identically. Caller IDs may be dash-formatted (954-487-0148); last10()
+ * strips non-digits before matching. The "EST" time column is parsed as
+ * America/New_York, so July files correctly resolve as EDT (UTC-4).
  */
 
 const MATCH_TOLERANCE_MS = 5 * 60 * 1000; // ±5 minutes
