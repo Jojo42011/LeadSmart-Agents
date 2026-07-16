@@ -3,223 +3,435 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>JARVIS · Chat</title>
+    <title>JARVIS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap"
       rel="stylesheet"
     />
     <style>
       :root {
-        --bg: #0a0a0a;
-        --bg-panel: #111111;
-        --bg-card: #161616;
-        --border: #1e1e1e;
-        --border-bright: #2e2e2e;
-        --text: #e8e8e8;
-        --text-dim: #6a6a6a;
-        --green: #00ff88;
-        --amber: #ffb000;
-        --cyan: #00d4ff;
-        --purple: #b388ff;
-        --red: #ff4444;
-        --font: "JetBrains Mono", ui-monospace, monospace;
+        --bg: #0d0d0f;
+        --surface: #17171a;
+        --surface-2: #1e1e22;
+        --line: rgba(255, 255, 255, 0.07);
+        --text: #ececf1;
+        --text-soft: #b4b4be;
+        --text-dim: #6e6e7a;
+        --accent: #00d4ff;
+        --green: #00e08b;
+        --red: #ff5c6c;
+        --sans: "Inter", -apple-system, "Segoe UI", sans-serif;
+        --mono: "JetBrains Mono", ui-monospace, monospace;
       }
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; }
+      html, body { height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 15px;
+        -webkit-font-smoothing: antialiased;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
       .hidden { display: none !important; }
+      ::selection { background: rgba(0, 212, 255, 0.25); }
 
-      .layout { display: flex; flex-direction: column; height: 100vh; }
+      /* ---------- header ---------- */
+      .top {
+        display: flex; align-items: center; gap: 20px;
+        padding: 14px 22px;
+        flex-shrink: 0;
+      }
+      .brand {
+        font-family: var(--mono); font-size: 13px; font-weight: 700;
+        letter-spacing: 3px; color: var(--text);
+      }
+      .brand .dot {
+        display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+        background: var(--accent); margin-right: 9px; vertical-align: 1px;
+        box-shadow: 0 0 10px var(--accent);
+        animation: breathe 3.2s ease-in-out infinite;
+      }
+      @keyframes breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+      .top__spacer { flex: 1; }
+      .top a, .top button.linklike {
+        background: none; border: none; cursor: pointer;
+        color: var(--text-dim); font-family: var(--sans);
+        font-size: 12.5px; font-weight: 500; text-decoration: none;
+        padding: 6px 10px; border-radius: 8px;
+        transition: color 0.15s, background 0.15s;
+      }
+      .top a:hover, .top button.linklike:hover { color: var(--text); background: var(--surface); }
 
-      .topbar {
-        display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-        padding: 14px 20px; border-bottom: 1px solid var(--border);
+      /* ---------- conversation ---------- */
+      .scroll { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+      .thread {
+        max-width: 740px; margin: 0 auto;
+        padding: 18px 24px 40px;
       }
-      .topbar__title { font-size: 14px; font-weight: 700; letter-spacing: 2px; }
-      .topbar__title span { color: var(--cyan); }
-      .topbar__sub { font-size: 9px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; }
-      .topbar__spacer { flex: 1; }
-      .topbar a {
-        color: var(--text-dim); font-size: 10px; letter-spacing: 1px;
-        text-decoration: none; text-transform: uppercase;
-      }
-      .topbar a:hover { color: var(--text); }
 
-      .main { flex: 1; display: flex; min-height: 0; }
+      .turn { margin-bottom: 26px; animation: rise 0.25s ease both; }
+      @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
-      /* ---------- CHAT ---------- */
-      .chat { flex: 1.4; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border); }
-      .chat__scroll { flex: 1; overflow-y: auto; padding: 20px; }
-      .msg { max-width: 78%; margin-bottom: 14px; padding: 10px 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
-      .msg--user { margin-left: auto; background: rgba(0, 212, 255, 0.07); border: 1px solid rgba(0, 212, 255, 0.25); }
-      .msg--jarvis { margin-right: auto; background: var(--bg-panel); border: 1px solid var(--border-bright); }
-      .msg__meta { font-size: 9px; letter-spacing: 1px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 5px; }
-      .msg--jarvis .msg__meta { color: var(--cyan); }
-      .msg--thinking { color: var(--text-dim); font-style: italic; }
-      .chat__inputbar { display: flex; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); }
-      .chat__input {
-        flex: 1; background: var(--bg-card); border: 1px solid var(--border-bright);
-        color: var(--text); font-family: var(--font); font-size: 13px;
-        padding: 11px 13px; resize: none; outline: none; min-height: 44px; max-height: 160px;
+      .turn--user { display: flex; justify-content: flex-end; }
+      .turn--user .bubble {
+        max-width: 78%;
+        background: var(--surface-2);
+        border-radius: 18px;
+        padding: 11px 16px;
+        line-height: 1.65;
+        white-space: pre-wrap;
+        word-break: break-word;
       }
-      .chat__input:focus { border-color: rgba(0, 212, 255, 0.5); }
-      .btn {
-        font-family: var(--font); font-size: 11px; font-weight: 700; letter-spacing: 1px;
-        padding: 10px 16px; cursor: pointer;
-        background: var(--bg-card); border: 1px solid var(--border-bright); color: var(--text);
-      }
-      .btn--cyan { border-color: rgba(0, 212, 255, 0.5); color: var(--cyan); }
-      .btn--cyan:hover { background: rgba(0, 212, 255, 0.08); }
-      .btn--green { border-color: rgba(0, 255, 136, 0.5); color: var(--green); }
-      .btn--green:hover { background: rgba(0, 255, 136, 0.08); }
-      .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-      /* ---------- FEED ---------- */
-      .feed { flex: 1; display: flex; flex-direction: column; min-width: 320px; max-width: 480px; }
-      .feed__head { padding: 14px 18px 6px; }
-      .feed__title { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: var(--green); }
-      .feed__sub { font-size: 10px; color: var(--text-dim); margin-top: 4px; line-height: 1.5; }
-      .feed__form { padding: 10px 18px; display: flex; flex-direction: column; gap: 8px; }
-      .feed__form input[type="text"] {
-        background: var(--bg-card); border: 1px solid var(--border-bright); color: var(--text);
-        font-family: var(--font); font-size: 12px; padding: 8px 10px; outline: none;
+      .turn--jarvis { display: flex; gap: 14px; }
+      .avatar {
+        width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%;
+        margin-top: 2px;
+        background: radial-gradient(circle at 35% 35%, rgba(0, 212, 255, 0.9), rgba(0, 212, 255, 0.15) 70%);
+        box-shadow: 0 0 14px rgba(0, 212, 255, 0.35);
       }
-      .feed__text {
-        background: var(--bg-card); border: 1px solid var(--border-bright); color: var(--text);
-        font-family: var(--font); font-size: 12px; padding: 10px; outline: none;
-        min-height: 130px; resize: vertical;
+      .reply { min-width: 0; line-height: 1.7; color: var(--text); }
+      .reply p { margin: 0 0 10px; }
+      .reply p:last-child { margin-bottom: 0; }
+      .reply ul, .reply ol { margin: 4px 0 10px 20px; }
+      .reply li { margin-bottom: 4px; }
+      .reply strong { font-weight: 600; color: #fff; }
+      .reply code {
+        font-family: var(--mono); font-size: 12.5px;
+        background: var(--surface-2); border-radius: 5px; padding: 1.5px 6px;
       }
-      .feed__text:focus, .feed__form input:focus { border-color: rgba(0, 255, 136, 0.45); }
-      .dropzone {
-        border: 1px dashed var(--border-bright); padding: 10px; text-align: center;
-        font-size: 10px; color: var(--text-dim); cursor: pointer; letter-spacing: 1px;
+      .reply pre {
+        background: var(--surface); border: 1px solid var(--line);
+        border-radius: 10px; padding: 12px 14px; margin: 6px 0 12px;
+        overflow-x: auto;
       }
-      .dropzone--over { border-color: var(--green); color: var(--green); }
-      .feed__status { font-size: 10px; min-height: 14px; padding: 0 18px; color: var(--amber); }
+      .reply pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; }
+      .reply .note {
+        font-size: 11.5px; color: var(--text-dim); margin-top: 8px;
+      }
+      .reply--error { color: var(--red); }
 
-      .docs { flex: 1; overflow-y: auto; padding: 8px 18px 20px; }
-      .doc { border: 1px solid var(--border); background: var(--bg-panel); padding: 10px 12px; margin-bottom: 8px; }
-      .doc__title { font-size: 12px; font-weight: 700; }
-      .doc__meta { font-size: 10px; color: var(--text-dim); margin-top: 3px; }
-      .doc__bar { height: 4px; background: var(--bg-card); margin-top: 7px; border: 1px solid var(--border-bright); position: relative; }
-      .doc__fill { position: absolute; inset: 0 auto 0 0; background: var(--green); transition: width 0.4s; }
-      .doc--error .doc__fill { background: var(--red); }
-      .doc__row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-      .doc__retract {
-        font-family: var(--font); font-size: 9px; letter-spacing: 1px; padding: 4px 8px;
-        cursor: pointer; background: transparent; border: 1px solid rgba(255, 68, 68, 0.4); color: var(--red);
+      /* typing indicator */
+      .dots { display: inline-flex; gap: 5px; padding: 8px 0; }
+      .dots span {
+        width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim);
+        animation: blink 1.2s ease-in-out infinite;
       }
-      .doc__status--done { color: var(--green); }
-      .doc__status--error { color: var(--red); }
-      .doc__status--processing { color: var(--amber); }
-      .doc__status--retracted { color: var(--text-dim); text-decoration: line-through; }
+      .dots span:nth-child(2) { animation-delay: 0.18s; }
+      .dots span:nth-child(3) { animation-delay: 0.36s; }
+      @keyframes blink { 0%, 70%, 100% { opacity: 0.25; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-2px); } }
 
-      @media (max-width: 900px) {
-        .main { flex-direction: column; }
-        .feed { max-width: none; border-top: 1px solid var(--border); }
-        .chat { border-right: none; }
+      /* caret during typewriter reveal */
+      .caret::after {
+        content: ""; display: inline-block; width: 7px; height: 15px;
+        background: var(--accent); margin-left: 2px; vertical-align: -2px;
+        animation: blink 0.9s steps(1) infinite;
+      }
+
+      /* ---------- empty state ---------- */
+      .empty {
+        max-width: 740px; margin: 0 auto; padding: 12vh 24px 0;
+        text-align: center;
+      }
+      .empty h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.3px; margin-bottom: 8px; }
+      .empty p { color: var(--text-dim); font-size: 14px; margin-bottom: 34px; }
+      .chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+      .chip {
+        background: none; cursor: pointer;
+        border: 1px solid var(--line); border-radius: 14px;
+        color: var(--text-soft); font-family: var(--sans); font-size: 13px;
+        padding: 10px 16px;
+        transition: border-color 0.15s, background 0.15s, color 0.15s;
+      }
+      .chip:hover { border-color: rgba(0, 212, 255, 0.4); background: var(--surface); color: var(--text); }
+
+      /* ---------- composer ---------- */
+      .composerwrap {
+        flex-shrink: 0;
+        padding: 10px 24px calc(18px + env(safe-area-inset-bottom));
+        background: linear-gradient(transparent, var(--bg) 40%);
+      }
+      .composer {
+        max-width: 740px; margin: 0 auto;
+        display: flex; align-items: flex-end; gap: 6px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 26px;
+        padding: 8px 8px 8px 6px;
+        transition: border-color 0.15s, box-shadow 0.15s;
+      }
+      .composer:focus-within {
+        border-color: rgba(255, 255, 255, 0.16);
+        box-shadow: 0 6px 30px rgba(0, 0, 0, 0.45);
+      }
+      .iconbtn {
+        width: 38px; height: 38px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: none; border: none; border-radius: 50%; cursor: pointer;
+        color: var(--text-dim); font-size: 20px; line-height: 1;
+        transition: background 0.15s, color 0.15s;
+      }
+      .iconbtn:hover { background: var(--surface-2); color: var(--text); }
+      .composer textarea {
+        flex: 1; background: none; border: none; outline: none; resize: none;
+        color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.55;
+        max-height: 180px; padding: 9px 4px;
+      }
+      .composer textarea::placeholder { color: var(--text-dim); }
+      .sendbtn {
+        width: 38px; height: 38px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        border: none; border-radius: 50%; cursor: pointer;
+        background: var(--text); color: var(--bg);
+        transition: opacity 0.15s, transform 0.1s;
+      }
+      .sendbtn:disabled { opacity: 0.25; cursor: default; }
+      .sendbtn svg { width: 16px; height: 16px; }
+      .footnote {
+        max-width: 740px; margin: 8px auto 0; text-align: center;
+        font-size: 11px; color: var(--text-dim);
+      }
+
+      /* ---------- memory sheet ---------- */
+      .sheetveil {
+        position: fixed; inset: 0; z-index: 40;
+        background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(2px);
+        opacity: 0; pointer-events: none; transition: opacity 0.2s;
+      }
+      .sheetveil.open { opacity: 1; pointer-events: auto; }
+      .sheet {
+        position: fixed; left: 50%; bottom: 0; z-index: 41;
+        transform: translate(-50%, 105%);
+        width: min(680px, calc(100vw - 24px));
+        max-height: 78vh; overflow-y: auto;
+        background: var(--surface);
+        border: 1px solid var(--line); border-bottom: none;
+        border-radius: 18px 18px 0 0;
+        padding: 22px 24px 30px;
+        transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+      }
+      .sheet.open { transform: translate(-50%, 0); }
+      .sheet h2 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+      .sheet .sub { font-size: 12.5px; color: var(--text-dim); margin-bottom: 18px; line-height: 1.55; }
+      .sheet input[type="text"], .sheet textarea {
+        width: 100%; background: var(--bg); border: 1px solid var(--line);
+        border-radius: 10px; color: var(--text);
+        font-family: var(--sans); font-size: 13.5px;
+        padding: 10px 12px; outline: none; margin-bottom: 10px;
+      }
+      .sheet textarea { min-height: 120px; resize: vertical; line-height: 1.6; }
+      .sheet input:focus, .sheet textarea:focus { border-color: rgba(0, 224, 139, 0.4); }
+      .drop {
+        border: 1px dashed var(--line); border-radius: 10px;
+        padding: 12px; text-align: center; cursor: pointer;
+        font-size: 12px; color: var(--text-dim); margin-bottom: 12px;
+        transition: border-color 0.15s, color 0.15s;
+      }
+      .drop:hover, .drop.over { border-color: var(--green); color: var(--green); }
+      .sheet .actions { display: flex; justify-content: flex-end; gap: 10px; }
+      .pillbtn {
+        border: none; border-radius: 20px; cursor: pointer;
+        font-family: var(--sans); font-size: 13px; font-weight: 600;
+        padding: 10px 20px;
+        background: var(--surface-2); color: var(--text-soft);
+        transition: opacity 0.15s;
+      }
+      .pillbtn--primary { background: var(--green); color: #08110c; }
+      .pillbtn:disabled { opacity: 0.4; cursor: default; }
+      .sheetstatus { font-size: 12px; color: var(--text-dim); min-height: 16px; margin: 8px 0 4px; }
+
+      .docrow {
+        display: flex; align-items: center; gap: 12px;
+        padding: 11px 2px; border-top: 1px solid var(--line);
+      }
+      .docrow:first-of-type { border-top: none; }
+      .docrow__body { flex: 1; min-width: 0; }
+      .docrow__title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .docrow__meta { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+      .docrow__meta.ok { color: var(--green); }
+      .docrow__meta.err { color: var(--red); }
+      .docrow__bar { height: 3px; border-radius: 2px; background: var(--bg); margin-top: 7px; overflow: hidden; }
+      .docrow__fill { height: 100%; background: var(--green); transition: width 0.4s; }
+      .docrow__x {
+        background: none; border: none; cursor: pointer;
+        color: var(--text-dim); font-size: 11px; font-family: var(--sans);
+        padding: 5px 8px; border-radius: 7px;
+      }
+      .docrow__x:hover { color: var(--red); background: var(--bg); }
+      .sheet .docshead {
+        font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+        color: var(--text-dim); margin: 20px 0 6px;
       }
     </style>
   </head>
   <body>
-    <div class="layout">
-      <div class="topbar">
-        <div>
-          <div class="topbar__title">JARVIS <span>CHAT</span></div>
-          <div class="topbar__sub">LeadSmart digital twin · persistent memory · live department access</div>
-        </div>
-        <div class="topbar__spacer"></div>
-        <a href="https://war-room-dashboard-livid.vercel.app/">War Room</a>
-        <a href="/memory">Memory</a>
-      </div>
+    <header class="top">
+      <div class="brand"><span class="dot"></span>JARVIS</div>
+      <div class="top__spacer"></div>
+      <button class="linklike" id="newChatBtn" type="button" title="Start a fresh conversation">New chat</button>
+      <a href="/memory">Memory</a>
+      <a href="https://war-room-dashboard-livid.vercel.app/">War Room</a>
+    </header>
 
-      <div class="main">
-        <!-- CHAT PANE -->
-        <div class="chat">
-          <div class="chat__scroll" id="chatScroll">
-            <div class="msg msg--jarvis">
-              <div class="msg__meta">JARVIS</div>
-              <div>Online. I have live access to the scrub agent, payment department, and fraud station — ask me where anything stands, or feed me documents on the right and I'll commit them to memory.</div>
-            </div>
-          </div>
-          <div class="chat__inputbar">
-            <textarea class="chat__input" id="chatInput" placeholder="Ask about scrub, payments, fraud — or anything I should remember…" rows="1"></textarea>
-            <button class="btn btn--cyan" id="sendBtn" type="button">SEND</button>
-          </div>
-        </div>
-
-        <!-- MEMORY FEED PANE -->
-        <div class="feed">
-          <div class="feed__head">
-            <div class="feed__title">MEMORY FEED</div>
-            <div class="feed__sub">
-              Paste long text or drop .txt / .md / .csv files. Content is chunked, distilled into
-              facts + relationships, and stored permanently. Retract removes everything a document taught.
-            </div>
-          </div>
-          <div class="feed__form">
-            <input type="text" id="docTitle" placeholder="Title (e.g. Affiliate contract — Ramzan Ali)" />
-            <input type="text" id="docSource" placeholder="Source (optional — e.g. WhatsApp, email, contract)" />
-            <textarea class="feed__text" id="docText" placeholder="Paste the document text here…"></textarea>
-            <div class="dropzone" id="dropzone">DROP FILES HERE OR CLICK TO PICK (.txt .md .csv)</div>
-            <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.csv,.log,.json" multiple />
-            <button class="btn btn--green" id="ingestBtn" type="button">INGEST INTO MEMORY</button>
-          </div>
-          <div class="feed__status" id="feedStatus"></div>
-          <div class="docs" id="docsList"></div>
+    <div class="scroll" id="scroll">
+      <div class="empty" id="empty">
+        <h1>What do you need?</h1>
+        <p>Live access to scrub, payments, and fraud — and a memory that never forgets.</p>
+        <div class="chips">
+          <button class="chip" type="button">Where is everything today?</button>
+          <button class="chip" type="button">Any fraud flags in the last 24 hours?</button>
+          <button class="chip" type="button">How are payments looking this month?</button>
+          <button class="chip" type="button">What do you remember about CPL rules?</button>
         </div>
       </div>
+      <div class="thread" id="thread"></div>
+    </div>
+
+    <div class="composerwrap">
+      <div class="composer">
+        <button class="iconbtn" id="attachBtn" type="button" title="Feed memory — documents, notes, anything">＋</button>
+        <textarea id="input" placeholder="Message JARVIS" rows="1"></textarea>
+        <button class="sendbtn" id="sendBtn" type="button" disabled aria-label="Send">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5l5.5 5.5-1.06 1.06L8.75 4.37V14.5h-1.5V4.37L3.56 8.06 2.5 7 8 1.5z"/></svg>
+        </button>
+      </div>
+      <div class="footnote">JARVIS reads live department data. Drop a file anywhere to feed memory.</div>
+    </div>
+
+    <!-- memory sheet -->
+    <div class="sheetveil" id="sheetVeil"></div>
+    <div class="sheet" id="sheet">
+      <h2>Feed memory</h2>
+      <div class="sub">
+        Paste long text or drop .txt / .md / .csv files. JARVIS distills it into permanent
+        memory — facts, people, rules. Remove removes everything a document taught.
+      </div>
+      <input type="text" id="docTitle" placeholder="Title" />
+      <textarea id="docText" placeholder="Paste text here…"></textarea>
+      <div class="drop" id="drop">Drop files or click to browse</div>
+      <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.csv,.log,.json" multiple />
+      <div class="sheetstatus" id="sheetStatus"></div>
+      <div class="actions">
+        <button class="pillbtn" id="sheetClose" type="button">Close</button>
+        <button class="pillbtn pillbtn--primary" id="ingestBtn" type="button">Commit to memory</button>
+      </div>
+      <div class="docshead" id="docsHead">Memory documents</div>
+      <div id="docs"></div>
     </div>
 
     <script>
       (function () {
-        const chatScroll = document.getElementById("chatScroll");
-        const chatInput = document.getElementById("chatInput");
+        const scroll = document.getElementById("scroll");
+        const thread = document.getElementById("thread");
+        const empty = document.getElementById("empty");
+        const input = document.getElementById("input");
         const sendBtn = document.getElementById("sendBtn");
+        const attachBtn = document.getElementById("attachBtn");
+        const newChatBtn = document.getElementById("newChatBtn");
+        const sheet = document.getElementById("sheet");
+        const sheetVeil = document.getElementById("sheetVeil");
+        const sheetClose = document.getElementById("sheetClose");
+        const sheetStatus = document.getElementById("sheetStatus");
         const docTitle = document.getElementById("docTitle");
-        const docSource = document.getElementById("docSource");
         const docText = document.getElementById("docText");
-        const dropzone = document.getElementById("dropzone");
+        const drop = document.getElementById("drop");
         const fileInput = document.getElementById("fileInput");
         const ingestBtn = document.getElementById("ingestBtn");
-        const feedStatus = document.getElementById("feedStatus");
-        const docsList = document.getElementById("docsList");
+        const docs = document.getElementById("docs");
 
-        const sessionId =
+        let sessionId =
           sessionStorage.getItem("jarvis_chat_session") ||
-          ("chat-" + Date.now() + "-" + Math.floor(Math.random() * 1e6));
+          "chat-" + Date.now() + "-" + Math.floor(Math.random() * 1e6);
         sessionStorage.setItem("jarvis_chat_session", sessionId);
 
         let sending = false;
         let pollTimer = null;
 
+        /* ---------- markdown-lite (escape first, then format) ---------- */
         function esc(s) {
           return String(s == null ? "" : s)
             .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
-
-        function addMessage(role, text, thinking) {
-          const div = document.createElement("div");
-          div.className = "msg " + (role === "user" ? "msg--user" : "msg--jarvis") +
-            (thinking ? " msg--thinking" : "");
-          div.innerHTML =
-            '<div class="msg__meta">' + (role === "user" ? "YOU" : "JARVIS") + "</div>" +
-            "<div>" + esc(text) + "</div>";
-          chatScroll.appendChild(div);
-          chatScroll.scrollTop = chatScroll.scrollHeight;
-          return div;
+        function md(text) {
+          let t = esc(text);
+          t = t.replace(/```([\s\S]*?)```/g, (_, code) => "<pre><code>" + code.trim() + "</code></pre>");
+          t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+          t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+          t = t.replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[.,])/g, "$1<em>$2</em>");
+          // group consecutive "- " lines into lists
+          t = t.replace(/(^|\n)((?:[-•] .*(?:\n|$))+)/g, (_, lead, block) => {
+            const items = block.trim().split("\n")
+              .map((l) => "<li>" + l.replace(/^[-•] /, "") + "</li>").join("");
+            return lead + "<ul>" + items + "</ul>";
+          });
+          // paragraphs
+          return t.split(/\n{2,}/).map((p) =>
+            p.startsWith("<ul>") || p.startsWith("<pre>") ? p : "<p>" + p.replace(/\n/g, "<br />") + "</p>"
+          ).join("");
         }
 
-        async function sendMessage() {
-          const message = chatInput.value.trim();
+        /* ---------- messages ---------- */
+        function hideEmpty() { empty.classList.add("hidden"); }
+        function toBottom() { scroll.scrollTop = scroll.scrollHeight; }
+
+        function addUser(text) {
+          hideEmpty();
+          const turn = document.createElement("div");
+          turn.className = "turn turn--user";
+          const bubble = document.createElement("div");
+          bubble.className = "bubble";
+          bubble.textContent = text;
+          turn.appendChild(bubble);
+          thread.appendChild(turn);
+          toBottom();
+        }
+
+        function addJarvisShell() {
+          hideEmpty();
+          const turn = document.createElement("div");
+          turn.className = "turn turn--jarvis";
+          turn.innerHTML =
+            '<div class="avatar"></div>' +
+            '<div class="reply"><span class="dots"><span></span><span></span><span></span></span></div>';
+          thread.appendChild(turn);
+          toBottom();
+          return turn.querySelector(".reply");
+        }
+
+        /* typewriter reveal: fast, capped ~1.6s regardless of length */
+        function reveal(replyEl, text, note) {
+          const total = text.length;
+          const step = Math.max(3, Math.ceil(total / 90));
+          let i = 0;
+          replyEl.classList.add("caret");
+          const timer = setInterval(() => {
+            i = Math.min(total, i + step);
+            replyEl.innerHTML = md(text.slice(0, i));
+            replyEl.classList.add("caret");
+            toBottom();
+            if (i >= total) {
+              clearInterval(timer);
+              replyEl.classList.remove("caret");
+              replyEl.innerHTML = md(text) + (note ? '<div class="note">' + esc(note) + "</div>" : "");
+              toBottom();
+            }
+          }, 16);
+        }
+
+        async function send(text) {
+          const message = (text != null ? text : input.value).trim();
           if (!message || sending) return;
           sending = true;
-          sendBtn.disabled = true;
-          chatInput.value = "";
-          autoGrow();
-          addMessage("user", message);
-          const thinkingEl = addMessage("jarvis", "…", true);
+          input.value = "";
+          grow();
+          syncSend();
+          addUser(message);
+          const replyEl = addJarvisShell();
 
           try {
             const res = await fetch("/api/jarvis/chat", {
@@ -228,46 +440,72 @@
               body: JSON.stringify({ sessionId, message }),
             });
             const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "Chat failed");
-            thinkingEl.classList.remove("msg--thinking");
-            thinkingEl.innerHTML =
-              '<div class="msg__meta">JARVIS' +
-              (data.toolRounds ? " · " + data.toolRounds + " tool call(s)" : "") +
-              "</div><div>" + esc(data.speech || "(no reply)") + "</div>";
+            if (!res.ok) throw new Error(data.error || "Something went wrong");
+            const note = data.toolRounds
+              ? "Checked live data · " + data.toolRounds + " lookup" + (data.toolRounds > 1 ? "s" : "")
+              : "";
+            reveal(replyEl, data.speech || "…", note);
           } catch (err) {
-            thinkingEl.classList.remove("msg--thinking");
-            thinkingEl.innerHTML =
-              '<div class="msg__meta" style="color:var(--red)">ERROR</div><div>' +
-              esc(err.message || "Chat failed") + "</div>";
+            replyEl.classList.add("reply--error");
+            replyEl.textContent = err.message || "Something went wrong";
           } finally {
             sending = false;
-            sendBtn.disabled = false;
-            chatScroll.scrollTop = chatScroll.scrollHeight;
-            chatInput.focus();
+            syncSend();
+            input.focus();
           }
         }
 
-        function autoGrow() {
-          chatInput.style.height = "auto";
-          chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + "px";
+        /* ---------- composer ---------- */
+        function grow() {
+          input.style.height = "auto";
+          input.style.height = Math.min(input.scrollHeight, 180) + "px";
         }
-        chatInput.addEventListener("input", autoGrow);
-        chatInput.addEventListener("keydown", (e) => {
+        function syncSend() {
+          sendBtn.disabled = sending || !input.value.trim();
+        }
+        input.addEventListener("input", () => { grow(); syncSend(); });
+        input.addEventListener("keydown", (e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            void sendMessage();
+            void send();
           }
         });
-        sendBtn.addEventListener("click", () => { void sendMessage(); });
+        sendBtn.addEventListener("click", () => { void send(); });
 
-        /* ---------- INGESTION ---------- */
+        document.querySelectorAll(".chip").forEach((chip) =>
+          chip.addEventListener("click", () => { void send(chip.textContent); })
+        );
+
+        newChatBtn.addEventListener("click", () => {
+          sessionId = "chat-" + Date.now() + "-" + Math.floor(Math.random() * 1e6);
+          sessionStorage.setItem("jarvis_chat_session", sessionId);
+          thread.innerHTML = "";
+          empty.classList.remove("hidden");
+          input.focus();
+        });
+
+        /* ---------- memory sheet ---------- */
+        function openSheet() {
+          sheet.classList.add("open");
+          sheetVeil.classList.add("open");
+          void loadDocs().then((busy) => { if (busy) startPolling(); });
+        }
+        function closeSheet() {
+          sheet.classList.remove("open");
+          sheetVeil.classList.remove("open");
+        }
+        attachBtn.addEventListener("click", openSheet);
+        sheetClose.addEventListener("click", closeSheet);
+        sheetVeil.addEventListener("click", closeSheet);
+        window.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
 
         function readFiles(files) {
+          const list = [...files].filter(Boolean);
+          if (!list.length) return;
+          let pending = list.length;
           const texts = [];
-          let pending = files.length;
-          if (!pending) return;
-          feedStatus.textContent = "Reading " + pending + " file(s)…";
-          for (const file of files) {
+          sheetStatus.textContent = "Reading " + pending + " file(s)…";
+          for (const file of list) {
             const reader = new FileReader();
             reader.onload = () => {
               texts.push({ name: file.name, text: String(reader.result || "") });
@@ -275,92 +513,89 @@
               if (pending === 0) {
                 const combined = texts.map((t) => t.text).join("\n\n");
                 docText.value = (docText.value ? docText.value + "\n\n" : "") + combined;
-                if (!docTitle.value && texts.length === 1) {
-                  docTitle.value = texts[0].name;
-                }
-                feedStatus.textContent =
-                  "Loaded " + texts.length + " file(s) — " + combined.length.toLocaleString() + " chars. Review and hit INGEST.";
+                if (!docTitle.value && texts.length === 1) docTitle.value = texts[0].name;
+                sheetStatus.textContent =
+                  texts.length + " file(s) loaded · " + combined.length.toLocaleString() + " characters";
               }
             };
             reader.readAsText(file);
           }
         }
 
-        dropzone.addEventListener("click", () => fileInput.click());
-        fileInput.addEventListener("change", () => {
-          readFiles([...fileInput.files]);
-          fileInput.value = "";
-        });
+        drop.addEventListener("click", () => fileInput.click());
+        fileInput.addEventListener("change", () => { readFiles(fileInput.files); fileInput.value = ""; });
         ["dragover", "dragenter"].forEach((evt) =>
-          dropzone.addEventListener(evt, (e) => {
-            e.preventDefault();
-            dropzone.classList.add("dropzone--over");
-          })
+          drop.addEventListener(evt, (e) => { e.preventDefault(); drop.classList.add("over"); })
         );
         ["dragleave", "drop"].forEach((evt) =>
-          dropzone.addEventListener(evt, (e) => {
-            e.preventDefault();
-            dropzone.classList.remove("dropzone--over");
-          })
+          drop.addEventListener(evt, (e) => { e.preventDefault(); drop.classList.remove("over"); })
         );
-        dropzone.addEventListener("drop", (e) => {
-          readFiles([...e.dataTransfer.files]);
+        drop.addEventListener("drop", (e) => readFiles(e.dataTransfer.files));
+
+        // drop a file ANYWHERE on the page → open the sheet with it loaded
+        window.addEventListener("dragover", (e) => e.preventDefault());
+        window.addEventListener("drop", (e) => {
+          e.preventDefault();
+          if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+            openSheet();
+            readFiles(e.dataTransfer.files);
+          }
         });
 
         async function ingest() {
           const text = docText.value.trim();
           if (!text) {
-            feedStatus.textContent = "Nothing to ingest — paste text or drop a file first.";
+            sheetStatus.textContent = "Paste text or drop a file first.";
             return;
           }
           ingestBtn.disabled = true;
-          feedStatus.textContent = "Submitting…";
+          sheetStatus.textContent = "Committing…";
           try {
             const res = await fetch("/api/memory/ingest", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 title: docTitle.value.trim() || "Untitled",
-                source: docSource.value.trim() || null,
+                source: "chat",
                 text,
               }),
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || "Ingestion failed");
-            feedStatus.textContent =
-              "Ingesting “" + (data.document.title || "Untitled") + "” — " +
-              data.document.chunkCount + " chunk(s). Watch progress below.";
+            sheetStatus.textContent =
+              "Learning “" + data.document.title + "” — " + data.document.chunkCount + " part(s).";
             docText.value = "";
             docTitle.value = "";
-            docSource.value = "";
             await loadDocs();
             startPolling();
           } catch (err) {
-            feedStatus.textContent = err.message || "Ingestion failed";
+            sheetStatus.textContent = err.message || "Ingestion failed";
           } finally {
             ingestBtn.disabled = false;
           }
         }
         ingestBtn.addEventListener("click", () => { void ingest(); });
 
-        function docStatusLabel(doc) {
-          if (doc.status === "done") return "DONE · " + doc.factsExtracted + " facts learned";
-          if (doc.status === "error") return "ERROR · " + (doc.error || "failed");
-          if (doc.status === "retracted") return "RETRACTED";
-          return "PROCESSING · chunk " + doc.chunksDone + "/" + doc.chunkCount +
-            " · " + doc.factsExtracted + " facts";
+        function docMeta(doc) {
+          if (doc.status === "done") return { text: doc.factsExtracted + " facts learned", cls: "ok" };
+          if (doc.status === "error") return { text: doc.error || "Failed", cls: "err" };
+          if (doc.status === "retracted") return { text: "Removed from memory", cls: "" };
+          return {
+            text: "Learning… " + doc.chunksDone + "/" + doc.chunkCount + " · " + doc.factsExtracted + " facts",
+            cls: "",
+          };
         }
 
         async function retract(doc) {
-          if (!confirm('Retract "' + doc.title + '"? Everything Jarvis learned from it will be forgotten.')) return;
+          if (!confirm('Remove "' + doc.title + '" from memory? Everything it taught will be forgotten.')) return;
           try {
             const res = await fetch("/api/memory/documents/" + encodeURIComponent(doc.id), { method: "DELETE" });
             const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "Retract failed");
-            feedStatus.textContent = "Retracted — " + data.retractedFacts + " fact(s) forgotten.";
+            if (!res.ok) throw new Error(data.error || "Remove failed");
+            sheetStatus.textContent = data.retractedFacts + " fact(s) forgotten.";
             await loadDocs();
           } catch (err) {
-            feedStatus.textContent = err.message || "Retract failed";
+            sheetStatus.textContent = err.message || "Remove failed";
           }
         }
 
@@ -368,38 +603,36 @@
           try {
             const res = await fetch("/api/memory/documents");
             const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "load failed");
-            const docs = data.documents || [];
-            docsList.innerHTML = "";
-            if (!docs.length) {
-              docsList.innerHTML =
-                '<div class="doc__meta" style="padding:6px 2px;">No documents ingested yet.</div>';
+            if (!res.ok) throw new Error();
+            const rows = data.documents || [];
+            docs.innerHTML = "";
+            if (!rows.length) {
+              docs.innerHTML = '<div class="docrow__meta" style="padding:8px 2px;">Nothing ingested yet.</div>';
               return false;
             }
-            let anyProcessing = false;
-            for (const doc of docs) {
-              if (doc.status === "processing") anyProcessing = true;
-              const pct = doc.chunkCount
-                ? Math.round((doc.chunksDone / doc.chunkCount) * 100)
-                : 0;
-              const div = document.createElement("div");
-              div.className = "doc" + (doc.status === "error" ? " doc--error" : "");
-              div.innerHTML =
-                '<div class="doc__row"><div class="doc__title">' + esc(doc.title) + "</div>" +
-                (doc.status !== "retracted"
-                  ? '<button class="doc__retract" type="button">RETRACT</button>'
+            let busy = false;
+            for (const doc of rows) {
+              if (doc.status === "processing") busy = true;
+              const meta = docMeta(doc);
+              const pct = doc.chunkCount ? Math.round((doc.chunksDone / doc.chunkCount) * 100) : 0;
+              const row = document.createElement("div");
+              row.className = "docrow";
+              row.innerHTML =
+                '<div class="docrow__body">' +
+                '<div class="docrow__title">' + esc(doc.title) + "</div>" +
+                '<div class="docrow__meta ' + meta.cls + '">' + esc(meta.text) + "</div>" +
+                (doc.status === "processing"
+                  ? '<div class="docrow__bar"><div class="docrow__fill" style="width:' + pct + '%"></div></div>'
                   : "") +
                 "</div>" +
-                '<div class="doc__meta doc__status--' + esc(doc.status) + '">' +
-                esc(docStatusLabel(doc)) + "</div>" +
-                '<div class="doc__meta">' + doc.chars.toLocaleString() + " chars" +
-                (doc.source ? " · " + esc(doc.source) : "") + "</div>" +
-                '<div class="doc__bar"><div class="doc__fill" style="width:' + pct + '%"></div></div>';
-              const btn = div.querySelector(".doc__retract");
-              if (btn) btn.addEventListener("click", () => { void retract(doc); });
-              docsList.appendChild(div);
+                (doc.status !== "retracted"
+                  ? '<button class="docrow__x" type="button">Remove</button>'
+                  : "");
+              const x = row.querySelector(".docrow__x");
+              if (x) x.addEventListener("click", () => { void retract(doc); });
+              docs.appendChild(row);
             }
-            return anyProcessing;
+            return busy;
           } catch {
             return false;
           }
@@ -408,18 +641,12 @@
         function startPolling() {
           if (pollTimer) return;
           pollTimer = setInterval(async () => {
-            const anyProcessing = await loadDocs();
-            if (!anyProcessing) {
-              clearInterval(pollTimer);
-              pollTimer = null;
-            }
+            const busy = await loadDocs();
+            if (!busy) { clearInterval(pollTimer); pollTimer = null; }
           }, 3000);
         }
 
-        void loadDocs().then((anyProcessing) => {
-          if (anyProcessing) startPolling();
-        });
-        chatInput.focus();
+        input.focus();
       })();
     </script>
   </body>
