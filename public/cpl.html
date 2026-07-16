@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LeadSmart · CPL Updater</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0a0a0a; --panel: #111; --card: #161616;
+        --border: #1e1e1e; --border-b: #2e2e2e;
+        --text: #e8e8e8; --dim: #6a6a6a;
+        --green: #00ff88; --amber: #ffb000; --red: #ff4444; --cyan: #00d4ff;
+        --font: "JetBrains Mono", ui-monospace, monospace;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { min-height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; }
+      .hidden { display: none !important; }
+      ::selection { background: rgba(0, 212, 255, 0.25); }
+
+      .login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+      .login-card { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--border-b); padding: 32px 28px; position: relative; }
+      .login-card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--cyan); }
+      .login-card__title { font-size: 14px; font-weight: 700; letter-spacing: 2px; margin-bottom: 4px; }
+      .login-card__sub { font-size: 10px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; margin-bottom: 24px; }
+      .field-label { display: block; font-size: 10px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; margin-bottom: 8px; }
+      .login-input { width: 100%; background: var(--card); border: 1px solid var(--border-b); color: var(--text); font-family: var(--font); font-size: 13px; padding: 10px 12px; margin-bottom: 14px; outline: none; }
+      .login-input:focus { border-color: var(--cyan); }
+      .login-error { color: var(--red); font-size: 11px; min-height: 16px; margin-bottom: 10px; }
+
+      .btn { font-family: var(--font); font-size: 11px; font-weight: 700; letter-spacing: 1px; padding: 10px 16px; cursor: pointer; border: 1px solid var(--border-b); background: var(--card); color: var(--text); }
+      .btn--primary { border-color: rgba(0, 212, 255, 0.5); color: var(--cyan); width: 100%; }
+      .btn--primary:hover { background: rgba(0, 212, 255, 0.1); }
+      .btn--go { border-color: rgba(0, 255, 136, 0.55); color: var(--green); }
+      .btn--go:hover { background: rgba(0, 255, 136, 0.1); }
+      .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+      .wrap { max-width: 1500px; margin: 0 auto; padding: 20px 22px 60px; }
+      .topbar { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+      .topbar__title { font-size: 15px; font-weight: 700; letter-spacing: 2px; }
+      .topbar__title span { color: var(--cyan); }
+      .topbar__sub { font-size: 10px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; }
+      .topbar__spacer { flex: 1; }
+      .topbar a { color: var(--dim); font-size: 10px; letter-spacing: 1px; text-decoration: none; text-transform: uppercase; }
+      .topbar a:hover { color: var(--text); }
+
+      .uploadzone { border: 1px dashed var(--border-b); background: var(--panel); padding: 26px; text-align: center; cursor: pointer; transition: border-color .15s, color .15s; }
+      .uploadzone:hover, .uploadzone.over { border-color: var(--cyan); color: var(--cyan); }
+      .uploadzone__big { font-size: 13px; letter-spacing: 1px; margin-bottom: 6px; }
+      .uploadzone__small { font-size: 10px; color: var(--dim); letter-spacing: 1px; }
+
+      .banner { border: 1px solid var(--border-b); background: var(--panel); padding: 10px 14px; font-size: 11px; margin: 14px 0; }
+      .banner--error { border-color: rgba(255, 68, 68, 0.5); color: var(--red); }
+      .banner--load { border-color: rgba(0, 212, 255, 0.4); color: var(--cyan); }
+
+      .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
+      .stat { background: var(--panel); border: 1px solid var(--border); padding: 12px 14px; }
+      .stat__label { font-size: 9px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; margin-bottom: 6px; }
+      .stat__value { font-size: 20px; font-weight: 700; }
+      .stat__value--green { color: var(--green); } .stat__value--amber { color: var(--amber); } .stat__value--red { color: var(--red); }
+
+      .actionbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 14px 0; }
+      .actionbar .week { font-size: 11px; color: var(--dim); }
+
+      .table-wrap { overflow-x: auto; border: 1px solid var(--border); background: var(--panel); }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th { text-align: left; font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); padding: 9px 11px; border-bottom: 1px solid var(--border-b); white-space: nowrap; }
+      td { padding: 8px 11px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+      tr:hover td { background: rgba(255,255,255,0.02); }
+      .num { text-align: right; font-variant-numeric: tabular-nums; }
+      .arrow { color: var(--dim); }
+      .newval { color: var(--green); }
+      .empty { color: var(--dim); text-align: center; padding: 24px !important; }
+
+      .badge { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 1px; padding: 3px 7px; border: 1px solid; }
+      .badge--set { color: var(--green); border-color: rgba(0,255,136,.45); background: rgba(0,255,136,.08); }
+      .badge--strip { color: var(--amber); border-color: rgba(255,176,0,.45); background: rgba(255,176,0,.08); }
+      .badge--nomatch { color: var(--dim); border-color: var(--border-b); }
+      .badge--ok { color: var(--green); border-color: rgba(0,255,136,.45); }
+      .badge--fail { color: var(--red); border-color: rgba(255,68,68,.5); }
+
+      .toast { position: fixed; right: 18px; bottom: 18px; z-index: 30; background: var(--panel); border: 1px solid rgba(0,255,136,.5); color: var(--green); padding: 12px 16px; font-size: 11px; max-width: 400px; }
+      .toast--error { border-color: rgba(255,68,68,.5); color: var(--red); }
+    </style>
+  </head>
+  <body>
+    <div class="login-screen" id="loginScreen">
+      <div class="login-card">
+        <div class="login-card__title">LEADSMART // CPL UPDATER</div>
+        <div class="login-card__sub">33 Miles RTT · Inquirly · Authorized access only</div>
+        <form id="loginForm">
+          <label class="field-label" for="passwordInput">Password</label>
+          <input class="login-input" type="password" id="passwordInput" autocomplete="current-password" />
+          <div class="login-error" id="loginError"></div>
+          <button class="btn btn--primary" type="submit">Login</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="wrap hidden" id="dashboard">
+      <div class="topbar">
+        <div>
+          <div class="topbar__title">CPL <span>UPDATER</span></div>
+          <div class="topbar__sub">Upload the weekly CPL file → preview → confirm → Ringba</div>
+        </div>
+        <div class="topbar__spacer"></div>
+        <a href="/payment">Payments</a>
+        <a href="/fraud">Fraud</a>
+        <a href="https://war-room-dashboard-livid.vercel.app/">War Room</a>
+      </div>
+
+      <div class="uploadzone" id="uploadzone">
+        <div class="uploadzone__big" id="uploadBig">Drop the 33 Miles RTT .xlsx here, or click to choose</div>
+        <div class="uploadzone__small">Columns: Service Type · Duration · Date · Time (EST) · Caller ID · Cost Per Lead</div>
+      </div>
+      <input type="file" id="fileInput" class="hidden" accept=".xlsx,.xls" />
+
+      <div class="banner banner--load hidden" id="loadBanner"></div>
+      <div class="banner banner--error hidden" id="errorBanner"></div>
+
+      <div id="previewArea" class="hidden">
+        <div class="summary" id="summary"></div>
+        <div class="actionbar">
+          <span class="week" id="weekLabel"></span>
+          <div class="topbar__spacer"></div>
+          <button class="btn btn--go" id="confirmBtn" type="button">CONFIRM &amp; APPLY TO RINGBA</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Action</th><th>Publisher</th><th>Caller ID</th><th>Call Date/Time</th>
+                <th class="num">Cur Rev</th><th class="num">Cur Pay</th>
+                <th class="num">New Rev</th><th class="num">New Pay</th><th>Result</th>
+              </tr>
+            </thead>
+            <tbody id="rowsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast hidden" id="toast"></div>
+
+    <script>
+      (function () {
+        const PASSWORD = "leadsmart2026";
+        const AUTH_KEY = "ls_cpl_auth";
+
+        const loginScreen = document.getElementById("loginScreen");
+        const loginForm = document.getElementById("loginForm");
+        const passwordInput = document.getElementById("passwordInput");
+        const loginError = document.getElementById("loginError");
+        const dashboard = document.getElementById("dashboard");
+        const uploadzone = document.getElementById("uploadzone");
+        const uploadBig = document.getElementById("uploadBig");
+        const fileInput = document.getElementById("fileInput");
+        const loadBanner = document.getElementById("loadBanner");
+        const errorBanner = document.getElementById("errorBanner");
+        const previewArea = document.getElementById("previewArea");
+        const summary = document.getElementById("summary");
+        const weekLabel = document.getElementById("weekLabel");
+        const confirmBtn = document.getElementById("confirmBtn");
+        const rowsBody = document.getElementById("rowsBody");
+        const toast = document.getElementById("toast");
+
+        let currentBatch = null;
+        let applied = false;
+        let toastTimer = null;
+
+        function esc(s) { return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+        function money(v) {
+          if (v === null || v === undefined || v === "") return "—";
+          const n = Number(v);
+          if (Number.isNaN(n)) return "—";
+          return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        function fmtDt(iso) {
+          if (!iso) return "—";
+          const d = new Date(iso);
+          if (Number.isNaN(d.getTime())) return iso;
+          return d.toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + " ET";
+        }
+        function showToast(msg, isErr) {
+          toast.textContent = msg; toast.classList.toggle("toast--error", !!isErr);
+          toast.classList.remove("hidden"); clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => toast.classList.add("hidden"), 6000);
+        }
+        function setLoad(msg) {
+          if (!msg) { loadBanner.classList.add("hidden"); return; }
+          loadBanner.textContent = msg; loadBanner.classList.remove("hidden");
+        }
+        function setError(msg) {
+          if (!msg) { errorBanner.classList.add("hidden"); return; }
+          errorBanner.textContent = msg; errorBanner.classList.remove("hidden");
+        }
+
+        function actionBadge(a) {
+          if (a === "set") return '<span class="badge badge--set">SET CPL</span>';
+          if (a === "strip") return '<span class="badge badge--strip">STRIP $0</span>';
+          if (a === "no_match") return '<span class="badge badge--nomatch">NO MATCH</span>';
+          return '<span class="badge">' + esc(a) + "</span>";
+        }
+        function resultBadge(row) {
+          if (row.status === "updated") return '<span class="badge badge--ok">OK</span>';
+          if (row.status === "failed") return '<span class="badge badge--fail" title="' + esc(row.error || "") + '">FAIL</span>';
+          return "";
+        }
+
+        function renderPreview(data) {
+          currentBatch = data;
+          applied = false;
+          const c = data.counts;
+          summary.innerHTML =
+            stat("File rows", data.fileRows, "") +
+            stat("CPL calls in Ringba", data.ringbaCalls, "") +
+            stat("Matched → set", c.matched, "green") +
+            stat("Strip $0", c.strip, "amber") +
+            stat("No match", c.noMatch, c.noMatch ? "red" : "");
+          weekLabel.textContent =
+            "Week: " + fmtDt(data.weekStart) + "  →  " + fmtDt(data.weekEnd) +
+            (data.ringbaTruncated ? "  · ⚠ Ringba result truncated — narrow the file" : "") +
+            (data.skippedFileRows ? "  · " + data.skippedFileRows + " unparseable file row(s) skipped" : "");
+          renderRows(data.rows);
+          confirmBtn.disabled = c.matched + c.strip === 0;
+          confirmBtn.textContent = "CONFIRM & APPLY " + (c.matched + c.strip) + " CHANGE(S) TO RINGBA";
+          previewArea.classList.remove("hidden");
+        }
+
+        function stat(label, value, tone) {
+          return '<div class="stat"><div class="stat__label">' + esc(label) + "</div>" +
+            '<div class="stat__value ' + (tone ? "stat__value--" + tone : "") + '">' + value + "</div></div>";
+        }
+
+        function renderRows(rows) {
+          rowsBody.innerHTML = "";
+          if (!rows.length) { rowsBody.innerHTML = '<tr><td class="empty" colspan="9">No rows.</td></tr>'; return; }
+          for (const r of rows) {
+            const tr = document.createElement("tr");
+            const when = r.callDt ? fmtDt(r.callDt) : (r.fileTimeEt || "—");
+            tr.innerHTML =
+              "<td>" + actionBadge(r.action) + "</td>" +
+              "<td>" + esc(r.publisherName || "—") + "</td>" +
+              "<td>" + esc(r.callerId || r.fileCallerId || "—") + "</td>" +
+              "<td>" + esc(when) + "</td>" +
+              '<td class="num">' + money(r.currentRevenue) + "</td>" +
+              '<td class="num">' + money(r.currentPayout) + "</td>" +
+              '<td class="num newval">' + (r.action === "no_match" ? "—" : money(r.newRevenue)) + "</td>" +
+              '<td class="num newval">' + (r.action === "no_match" ? "—" : money(r.newPayout)) + "</td>" +
+              "<td>" + resultBadge(r) + "</td>";
+            rowsBody.appendChild(tr);
+          }
+        }
+
+        function fileToBase64(file) {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const s = String(reader.result || "");
+              const comma = s.indexOf(",");
+              resolve(comma >= 0 ? s.slice(comma + 1) : s);
+            };
+            reader.onerror = () => reject(new Error("Could not read file"));
+            reader.readAsDataURL(file);
+          });
+        }
+
+        async function handleFile(file) {
+          if (!file) return;
+          setError(null);
+          previewArea.classList.add("hidden");
+          uploadBig.textContent = file.name;
+          setLoad("Parsing " + file.name + " and matching against Ringba…");
+          try {
+            const base64 = await fileToBase64(file);
+            const res = await fetch("/api/cpl/preview", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileName: file.name, base64 }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Preview failed");
+            setLoad(null);
+            renderPreview(data);
+          } catch (err) {
+            setLoad(null);
+            setError(err.message || "Preview failed");
+          }
+        }
+
+        uploadzone.addEventListener("click", () => fileInput.click());
+        fileInput.addEventListener("change", () => { handleFile(fileInput.files[0]); fileInput.value = ""; });
+        ["dragover","dragenter"].forEach(ev => uploadzone.addEventListener(ev, e => { e.preventDefault(); uploadzone.classList.add("over"); }));
+        ["dragleave","drop"].forEach(ev => uploadzone.addEventListener(ev, e => { e.preventDefault(); uploadzone.classList.remove("over"); }));
+        uploadzone.addEventListener("drop", e => { if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+
+        confirmBtn.addEventListener("click", async () => {
+          if (!currentBatch || applied) return;
+          if (!confirm("Apply " + confirmBtn.textContent.match(/\d+/) + " change(s) to Ringba? This writes real revenue and payout values.")) return;
+          confirmBtn.disabled = true;
+          confirmBtn.textContent = "APPLYING…";
+          setError(null);
+          try {
+            const res = await fetch("/api/cpl/apply", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ batchId: currentBatch.batchId }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Apply failed");
+            applied = true;
+            showToast("Done — " + data.updated + " updated, " + data.failed + " failed, " + data.noMatch + " no match", data.failed > 0);
+            // re-pull the batch to show per-row results
+            const refreshed = await (await fetch("/api/cpl/batch/" + encodeURIComponent(currentBatch.batchId))).json();
+            renderRows(refreshed.rows || currentBatch.rows);
+            summary.innerHTML =
+              stat("Updated", data.updated, "green") +
+              stat("Failed", data.failed, data.failed ? "red" : "") +
+              stat("No match", data.noMatch, "") +
+              stat("Applied", "✓", "green");
+            confirmBtn.textContent = "APPLIED";
+          } catch (err) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "RETRY APPLY";
+            setError(err.message || "Apply failed");
+          }
+        });
+
+        function showDashboard() {
+          sessionStorage.setItem(AUTH_KEY, "1");
+          loginScreen.classList.add("hidden");
+          dashboard.classList.remove("hidden");
+        }
+        loginForm.addEventListener("submit", (e) => {
+          e.preventDefault();
+          if (passwordInput.value === PASSWORD) showDashboard();
+          else loginError.textContent = "Wrong password";
+        });
+        if (sessionStorage.getItem(AUTH_KEY) === "1") showDashboard();
+      })();
+    </script>
+  </body>
+</html>
