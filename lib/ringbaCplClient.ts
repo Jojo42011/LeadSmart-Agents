@@ -166,6 +166,35 @@ export async function fetchCplCalls(
     },
   );
 
+  // ---- Diagnostics: expose why matching may find nothing ----
+  // Print the RAW shape of the first few converted rows so we can see the exact
+  // format of callDt / inboundPhoneNumber / target coming back from Ringba, plus
+  // how many rows survive the CPL-target filter and how many yield a usable
+  // (callerLast10 + parseable callDt) matching key.
+  console.log(
+    "[CPL] fetchCplCalls window %s → %s : %d converted rows fetched (truncated=%s)",
+    startIso,
+    endIso,
+    all.length,
+    truncated,
+  );
+  if (all.length > 0) {
+    const sample = all.slice(0, 5).map((row) => ({
+      callDt: str(row, "callDt"),
+      inboundPhoneNumber: str(row, "inboundPhoneNumber"),
+      targetName: str(row, "targetName"),
+      buyer: str(row, "buyer"),
+      last10: last10(str(row, "inboundPhoneNumber")),
+      callDtMs: str(row, "callDt")
+        ? new Date(str(row, "callDt")).getTime()
+        : NaN,
+    }));
+    console.log("[CPL] sample raw rows: %s", JSON.stringify(sample));
+  }
+  let cplTargetCount = 0;
+  let unparseableDt = 0;
+  let emptyCaller = 0;
+
   const calls: CplCall[] = [];
   for (const row of all) {
     const inboundCallId = str(row, "inboundCallId");
@@ -174,13 +203,17 @@ export async function fetchCplCalls(
       .filter(Boolean)
       .join(" ");
     if (!isCplTarget(target)) continue;
+    cplTargetCount += 1;
 
     const callDt = str(row, "callDt");
     const callerNumber = str(row, "inboundPhoneNumber");
+    const callDtMs = callDt ? new Date(callDt).getTime() : NaN;
+    if (Number.isNaN(callDtMs)) unparseableDt += 1;
+    if (!last10(callerNumber)) emptyCaller += 1;
     calls.push({
       inboundCallId,
       callDt,
-      callDtMs: callDt ? new Date(callDt).getTime() : NaN,
+      callDtMs,
       callerNumber,
       callerLast10: last10(callerNumber),
       publisherName: str(row, "publisherName"),
@@ -189,6 +222,14 @@ export async function fetchCplCalls(
       payoutAmount: num(row, "payoutAmount"),
     });
   }
+
+  console.log(
+    "[CPL] CPL-target calls: %d (of %d converted). unparseable callDt: %d, empty caller: %d",
+    cplTargetCount,
+    all.length,
+    unparseableDt,
+    emptyCaller,
+  );
 
   return { calls, truncated };
 }
