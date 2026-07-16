@@ -113,6 +113,17 @@ import {
 } from "./hull/memory/readApi";
 import { handleHullEventsUpgrade, broadcastHullEvent } from "./hull/ws";
 import { getChatModel, getOpenAIClient } from "./hull/openaiConfig";
+import {
+  createBatch as createCplBatch,
+  getBatch as getCplBatch,
+  getBatchRows as getCplBatchRows,
+  getApplicableRows as getCplApplicableRows,
+  listBatches as listCplBatches,
+  markRowResult as markCplRowResult,
+  finalizeBatch as finalizeCplBatch,
+} from "./lib/cplDb";
+import { fetchCplCalls, overrideCallPayments } from "./lib/ringbaCplClient";
+import { parseCplWorkbook, matchAndClassify } from "./lib/cplParser";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 const DB_PATH = getDbPath();
@@ -2650,6 +2661,184 @@ app.post("/api/fraud/unblock/:name", (req, res) => {
 });
 
 // ====================================================================
+
+// ==================== CPL Updater (33 Miles RTT / Inquirly) ====================
+
+app.get("/cpl", (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "cpl.html"));
+});
+
+/** Parse the uploaded xlsx, match to Ringba CPL calls, store a preview batch. No writes. */
+app.post(
+  "/api/cpl/preview",
+  express.json({ limit: "25mb" }),
+  async (req, res) => {
+    try {
+      const fileName =
+        typeof req.body?.fileName === "string" ? req.body.fileName.trim() : "upload.xlsx";
+      const base64 =
+        typeof req.body?.base64 === "string" ? req.body.base64 : "";
+      if (!base64) {
+        res.status(400).json({ error: "No file provided" });
+        return;
+      }
+
+      const buffer = Buffer.from(base64, "base64");
+      if (buffer.length === 0) {
+        res.status(400).json({ error: "Uploaded file is empty" });
+        return;
+      }
+
+      const parsed = parseCplWorkbook(buffer);
+      const { calls, truncated } = await fetchCplCalls(
+        parsed.weekStartIso,
+        parsed.weekEndIso,
+      );
+      const match = matchAndClassify(parsed.rows, calls);
+
+      const batchId = createCplBatch({
+        fileName,
+        weekStart: parsed.weekStartIso,
+        weekEnd: parsed.weekEndIso,
+        fileRows: parsed.rows.length,
+        ringbaCalls: calls.length,
+        rows: match.rows,
+      });
+
+      res.json({
+        batchId,
+        fileName,
+        weekStart: parsed.weekStartIso,
+        weekEnd: parsed.weekEndIso,
+        fileRows: parsed.rows.length,
+        skippedFileRows: parsed.skipped,
+        ringbaCalls: calls.length,
+        ringbaTruncated: truncated,
+        counts: {
+          matched: match.matched,
+          strip: match.stripped,
+          noMatch: match.noMatch,
+          leftUntouched: match.leftUntouched,
+        },
+        rows: getCplBatchRows(batchId),
+      });
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : "Failed to parse CPL file",
+      });
+    }
+  },
+);
+
+/** Apply a previously-previewed batch: write revenue/payout overrides to Ringba. */
+app.post("/api/cpl/apply", express.json(), async (req, res) => {
+  try {
+    const batchId =
+      typeof req.body?.batchId === "string" ? req.body.batchId.trim() : "";
+    if (!batchId) {
+      res.status(400).json({ error: "batchId is required" });
+      return;
+    }
+    const batch = getCplBatch(batchId);
+    if (!batch) {
+      res.status(404).json({ error: "Batch not found" });
+      return;
+    }
+    if (batch.status === "applied") {
+      res.status(409).json({ error: "This batch was already applied" });
+      return;
+    }
+
+    const rows = getCplApplicableRows(batchId);
+    let updated = 0;
+    let failed = 0;
+    const results: Array<{
+      inboundCallId: string | null;
+      action: string;
+      ok: boolean;
+      error?: string;
+    }> = [];
+
+    for (const row of rows) {
+      if (!row.inboundCallId) {
+        markCplRowResult(row.id, false, { error: "No inbound call id" });
+        failed += 1;
+        results.push({ inboundCallId: null, action: row.action, ok: false, error: "No inbound call id" });
+        continue;
+      }
+      try {
+        const out = await overrideCallPayments(
+          row.inboundCallId,
+          row.newRevenue ?? 0,
+          row.newPayout ?? 0,
+        );
+        markCplRowResult(row.id, true, {
+          newRevenue: out.conversionAmount,
+          newPayout: out.payoutAmount,
+        });
+        updated += 1;
+        results.push({ inboundCallId: row.inboundCallId, action: row.action, ok: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "override failed";
+        markCplRowResult(row.id, false, { error: message });
+        failed += 1;
+        results.push({
+          inboundCallId: row.inboundCallId,
+          action: row.action,
+          ok: false,
+          error: message,
+        });
+      }
+    }
+
+    finalizeCplBatch(batchId, updated, failed);
+    console.log(
+      "[CPL] Batch %s applied: %d updated, %d failed",
+      batchId,
+      updated,
+      failed,
+    );
+
+    res.json({
+      batchId,
+      updated,
+      failed,
+      noMatch: batch.unmatched,
+      results,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to apply CPL batch",
+    });
+  }
+});
+
+app.get("/api/cpl/batches", (_req, res) => {
+  try {
+    res.json({ batches: listCplBatches(30) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to list batches",
+    });
+  }
+});
+
+app.get("/api/cpl/batch/:id", (req, res) => {
+  try {
+    const batch = getCplBatch(String(req.params.id || "").trim());
+    if (!batch) {
+      res.status(404).json({ error: "Batch not found" });
+      return;
+    }
+    res.json({ batch, rows: getCplBatchRows(batch.id) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read batch",
+    });
+  }
+});
+
+// ==============================================================================
 
 app.post("/jarvis/tts", async (req, res) => {
   const text = sanitizeSpeech(String(req.body?.text || ""));
