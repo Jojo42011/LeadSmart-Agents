@@ -78,6 +78,26 @@ export function last10(raw: string): string {
   return digits.length >= 10 ? digits.slice(-10) : digits;
 }
 
+/**
+ * Parse Ringba's callDt into epoch milliseconds. This account returns callDt as
+ * a numeric epoch STRING (e.g. "1783332479708" = milliseconds; a ~10-digit value
+ * would be seconds), not an ISO date — so `new Date(callDt)` yields Invalid Date
+ * and matching silently fails. Handle numeric strings directly and still fall
+ * back to Date parsing for ISO-formatted values from other accounts.
+ */
+export function parseCallDtMs(callDt: string): number {
+  const s = String(callDt || "").trim();
+  if (!s) return NaN;
+  if (/^\d+$/.test(s)) {
+    const n = parseInt(s, 10);
+    if (!Number.isFinite(n)) return NaN;
+    // 12+ digits → epoch milliseconds; shorter (~10 digits) → epoch seconds.
+    return s.length >= 12 ? n : n * 1000;
+  }
+  const t = new Date(s).getTime();
+  return Number.isNaN(t) ? NaN : t;
+}
+
 function isCplTarget(label: string): boolean {
   const lower = label.trim().toLowerCase();
   if (!lower) return false;
@@ -89,12 +109,33 @@ const COLUMNS = [
   "callDt",
   "inboundPhoneNumber",
   "publisherName",
+  "campaignName",
   "targetName",
   "buyer",
   "conversionAmount",
   "payoutAmount",
   "hasConverted",
 ];
+
+/**
+ * Columns scanned for the CPL marker ("33 miles rtt -" / "inquirly"). In this
+ * account targetName/buyer are often empty on converted calls, so the buyer's
+ * identity lives in campaignName (or the publisher). Scanning all of them finds
+ * the marker wherever Ringba puts it, while the precise marker strings keep the
+ * scope narrow — only these two CPL buyers ever match.
+ */
+const TARGET_LABEL_COLUMNS = [
+  "campaignName",
+  "targetName",
+  "buyer",
+  "publisherName",
+];
+
+function targetLabel(row: RawRow): string {
+  return TARGET_LABEL_COLUMNS.map((c) => str(row, c))
+    .filter(Boolean)
+    .join(" ");
+}
 
 /**
  * Page through a Ringba call-log query until a short page (fewer than PAGE_SIZE
@@ -181,13 +222,13 @@ export async function fetchCplCalls(
   if (all.length > 0) {
     const sample = all.slice(0, 5).map((row) => ({
       callDt: str(row, "callDt"),
+      callDtMs: parseCallDtMs(str(row, "callDt")),
       inboundPhoneNumber: str(row, "inboundPhoneNumber"),
+      last10: last10(str(row, "inboundPhoneNumber")),
+      campaignName: str(row, "campaignName"),
       targetName: str(row, "targetName"),
       buyer: str(row, "buyer"),
-      last10: last10(str(row, "inboundPhoneNumber")),
-      callDtMs: str(row, "callDt")
-        ? new Date(str(row, "callDt")).getTime()
-        : NaN,
+      publisherName: str(row, "publisherName"),
     }));
     console.log("[CPL] sample raw rows: %s", JSON.stringify(sample));
   }
@@ -199,15 +240,13 @@ export async function fetchCplCalls(
   for (const row of all) {
     const inboundCallId = str(row, "inboundCallId");
     if (!inboundCallId) continue;
-    const target = [str(row, "targetName"), str(row, "buyer")]
-      .filter(Boolean)
-      .join(" ");
+    const target = targetLabel(row);
     if (!isCplTarget(target)) continue;
     cplTargetCount += 1;
 
     const callDt = str(row, "callDt");
     const callerNumber = str(row, "inboundPhoneNumber");
-    const callDtMs = callDt ? new Date(callDt).getTime() : NaN;
+    const callDtMs = parseCallDtMs(callDt);
     if (Number.isNaN(callDtMs)) unparseableDt += 1;
     if (!last10(callerNumber)) emptyCaller += 1;
     calls.push({
