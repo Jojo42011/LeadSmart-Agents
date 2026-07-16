@@ -13,8 +13,14 @@ import axios, { AxiosInstance } from "axios";
 
 const BASE_URL = "https://api.ringba.com/v2";
 const PAGE_SIZE = 100;
-const MAX_PAGES = 25;
-const PAGE_DELAY_MS = 800;
+/**
+ * Pagination runs until Ringba returns a short page (the real end). This is
+ * only a runaway backstop against an infinite loop — set high enough that a
+ * normal busy week never hits it (100k calls). Truncation is reported so the
+ * UI can warn if it ever does.
+ */
+const SAFETY_MAX_PAGES = 1000;
+const PAGE_DELAY_MS = 500;
 
 /** CPL buyers whose calls this tool operates on. */
 export const CPL_TARGET_MARKERS = ["33 miles rtt -", "inquirly"] as const;
@@ -91,9 +97,42 @@ const COLUMNS = [
 ];
 
 /**
+ * Page through a Ringba call-log query until a short page (fewer than PAGE_SIZE
+ * records) is returned — that is the true end. Only stops early at the runaway
+ * backstop, which sets `truncated`. Extracted so pagination is unit-testable.
+ */
+export async function paginateAllRecords(
+  fetchPage: (offset: number, size: number) => Promise<RawRow[]>,
+): Promise<{ records: RawRow[]; truncated: boolean }> {
+  const all: RawRow[] = [];
+  let offset = 0;
+  let pages = 0;
+
+  for (;;) {
+    pages += 1;
+    const records = await fetchPage(offset, PAGE_SIZE);
+    all.push(...records);
+
+    if (records.length < PAGE_SIZE) {
+      return { records: all, truncated: false }; // reached the end
+    }
+    if (pages >= SAFETY_MAX_PAGES) {
+      console.warn(
+        "[Fraud/CPL] pagination hit safety cap of %d pages (%d records) — window may be incomplete",
+        SAFETY_MAX_PAGES,
+        all.length,
+      );
+      return { records: all, truncated: true };
+    }
+    offset += PAGE_SIZE;
+    await sleep(PAGE_DELAY_MS);
+  }
+}
+
+/**
  * Converted CPL-target calls (33 Miles RTT / Inquirly) in [startIso, endIso].
  * Restricting to CPL targets keeps the strip scenarios from ever touching
- * other buyers' revenue.
+ * other buyers' revenue. Fetches ALL pages before filtering.
  */
 export async function fetchCplCalls(
   startIso: string,
@@ -101,42 +140,31 @@ export async function fetchCplCalls(
 ): Promise<{ calls: CplCall[]; truncated: boolean }> {
   const client = createClient();
   const accountId = getAccountId();
-  const all: RawRow[] = [];
-  let offset = 0;
-  let pages = 0;
-  let truncated = false;
 
-  for (;;) {
-    pages += 1;
-    const res = await client.post<{ report?: { records?: RawRow[] } }>(
-      `/${accountId}/calllogs`,
-      {
-        reportStart: startIso,
-        reportEnd: endIso,
-        size: PAGE_SIZE,
-        offset,
-        filters: [
-          {
-            anyMatch: true,
-            filters: [
-              { column: "hasConverted", value: "true", isNegativeMatch: false },
-            ],
-          },
-        ],
-        valueColumns: COLUMNS.map((column) => ({ column })),
-        orderByColumns: [{ column: "callDt", direction: "asc" }],
-      },
-    );
-    const records = res.data?.report?.records ?? [];
-    all.push(...records);
-    if (records.length < PAGE_SIZE) break;
-    if (pages >= MAX_PAGES) {
-      truncated = true;
-      break;
-    }
-    offset += PAGE_SIZE;
-    await sleep(PAGE_DELAY_MS);
-  }
+  const { records: all, truncated } = await paginateAllRecords(
+    async (offset, size) => {
+      const res = await client.post<{ report?: { records?: RawRow[] } }>(
+        `/${accountId}/calllogs`,
+        {
+          reportStart: startIso,
+          reportEnd: endIso,
+          size,
+          offset,
+          filters: [
+            {
+              anyMatch: true,
+              filters: [
+                { column: "hasConverted", value: "true", isNegativeMatch: false },
+              ],
+            },
+          ],
+          valueColumns: COLUMNS.map((column) => ({ column })),
+          orderByColumns: [{ column: "callDt", direction: "asc" }],
+        },
+      );
+      return res.data?.report?.records ?? [];
+    },
+  );
 
   const calls: CplCall[] = [];
   for (const row of all) {
