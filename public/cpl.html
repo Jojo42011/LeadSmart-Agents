@@ -49,6 +49,11 @@
       .topbar a { color: var(--dim); font-size: 10px; letter-spacing: 1px; text-decoration: none; text-transform: uppercase; }
       .topbar a:hover { color: var(--text); }
 
+      .sourcebar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+      .sourcebar label { font-size: 10px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; }
+      .source-select { background: var(--card); border: 1px solid var(--border-b); color: var(--text); font-family: var(--font); font-size: 12px; padding: 8px 10px; outline: none; cursor: pointer; }
+      .source-select:focus { border-color: var(--cyan); }
+
       .uploadzone { border: 1px dashed var(--border-b); background: var(--panel); padding: 26px; text-align: center; cursor: pointer; transition: border-color .15s, color .15s; }
       .uploadzone:hover, .uploadzone.over { border-color: var(--cyan); color: var(--cyan); }
       .uploadzone__big { font-size: 13px; letter-spacing: 1px; margin-bottom: 6px; }
@@ -114,9 +119,17 @@
         <a href="https://war-room-dashboard-livid.vercel.app/">War Room</a>
       </div>
 
+      <div class="sourcebar">
+        <label for="sourceSelect">Lead source</label>
+        <select class="source-select" id="sourceSelect">
+          <option value="33miles" selected>33 Miles RTT</option>
+          <option value="inquirly">Inquirly RTT</option>
+        </select>
+      </div>
+
       <div class="uploadzone" id="uploadzone">
         <div class="uploadzone__big" id="uploadBig">Drop the 33 Miles RTT .xlsx or .csv here, or click to choose</div>
-        <div class="uploadzone__small">Columns (any order): Date · Time (EST) · Caller ID · Cost Per Lead — extra columns ignored</div>
+        <div class="uploadzone__small" id="uploadSmall">Columns (any order): Date · Time (EST) · Caller ID · Cost Per Lead — extra columns ignored</div>
       </div>
       <input type="file" id="fileInput" class="hidden" accept=".xlsx,.xls,.csv" />
 
@@ -159,6 +172,19 @@
         const dashboard = document.getElementById("dashboard");
         const uploadzone = document.getElementById("uploadzone");
         const uploadBig = document.getElementById("uploadBig");
+        const uploadSmall = document.getElementById("uploadSmall");
+        const sourceSelect = document.getElementById("sourceSelect");
+
+        const SOURCES = {
+          "33miles": {
+            name: "33 Miles RTT",
+            hint: "Columns (any order): Date · Time (EST) · Caller ID · Cost Per Lead — extra columns ignored",
+          },
+          inquirly: {
+            name: "Inquirly RTT",
+            hint: "Columns (any order): Date Posted · Origin Phone · Revenue · Billable — only Billable = Yes rows are processed",
+          },
+        };
         const fileInput = document.getElementById("fileInput");
         const loadBanner = document.getElementById("loadBanner");
         const errorBanner = document.getElementById("errorBanner");
@@ -281,7 +307,7 @@
             const res = await fetch("/api/cpl/preview", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ fileName: file.name, base64 }),
+              body: JSON.stringify({ fileName: file.name, base64, mode: sourceSelect.value }),
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || "Preview failed");
@@ -292,6 +318,12 @@
             setError(err.message || "Preview failed");
           }
         }
+
+        sourceSelect.addEventListener("change", () => {
+          const src = SOURCES[sourceSelect.value] || SOURCES["33miles"];
+          uploadBig.textContent = "Drop the " + src.name + " .xlsx or .csv here, or click to choose";
+          uploadSmall.textContent = src.hint;
+        });
 
         uploadzone.addEventListener("click", () => fileInput.click());
         fileInput.addEventListener("change", () => { handleFile(fileInput.files[0]); fileInput.value = ""; });

@@ -11,7 +11,15 @@ import type { CplRowInput } from "./cplDb";
  * and the newer CSV layout
  *   Account Name, Service Type, Date, Time (EST), Tracking Number,
  *   Caller ID, Duration, Cost Per Lead, Zip Code
- * parse identically. Caller IDs may be dash-formatted (954-487-0148); last10()
+ * parse identically.
+ *
+ * A second source mode, "inquirly", handles the Inquirly export instead:
+ *   Date Posted (one cell, "26-07-04 7:37:27" = 2026-07-04 07:37:27),
+ *   Origin Phone (the caller ID), Revenue (the amount), Billable (Yes/No)
+ * Only rows with Billable = Yes are processed; everything downstream
+ * (matching, payout %, preview, apply) is identical to 33 Miles mode.
+ *
+ * Caller IDs may be dash-formatted (954-487-0148); last10()
  * strips non-digits before matching. The "Time (EST)" label has proven
  * unreliable (EST vs EDT), so matchAndClassify auto-detects the real offset by
  * scoring candidate offsets and keeping whichever matches the most calls,
@@ -117,6 +125,36 @@ function parseTimeCell(v: unknown): Hm | null {
   return { H, M };
 }
 
+/**
+ * Inquirly's "Date Posted" holds date AND time in one cell with a two-digit
+ * year FIRST ("26-07-04 7:37:27" = 2026-07-04 07:37:27). The generic M/D/Y
+ * parsers above would misread that as month 26, so this column gets its own
+ * parser. Date objects and Excel serials (xlsx exports) are handled too.
+ */
+function parseDateTimeCell(v: unknown): { ymd: Ymd; hm: Hm } | null {
+  if (v instanceof Date) {
+    return {
+      ymd: { y: v.getUTCFullYear(), m: v.getUTCMonth() + 1, d: v.getUTCDate() },
+      hm: { H: v.getUTCHours(), M: v.getUTCMinutes() },
+    };
+  }
+  if (typeof v === "number") {
+    const dc = XLSX.SSF.parse_date_code(v);
+    if (dc && dc.y) return { ymd: { y: dc.y, m: dc.m, d: dc.d }, hm: { H: dc.H, M: dc.M } };
+    return null;
+  }
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{2,4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  let y = parseInt(m[1], 10);
+  if (y < 100) y += 2000;
+  return {
+    ymd: { y, m: parseInt(m[2], 10), d: parseInt(m[3], 10) },
+    hm: { H: parseInt(m[4], 10), M: parseInt(m[5], 10) },
+  };
+}
+
 function parseMoney(v: unknown): number | null {
   if (typeof v === "number") return v;
   const s = String(v ?? "").replace(/[$,\s]/g, "").trim();
@@ -142,7 +180,12 @@ export interface ParseResult {
   weekEndIso: string;
 }
 
-export function parseCplWorkbook(buffer: Buffer): ParseResult {
+export type CplSource = "33miles" | "inquirly";
+
+export function parseCplWorkbook(
+  buffer: Buffer,
+  source: CplSource = "33miles",
+): ParseResult {
   const wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   if (!sheet) throw new Error("Workbook has no sheets");
@@ -154,16 +197,35 @@ export function parseCplWorkbook(buffer: Buffer): ParseResult {
   if (json.length === 0) throw new Error("No rows found in the file");
 
   const keys = Object.keys(json[0]);
-  const kCaller = findKey(keys, "caller");
-  const kCpl = findKey(keys, "cost per lead", "cpl", "cost");
-  const kDate = findKey(keys, "date");
-  const kTime = findKey(keys, "time");
-  const kService = findKey(keys, "service");
-  const kDuration = findKey(keys, "duration");
-  const kTracking = findKey(keys, "tracking");
+  let kCaller: string | null;
+  let kCpl: string | null;
+  let kDate: string | null;
+  let kTime: string | null = null;
+  let kService: string | null = null;
+  let kDuration: string | null = null;
+  let kTracking: string | null = null;
+  let kBillable: string | null = null;
 
-  if (!kCaller) throw new Error('Missing a "Caller ID" column');
-  if (!kDate || !kTime) throw new Error('Missing "Date" and/or "Time" columns');
+  if (source === "inquirly") {
+    kCaller = findKey(keys, "origin phone", "origin");
+    kCpl = findKey(keys, "revenue");
+    kDate = findKey(keys, "date posted", "date");
+    kBillable = findKey(keys, "billable");
+    if (!kCaller) throw new Error('Missing an "Origin Phone" column');
+    if (!kDate) throw new Error('Missing a "Date Posted" column');
+    if (!kCpl) throw new Error('Missing a "Revenue" column');
+    if (!kBillable) throw new Error('Missing a "Billable" column');
+  } else {
+    kCaller = findKey(keys, "caller");
+    kCpl = findKey(keys, "cost per lead", "cpl", "cost");
+    kDate = findKey(keys, "date");
+    kTime = findKey(keys, "time");
+    kService = findKey(keys, "service");
+    kDuration = findKey(keys, "duration");
+    kTracking = findKey(keys, "tracking");
+    if (!kCaller) throw new Error('Missing a "Caller ID" column');
+    if (!kDate || !kTime) throw new Error('Missing "Date" and/or "Time" columns');
+  }
 
   const rows: ParsedFileRow[] = [];
   let skipped = 0;
@@ -171,9 +233,26 @@ export function parseCplWorkbook(buffer: Buffer): ParseResult {
   let maxMs = -Infinity;
 
   for (const raw of json) {
+    // Inquirly: only Billable = Yes rows exist as far as this tool is
+    // concerned — No/blank rows are neither matched nor used for strip scoping.
+    if (kBillable) {
+      const flag = String(raw[kBillable] ?? "").trim().toLowerCase();
+      if (flag !== "yes") {
+        skipped += 1;
+        continue;
+      }
+    }
     const callerId = String(raw[kCaller] ?? "").trim();
-    const ymd = parseDateCell(raw[kDate]);
-    const hm = parseTimeCell(raw[kTime]);
+    let ymd: Ymd | null;
+    let hm: Hm | null;
+    if (source === "inquirly") {
+      const dt = parseDateTimeCell(raw[kDate]);
+      ymd = dt ? dt.ymd : null;
+      hm = dt ? dt.hm : null;
+    } else {
+      ymd = parseDateCell(raw[kDate]);
+      hm = parseTimeCell(raw[kTime!]);
+    }
     if (!callerId || !ymd || !hm) {
       skipped += 1;
       continue;
