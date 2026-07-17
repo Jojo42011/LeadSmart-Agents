@@ -367,6 +367,12 @@ export function matchAndClassify(
 
     usedCallIds.add(best.inboundCallId);
     const cpl = fr.costPerLead ?? 0;
+    // Ramzan Ali is paid 60% of revenue; every other publisher gets 50%.
+    const payoutPct = (best.publisherName || "")
+      .toLowerCase()
+      .includes("ramzan ali")
+      ? 60
+      : 50;
     matched += 1;
     out.push({
       action: "set",
@@ -381,7 +387,7 @@ export function matchAndClassify(
       currentRevenue: best.conversionAmount,
       currentPayout: best.payoutAmount,
       newRevenue: Math.round(cpl * 100) / 100,
-      newPayout: Math.round(cpl * 50) / 100, // 50% of CPL
+      newPayout: Math.round(cpl * payoutPct) / 100,
     });
   }
 
