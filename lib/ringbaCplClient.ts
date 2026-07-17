@@ -199,11 +199,6 @@ const CALLER_CHUNK = 100; // caller numbers per filtered request
 const MIN_SLICE_MS = 30 * 60 * 1000; // don't bisect a window below 30 min
 const MAX_SLICE_DEPTH = 14;
 
-/** US 10-digit → Ringba's canonical E.164 ("+1XXXXXXXXXX"). */
-function last10ToE164(l10: string): string {
-  return l10.length === 10 ? `+1${l10}` : "";
-}
-
 function dedupeByCallId(rows: RawRow[]): RawRow[] {
   const seen = new Set<string>();
   const out: RawRow[] = [];
@@ -246,24 +241,34 @@ async function fetchWindow(
  * OR-filtering inboundPhoneNumber in chunks. This is the primary path: it pulls
  * the ~hundreds of relevant calls across the whole week instead of the account's
  * firehose, so we never lose the back half of the week to Ringba's 10k cap.
+ *
+ * Filter schema per Ringba's API docs (developers.ringba.com, "Get Call Log
+ * With Filters"): filters is an array of { anyConditionToMatch: [...] } groups;
+ * conditions WITHIN a group are OR'd, groups are AND'd. Each condition is
+ * { column, value, isNegativeMatch, comparisonType } with comparisonType one of
+ * EQUALS | CONTAINS | BEGINS_WITH | GREATER_THAN | LESS_THAN. (The previous
+ * { anyMatch, filters } shape was not the documented schema — Ringba silently
+ * ignored it and returned the unfiltered 10k-capped firehose.) CONTAINS on the
+ * caller's last-10 digits matches regardless of the +1/E.164 formatting Ringba
+ * stores on inboundPhoneNumber.
  */
 async function fetchByCallers(
   client: AxiosInstance,
   accountId: string,
   startIso: string,
   endIso: string,
-  callerE164: string[],
+  callerLast10s: string[],
 ): Promise<RawRow[]> {
   const all: RawRow[] = [];
-  for (let i = 0; i < callerE164.length; i += CALLER_CHUNK) {
-    const chunk = callerE164.slice(i, i + CALLER_CHUNK);
+  for (let i = 0; i < callerLast10s.length; i += CALLER_CHUNK) {
+    const chunk = callerLast10s.slice(i, i + CALLER_CHUNK);
     const filters = [
       {
-        anyMatch: true,
-        filters: chunk.map((value) => ({
+        anyConditionToMatch: chunk.map((value) => ({
           column: "inboundPhoneNumber",
           value,
           isNegativeMatch: false,
+          comparisonType: "CONTAINS",
         })),
       },
     ];
@@ -318,7 +323,6 @@ export async function fetchCplCalls(
   const accountId = getAccountId();
 
   const callerSet = new Set(callerLast10s.filter((c) => c && c.length === 10));
-  const callerE164 = [...callerSet].map(last10ToE164).filter(Boolean);
 
   let all: RawRow[] = [];
   let truncated = false;
@@ -326,7 +330,7 @@ export async function fetchCplCalls(
 
   try {
     all = dedupeByCallId(
-      await fetchByCallers(client, accountId, startIso, endIso, callerE164),
+      await fetchByCallers(client, accountId, startIso, endIso, [...callerSet]),
     );
     // Did the filter actually work? Count distinct file callers we got back.
     const got = new Set<string>();
