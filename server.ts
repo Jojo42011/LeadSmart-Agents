@@ -2728,6 +2728,11 @@ app.post(
           noMatch: match.noMatch,
           leftUntouched: match.leftUntouched,
         },
+        diagnostics: {
+          offsetHours: match.offsetHours,
+          callerOverlap: match.callerOverlap,
+          trackingOverlap: match.trackingOverlap,
+        },
         rows: getCplBatchRows(batchId),
       });
     } catch (err) {

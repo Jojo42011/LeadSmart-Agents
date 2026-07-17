@@ -12,21 +12,34 @@ import type { CplRowInput } from "./cplDb";
  *   Account Name, Service Type, Date, Time (EST), Tracking Number,
  *   Caller ID, Duration, Cost Per Lead, Zip Code
  * parse identically. Caller IDs may be dash-formatted (954-487-0148); last10()
- * strips non-digits before matching. Per 33 Miles, the "Time (EST)" column is
- * always literal EST (fixed UTC-5, no daylight saving), so summer files stay at
- * UTC-5 rather than shifting to EDT/UTC-4.
+ * strips non-digits before matching. The "Time (EST)" label has proven
+ * unreliable (EST vs EDT), so matchAndClassify auto-detects the real offset by
+ * scoring candidate offsets and keeping whichever matches the most calls,
+ * rather than trusting the header.
  */
 
-const MATCH_TOLERANCE_MS = 5 * 60 * 1000; // ±5 minutes
+const MATCH_TOLERANCE_MS = 15 * 60 * 1000; // ±15 minutes (absorbs clock skew)
+
+/**
+ * The file's "Time (EST)" label has proven unreliable (EST vs EDT), so instead
+ * of hardcoding one offset we try each of these whole-hour UTC offsets at match
+ * time and keep whichever yields the most caller+time hits. 4 = EDT, 5 = EST;
+ * 6/7 cover a Central-time mislabel just in case.
+ */
+const CANDIDATE_OFFSET_HOURS = [4, 5, 6, 7] as const;
+const DEFAULT_OFFSET_HOURS = 4; // EDT — correct for summer Eastern
 
 export interface ParsedFileRow {
   serviceType: string;
   duration: string;
   callerId: string;
   callerLast10: string;
+  trackingNumber: string;
+  trackingLast10: string;
   costPerLead: number | null;
   etLabel: string; // human "07/06/2025 3:45 PM ET"
-  utcMs: number; // matching key
+  utcMs: number; // display/window key (fixed UTC-5)
+  naiveUtcMs: number; // wall clock as UTC; real UTC = naiveUtcMs + offsetHours*3600000
   ymd: string; // YYYY-MM-DD (ET calendar day)
 }
 
@@ -147,6 +160,7 @@ export function parseCplWorkbook(buffer: Buffer): ParseResult {
   const kTime = findKey(keys, "time");
   const kService = findKey(keys, "service");
   const kDuration = findKey(keys, "duration");
+  const kTracking = findKey(keys, "tracking");
 
   if (!kCaller) throw new Error('Missing a "Caller ID" column');
   if (!kDate || !kTime) throw new Error('Missing "Date" and/or "Time" columns');
@@ -165,6 +179,7 @@ export function parseCplWorkbook(buffer: Buffer): ParseResult {
       continue;
     }
     const utcMs = etWallClockToUtcMs(ymd.y, ymd.m, ymd.d, hm.H, hm.M);
+    const naiveUtcMs = Date.UTC(ymd.y, ymd.m - 1, ymd.d, hm.H, hm.M, 0, 0);
     minMs = Math.min(minMs, utcMs);
     maxMs = Math.max(maxMs, utcMs);
 
@@ -174,14 +189,18 @@ export function parseCplWorkbook(buffer: Buffer): ParseResult {
     const timeLabel =
       `${hour12}:${String(hm.M).padStart(2, "0")} ${hm.H < 12 ? "AM" : "PM"}`;
 
+    const trackingNumber = kTracking ? String(raw[kTracking] ?? "").trim() : "";
     rows.push({
       serviceType: kService ? String(raw[kService] ?? "").trim() : "",
       duration: kDuration ? String(raw[kDuration] ?? "").trim() : "",
       callerId,
       callerLast10: last10(callerId),
+      trackingNumber,
+      trackingLast10: last10(trackingNumber),
       costPerLead: kCpl ? parseMoney(raw[kCpl]) : null,
       etLabel: `${dateLabel} ${timeLabel} ET`,
       utcMs,
+      naiveUtcMs,
       ymd: `${ymd.y}-${String(ymd.m).padStart(2, "0")}-${String(ymd.d).padStart(2, "0")}`,
     });
   }
@@ -190,10 +209,11 @@ export function parseCplWorkbook(buffer: Buffer): ParseResult {
     throw new Error("No usable rows (need Caller ID, Date, and Time)");
   }
 
-  // Week window = min ET day 00:00 to max ET day 23:59, +/- a small buffer,
-  // expressed as UTC for the Ringba fetch.
-  const startBuffer = minMs - MATCH_TOLERANCE_MS - 2 * 60 * 60 * 1000;
-  const endBuffer = maxMs + MATCH_TOLERANCE_MS + 2 * 60 * 60 * 1000;
+  // Week window, expressed as UTC for the Ringba fetch. The buffer is wide
+  // (±6h) so the true call time falls inside the window no matter which of the
+  // candidate EST/EDT/Central offsets turns out to be correct.
+  const startBuffer = minMs - 6 * 60 * 60 * 1000;
+  const endBuffer = maxMs + 6 * 60 * 60 * 1000;
 
   return {
     rows,
@@ -211,14 +231,41 @@ export interface MatchResult {
   stripped: number;
   noMatch: number;
   leftUntouched: number;
+  offsetHours: number; // the EST/EDT offset auto-detected for this file
+  callerOverlap: number; // file billable rows whose caller exists in Ringba (any time)
+  trackingOverlap: number; // file billable rows whose tracking # exists in Ringba (diagnostic)
+}
+
+/** Count file rows that find a same-caller Ringba call within tolerance at a given offset. */
+function countMatchesAtOffset(
+  billable: ParsedFileRow[],
+  byCaller: Map<string, CplCall[]>,
+  offsetHours: number,
+): number {
+  let count = 0;
+  for (const fr of billable) {
+    const fileUtc = fr.naiveUtcMs + offsetHours * 3_600_000;
+    const cands = byCaller.get(fr.callerLast10);
+    if (cands?.some((c) => Math.abs(c.callDtMs - fileUtc) <= MATCH_TOLERANCE_MS)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /**
  * Match file rows to CPL calls, then classify:
- *  set     — file row matched a call → revenue = CPL, payout = 50% (scenarios 1,2; Inquirly override).
- *  strip   — CPL call NOT in file that is $0, or has revenue but no payout → set 0/0 (scenarios 3,4).
- *  no_match— file row with no Ringba call found.
- * CPL calls not in the file that already have both revenue and payout are left untouched.
+ *  set     — a BILLABLE file row (Cost Per Lead > 0) matched a call → revenue = CPL, payout = 50%.
+ *  strip   — a CPL call NOT in the file that carries revenue but no payout → set 0/0.
+ *  no_match— a billable file row with no Ringba call found.
+ *
+ * Only billable rows drive writes: $0/non-billable file rows are ignored (nothing
+ * to add), and $0 Ringba calls are ignored on the strip side too — that is the
+ * "filter for calls with revenue, so old $0 DID calls are left alone" rule.
+ *
+ * The file's EST/EDT offset is auto-detected: we score each candidate offset by
+ * how many billable rows it matches and use the winner, so a mislabeled timezone
+ * can't silently zero out the matches.
  */
 export function matchAndClassify(
   fileRows: ParsedFileRow[],
@@ -226,10 +273,40 @@ export function matchAndClassify(
 ): MatchResult {
   // index calls by caller last-10
   const byCaller = new Map<string, CplCall[]>();
+  const ringbaTrackingLast10 = new Set<string>();
   for (const call of calls) {
+    if (call.trackingLast10) ringbaTrackingLast10.add(call.trackingLast10);
     if (!call.callerLast10 || Number.isNaN(call.callDtMs)) continue;
     if (!byCaller.has(call.callerLast10)) byCaller.set(call.callerLast10, []);
     byCaller.get(call.callerLast10)!.push(call);
+  }
+
+  // Only billable rows produce SET writes; process highest CPL first so a
+  // billable row always wins a shared caller over a cheaper one.
+  const billable = fileRows
+    .filter((r) => (r.costPerLead ?? 0) > 0)
+    .sort((a, b) => (b.costPerLead ?? 0) - (a.costPerLead ?? 0));
+
+  // Auto-detect the timezone offset that produces the most matches.
+  let offsetHours = DEFAULT_OFFSET_HOURS;
+  let bestCount = -1;
+  for (const off of CANDIDATE_OFFSET_HOURS) {
+    const c = countMatchesAtOffset(billable, byCaller, off);
+    if (c > bestCount) {
+      bestCount = c;
+      offsetHours = off;
+    }
+  }
+  const offsetMs = offsetHours * 3_600_000;
+
+  // Diagnostics: raw overlap ignoring time (is the caller/tracking # even present?)
+  let callerOverlap = 0;
+  let trackingOverlap = 0;
+  for (const fr of billable) {
+    if (byCaller.has(fr.callerLast10)) callerOverlap += 1;
+    if (fr.trackingLast10 && ringbaTrackingLast10.has(fr.trackingLast10)) {
+      trackingOverlap += 1;
+    }
   }
 
   const usedCallIds = new Set<string>();
@@ -237,13 +314,14 @@ export function matchAndClassify(
   let matched = 0;
   let noMatch = 0;
 
-  for (const fr of fileRows) {
+  for (const fr of billable) {
+    const fileUtc = fr.naiveUtcMs + offsetMs;
     const candidates = (byCaller.get(fr.callerLast10) || []).filter(
       (c) => !usedCallIds.has(c.inboundCallId) &&
-        Math.abs(c.callDtMs - fr.utcMs) <= MATCH_TOLERANCE_MS,
+        Math.abs(c.callDtMs - fileUtc) <= MATCH_TOLERANCE_MS,
     );
     candidates.sort(
-      (a, b) => Math.abs(a.callDtMs - fr.utcMs) - Math.abs(b.callDtMs - fr.utcMs),
+      (a, b) => Math.abs(a.callDtMs - fileUtc) - Math.abs(b.callDtMs - fileUtc),
     );
     const best = candidates[0];
 
@@ -287,14 +365,15 @@ export function matchAndClassify(
     });
   }
 
-  // CPL calls not claimed by any file row
+  // CPL calls not claimed by any billable file row. Only touch calls that carry
+  // revenue but no payout (revenue that should not stand) — $0 calls (old DID
+  // noise) and fully-paid calls are left untouched.
   let stripped = 0;
   let leftUntouched = 0;
   for (const call of calls) {
     if (usedCallIds.has(call.inboundCallId)) continue;
-    const zeroConversion = call.conversionAmount <= 0;
     const revenueNoPayout = call.conversionAmount > 0 && call.payoutAmount <= 0;
-    if (zeroConversion || revenueNoPayout) {
+    if (revenueNoPayout) {
       stripped += 1;
       out.push({
         action: "strip",
@@ -316,5 +395,26 @@ export function matchAndClassify(
     }
   }
 
-  return { rows: out, matched, stripped, noMatch, leftUntouched };
+  console.log(
+    "[CPL] match: offset=UTC-%d, billable=%d, matched=%d, noMatch=%d, strip=%d, leftUntouched=%d | callerOverlap=%d, trackingOverlap=%d",
+    offsetHours,
+    billable.length,
+    matched,
+    noMatch,
+    stripped,
+    leftUntouched,
+    callerOverlap,
+    trackingOverlap,
+  );
+
+  return {
+    rows: out,
+    matched,
+    stripped,
+    noMatch,
+    leftUntouched,
+    offsetHours,
+    callerOverlap,
+    trackingOverlap,
+  };
 }

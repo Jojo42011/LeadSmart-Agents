@@ -54,6 +54,8 @@ export interface CplCall {
   callDtMs: number;
   callerNumber: string;
   callerLast10: string;
+  trackingNumber: string; // the DID the caller dialed (file "Tracking Number")
+  trackingLast10: string;
   publisherName: string;
   target: string;
   conversionAmount: number;
@@ -108,6 +110,9 @@ const COLUMNS = [
   "inboundCallId",
   "callDt",
   "inboundPhoneNumber",
+  "number",
+  "numberId",
+  "numberPoolName",
   "publisherName",
   "campaignName",
   "targetName",
@@ -116,6 +121,22 @@ const COLUMNS = [
   "payoutAmount",
   "hasConverted",
 ];
+
+/**
+ * The DID the caller dialed (the file's "Tracking Number"). Ringba exposes this
+ * as the dialed/number column; the exact key varies by account, so read the
+ * first non-empty of the candidates. Used for diagnostics/fallback, not the
+ * primary key (a DID is shared across many calls, so it isn't unique per call).
+ */
+const TRACKING_NUMBER_COLUMNS = ["number", "numberId", "numberPoolName"];
+
+function trackingNumberOf(row: RawRow): string {
+  for (const c of TRACKING_NUMBER_COLUMNS) {
+    const v = str(row, c);
+    if (v) return v;
+  }
+  return "";
+}
 
 /**
  * Columns scanned for the CPL marker ("33 miles rtt -" / "inquirly"). In this
@@ -184,6 +205,10 @@ export async function fetchCplCalls(
 
   const { records: all, truncated } = await paginateAllRecords(
     async (offset, size) => {
+      // NOTE: no hasConverted filter. The CPL leads we need to SET revenue on
+      // have NOT converted yet ($0), so filtering by hasConverted excluded the
+      // exact calls we must find. We pull every call in the window and scope to
+      // CPL targets (33 Miles / Inquirly) client-side below.
       const res = await client.post<{ report?: { records?: RawRow[] } }>(
         `/${accountId}/calllogs`,
         {
@@ -191,14 +216,6 @@ export async function fetchCplCalls(
           reportEnd: endIso,
           size,
           offset,
-          filters: [
-            {
-              anyMatch: true,
-              filters: [
-                { column: "hasConverted", value: "true", isNegativeMatch: false },
-              ],
-            },
-          ],
           valueColumns: COLUMNS.map((column) => ({ column })),
           orderByColumns: [{ column: "callDt", direction: "asc" }],
         },
@@ -208,12 +225,11 @@ export async function fetchCplCalls(
   );
 
   // ---- Diagnostics: expose why matching may find nothing ----
-  // Print the RAW shape of the first few converted rows so we can see the exact
-  // format of callDt / inboundPhoneNumber / target coming back from Ringba, plus
-  // how many rows survive the CPL-target filter and how many yield a usable
-  // (callerLast10 + parseable callDt) matching key.
+  // Print the RAW shape of the first few rows so we can see the exact format of
+  // callDt / inboundPhoneNumber / dialed number / target coming back from
+  // Ringba, plus how many rows survive the CPL-target filter.
   console.log(
-    "[CPL] fetchCplCalls window %s → %s : %d converted rows fetched (truncated=%s)",
+    "[CPL] fetchCplCalls window %s → %s : %d rows fetched (truncated=%s)",
     startIso,
     endIso,
     all.length,
@@ -224,17 +240,24 @@ export async function fetchCplCalls(
       callDt: str(row, "callDt"),
       callDtMs: parseCallDtMs(str(row, "callDt")),
       inboundPhoneNumber: str(row, "inboundPhoneNumber"),
-      last10: last10(str(row, "inboundPhoneNumber")),
+      callerLast10: last10(str(row, "inboundPhoneNumber")),
+      trackingNumber: trackingNumberOf(row),
+      number: str(row, "number"),
+      numberId: str(row, "numberId"),
+      numberPoolName: str(row, "numberPoolName"),
       campaignName: str(row, "campaignName"),
       targetName: str(row, "targetName"),
       buyer: str(row, "buyer"),
       publisherName: str(row, "publisherName"),
+      conversionAmount: num(row, "conversionAmount"),
+      payoutAmount: num(row, "payoutAmount"),
     }));
     console.log("[CPL] sample raw rows: %s", JSON.stringify(sample));
   }
   let cplTargetCount = 0;
   let unparseableDt = 0;
   let emptyCaller = 0;
+  let withRevenue = 0;
 
   const calls: CplCall[] = [];
   for (const row of all) {
@@ -246,26 +269,32 @@ export async function fetchCplCalls(
 
     const callDt = str(row, "callDt");
     const callerNumber = str(row, "inboundPhoneNumber");
+    const trackingNumber = trackingNumberOf(row);
     const callDtMs = parseCallDtMs(callDt);
+    const conversionAmount = num(row, "conversionAmount");
     if (Number.isNaN(callDtMs)) unparseableDt += 1;
     if (!last10(callerNumber)) emptyCaller += 1;
+    if (conversionAmount > 0) withRevenue += 1;
     calls.push({
       inboundCallId,
       callDt,
       callDtMs,
       callerNumber,
       callerLast10: last10(callerNumber),
+      trackingNumber,
+      trackingLast10: last10(trackingNumber),
       publisherName: str(row, "publisherName"),
       target,
-      conversionAmount: num(row, "conversionAmount"),
+      conversionAmount,
       payoutAmount: num(row, "payoutAmount"),
     });
   }
 
   console.log(
-    "[CPL] CPL-target calls: %d (of %d converted). unparseable callDt: %d, empty caller: %d",
+    "[CPL] CPL-target calls: %d (of %d fetched). withRevenue: %d, unparseable callDt: %d, empty caller: %d",
     cplTargetCount,
     all.length,
+    withRevenue,
     unparseableDt,
     emptyCaller,
   );
