@@ -12,8 +12,9 @@ import type { CplRowInput } from "./cplDb";
  *   Account Name, Service Type, Date, Time (EST), Tracking Number,
  *   Caller ID, Duration, Cost Per Lead, Zip Code
  * parse identically. Caller IDs may be dash-formatted (954-487-0148); last10()
- * strips non-digits before matching. The "EST" time column is parsed as
- * America/New_York, so July files correctly resolve as EDT (UTC-4).
+ * strips non-digits before matching. Per 33 Miles, the "Time (EST)" column is
+ * always literal EST (fixed UTC-5, no daylight saving), so summer files stay at
+ * UTC-5 rather than shifting to EDT/UTC-4.
  */
 
 const MATCH_TOLERANCE_MS = 5 * 60 * 1000; // ±5 minutes
@@ -29,33 +30,15 @@ export interface ParsedFileRow {
   ymd: string; // YYYY-MM-DD (ET calendar day)
 }
 
-// ---------- Eastern wall-clock → UTC ----------
+// ---------- EST wall-clock → UTC ----------
 
-function nyOffsetMs(atUtcMs: number): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(new Date(atUtcMs));
-  const read = (t: string) =>
-    parseInt(parts.find((p) => p.type === t)?.value ?? "0", 10);
-  let hour = read("hour");
-  if (hour === 24) hour = 0;
-  const asUtc = Date.UTC(
-    read("year"),
-    read("month") - 1,
-    read("day"),
-    hour,
-    read("minute"),
-    read("second"),
-  );
-  return asUtc - atUtcMs;
-}
+/**
+ * 33 Miles confirmed their file timestamps are always literal EST — a fixed
+ * UTC-5 offset with NO daylight-saving adjustment (so a July time is still
+ * UTC-5, not EDT/UTC-4). Using America/New_York would shift summer rows by an
+ * hour and miss the ±5 min match. UTC = EST wall clock + 5 hours.
+ */
+const EST_OFFSET_MS = 5 * 60 * 60 * 1000;
 
 function etWallClockToUtcMs(
   y: number,
@@ -64,12 +47,7 @@ function etWallClockToUtcMs(
   H: number,
   M: number,
 ): number {
-  let utc = Date.UTC(y, m - 1, d, H, M, 0, 0);
-  for (let i = 0; i < 3; i++) {
-    const off = nyOffsetMs(utc);
-    utc = Date.UTC(y, m - 1, d, H, M, 0, 0) - off;
-  }
-  return utc;
+  return Date.UTC(y, m - 1, d, H, M, 0, 0) + EST_OFFSET_MS;
 }
 
 // ---------- cell parsing (Date objects, Excel serials, or strings) ----------
