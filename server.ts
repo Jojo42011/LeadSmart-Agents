@@ -2698,9 +2698,16 @@ app.post(
       }
 
       const parsed = parseCplWorkbook(buffer);
+      // Fetch scoped to the callers we actually set (billable rows). These are
+      // the calls that must be found; every one should exist in Ringba, so the
+      // caller-filter's "did it work?" check is clean.
+      const billableCallers = parsed.rows
+        .filter((r) => (r.costPerLead ?? 0) > 0)
+        .map((r) => r.callerLast10);
       const { calls, truncated } = await fetchCplCalls(
         parsed.weekStartIso,
         parsed.weekEndIso,
+        billableCallers,
       );
       const match = matchAndClassify(parsed.rows, calls);
 

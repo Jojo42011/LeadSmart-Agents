@@ -11,7 +11,7 @@ import axios, { AxiosInstance } from "axios";
  *   → { result: { payoutAmount, conversionAmount } } immediately (no job queue).
  */
 
-const BASE_URL = "https://api.ringba.com/v2";
+const BASE_URL = process.env.RINGBA_BASE_URL || "https://api.ringba.com/v2";
 const PAGE_SIZE = 100;
 /**
  * Pagination runs until Ringba returns a short page (the real end). This is
@@ -192,38 +192,179 @@ export async function paginateAllRecords(
   }
 }
 
+// Ringba caps a call-log report at 10,000 rows; a window returning ~this many
+// is assumed capped and gets split by time.
+const CAP_THRESHOLD = 9_500;
+const CALLER_CHUNK = 100; // caller numbers per filtered request
+const MIN_SLICE_MS = 30 * 60 * 1000; // don't bisect a window below 30 min
+const MAX_SLICE_DEPTH = 14;
+
+/** US 10-digit → Ringba's canonical E.164 ("+1XXXXXXXXXX"). */
+function last10ToE164(l10: string): string {
+  return l10.length === 10 ? `+1${l10}` : "";
+}
+
+function dedupeByCallId(rows: RawRow[]): RawRow[] {
+  const seen = new Set<string>();
+  const out: RawRow[] = [];
+  for (const row of rows) {
+    const id = str(row, "inboundCallId");
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(row);
+  }
+  return out;
+}
+
+async function fetchWindow(
+  client: AxiosInstance,
+  accountId: string,
+  startIso: string,
+  endIso: string,
+  extraFilters?: unknown[],
+): Promise<{ records: RawRow[]; truncated: boolean }> {
+  return paginateAllRecords(async (offset, size) => {
+    const body: Record<string, unknown> = {
+      reportStart: startIso,
+      reportEnd: endIso,
+      size,
+      offset,
+      valueColumns: COLUMNS.map((column) => ({ column })),
+      orderByColumns: [{ column: "callDt", direction: "asc" }],
+    };
+    if (extraFilters) body.filters = extraFilters;
+    const res = await client.post<{ report?: { records?: RawRow[] } }>(
+      `/${accountId}/calllogs`,
+      body,
+    );
+    return res.data?.report?.records ?? [];
+  });
+}
+
 /**
- * Converted CPL-target calls (33 Miles RTT / Inquirly) in [startIso, endIso].
- * Restricting to CPL targets keeps the strip scenarios from ever touching
- * other buyers' revenue. Fetches ALL pages before filtering.
+ * Fetch only the calls whose inbound number is one of the file's callers, by
+ * OR-filtering inboundPhoneNumber in chunks. This is the primary path: it pulls
+ * the ~hundreds of relevant calls across the whole week instead of the account's
+ * firehose, so we never lose the back half of the week to Ringba's 10k cap.
+ */
+async function fetchByCallers(
+  client: AxiosInstance,
+  accountId: string,
+  startIso: string,
+  endIso: string,
+  callerE164: string[],
+): Promise<RawRow[]> {
+  const all: RawRow[] = [];
+  for (let i = 0; i < callerE164.length; i += CALLER_CHUNK) {
+    const chunk = callerE164.slice(i, i + CALLER_CHUNK);
+    const filters = [
+      {
+        anyMatch: true,
+        filters: chunk.map((value) => ({
+          column: "inboundPhoneNumber",
+          value,
+          isNegativeMatch: false,
+        })),
+      },
+    ];
+    const { records } = await fetchWindow(client, accountId, startIso, endIso, filters);
+    all.push(...records);
+  }
+  return all;
+}
+
+/**
+ * Fallback used only if the caller filter is unsupported/returns nothing: pull
+ * the whole window and, whenever a window comes back at Ringba's 10k cap, split
+ * it in half by time and recurse until every slice is below the cap. Slower
+ * (fetches the firehose) but guarantees full-week coverage.
+ */
+async function fetchAdaptive(
+  client: AxiosInstance,
+  accountId: string,
+  startMs: number,
+  endMs: number,
+  depth = 0,
+): Promise<{ records: RawRow[]; truncated: boolean }> {
+  const startIso = new Date(startMs).toISOString();
+  const endIso = new Date(endMs).toISOString();
+  const { records, truncated } = await fetchWindow(client, accountId, startIso, endIso);
+  const capped = records.length >= CAP_THRESHOLD;
+  if (capped && endMs - startMs > MIN_SLICE_MS && depth < MAX_SLICE_DEPTH) {
+    const mid = Math.floor((startMs + endMs) / 2);
+    const left = await fetchAdaptive(client, accountId, startMs, mid, depth + 1);
+    const right = await fetchAdaptive(client, accountId, mid, endMs, depth + 1);
+    return {
+      records: left.records.concat(right.records),
+      truncated: left.truncated || right.truncated,
+    };
+  }
+  // Still capped at the smallest slice we allow → genuinely truncated.
+  return { records, truncated: truncated || (capped && depth >= MAX_SLICE_DEPTH) };
+}
+
+/**
+ * CPL calls for the week, scoped to the file's own callers. Returns EVERY call
+ * from those callers (all buyers), so the matcher can pick the right one by
+ * caller + time and the tracking/target tiebreakers; the file bounds what we
+ * write. `callerLast10s` are the last-10 digits of every file row's Caller ID.
  */
 export async function fetchCplCalls(
   startIso: string,
   endIso: string,
+  callerLast10s: string[],
 ): Promise<{ calls: CplCall[]; truncated: boolean }> {
   const client = createClient();
   const accountId = getAccountId();
 
-  const { records: all, truncated } = await paginateAllRecords(
-    async (offset, size) => {
-      // NOTE: no hasConverted filter. The CPL leads we need to SET revenue on
-      // have NOT converted yet ($0), so filtering by hasConverted excluded the
-      // exact calls we must find. We pull every call in the window and scope to
-      // CPL targets (33 Miles / Inquirly) client-side below.
-      const res = await client.post<{ report?: { records?: RawRow[] } }>(
-        `/${accountId}/calllogs`,
-        {
-          reportStart: startIso,
-          reportEnd: endIso,
-          size,
-          offset,
-          valueColumns: COLUMNS.map((column) => ({ column })),
-          orderByColumns: [{ column: "callDt", direction: "asc" }],
-        },
+  const callerSet = new Set(callerLast10s.filter((c) => c && c.length === 10));
+  const callerE164 = [...callerSet].map(last10ToE164).filter(Boolean);
+
+  let all: RawRow[] = [];
+  let truncated = false;
+  let fetchMode = "caller-filter";
+
+  try {
+    all = dedupeByCallId(
+      await fetchByCallers(client, accountId, startIso, endIso, callerE164),
+    );
+    // Did the filter actually work? Count distinct file callers we got back.
+    const got = new Set<string>();
+    for (const row of all) {
+      const l10 = last10(str(row, "inboundPhoneNumber"));
+      if (callerSet.has(l10)) got.add(l10);
+    }
+    console.log(
+      "[CPL] caller-filter fetch: %d rows, %d/%d distinct file callers present",
+      all.length,
+      got.size,
+      callerSet.size,
+    );
+    // If Ringba ignored the filter we'd get the capped firehose back (only the
+    // earliest ~day of callers), so recovering < half the file's callers means
+    // the filter didn't work — fall back to the guaranteed adaptive fetch.
+    if (callerSet.size >= 20 && got.size < callerSet.size * 0.5) {
+      throw new Error(
+        `caller filter recovered only ${got.size}/${callerSet.size} callers — falling back`,
       );
-      return res.data?.report?.records ?? [];
-    },
-  );
+    }
+  } catch (err) {
+    console.warn(
+      "[CPL] caller-filter path failed (%s) — falling back to adaptive full-week fetch",
+      err instanceof Error ? err.message : String(err),
+    );
+    fetchMode = "adaptive-fallback";
+    const res = await fetchAdaptive(
+      client,
+      accountId,
+      Date.parse(startIso),
+      Date.parse(endIso),
+    );
+    all = dedupeByCallId(res.records);
+    truncated = res.truncated;
+  }
+
+  console.log("[CPL] fetch mode=%s, %d unique calls", fetchMode, all.length);
 
   // ---- Diagnostics: expose why matching may find nothing ----
   // Print the RAW shape of the first few rows so we can see the exact format of
