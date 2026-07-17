@@ -122,7 +122,11 @@ import {
   markRowResult as markCplRowResult,
   finalizeBatch as finalizeCplBatch,
 } from "./lib/cplDb";
-import { fetchCplCalls, overrideCallPayments } from "./lib/ringbaCplClient";
+import {
+  fetchCplCalls,
+  overrideCallPayments,
+  voidCallConversion,
+} from "./lib/ringbaCplClient";
 import { parseCplWorkbook, matchAndClassify } from "./lib/cplParser";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
@@ -2790,15 +2794,26 @@ app.post("/api/cpl/apply", express.json(), async (req, res) => {
         continue;
       }
       try {
-        const out = await overrideCallPayments(
-          row.inboundCallId,
-          row.newRevenue ?? 0,
-          row.newPayout ?? 0,
-        );
-        markCplRowResult(row.id, true, {
-          newRevenue: out.conversionAmount,
-          newPayout: out.payoutAmount,
-        });
+        if (row.action === "strip") {
+          // Voiding the full amounts removes the conversion entirely; a $0
+          // override would leave the call still counting as converted.
+          await voidCallConversion(
+            row.inboundCallId,
+            row.currentRevenue ?? 0,
+            row.currentPayout ?? 0,
+          );
+          markCplRowResult(row.id, true, { newRevenue: 0, newPayout: 0 });
+        } else {
+          const out = await overrideCallPayments(
+            row.inboundCallId,
+            row.newRevenue ?? 0,
+            row.newPayout ?? 0,
+          );
+          markCplRowResult(row.id, true, {
+            newRevenue: out.conversionAmount,
+            newPayout: out.payoutAmount,
+          });
+        }
         updated += 1;
         results.push({ inboundCallId: row.inboundCallId, action: row.action, ok: true });
       } catch (err) {
