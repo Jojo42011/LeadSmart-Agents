@@ -4,11 +4,17 @@ import axios, { AxiosInstance } from "axios";
  * Ringba API for the CPL updater. Isolated from the scrub and fraud clients so
  * nothing here can affect those systems.
  *
- * Write endpoint (confirmed from DevTools):
- *   POST /{accountId}/calls/payments/override
+ * Write endpoints:
+ *   POST /{accountId}/calls/payments/override  (SET rows — confirmed from DevTools)
  *   { inboundCallId, NewConversionAmount, NewPayoutAmount,
  *     adjustConversion: true, adjustPayout: true, reason }
  *   → { result: { payoutAmount, conversionAmount } } immediately (no job queue).
+ *
+ *   POST /{accountId}/calls/void  (STRIP rows)
+ *   Voids (subtracts) revenue/payout instead of overriding to $0 — a $0
+ *   override leaves the call flagged as converted in Ringba's reporting, while
+ *   voiding the full amount removes the conversion entirely. Same endpoint the
+ *   scrub flow uses.
  */
 
 const BASE_URL = process.env.RINGBA_BASE_URL || "https://api.ringba.com/v2";
@@ -494,4 +500,37 @@ export async function overrideCallPayments(
     payoutAmount: result?.payoutAmount ?? newPayoutAmount,
     conversionAmount: result?.conversionAmount ?? newConversionAmount,
   };
+}
+
+/**
+ * Strip a call by voiding its full conversion/payout amounts so it stops
+ * counting as converted (Ringba's "clear out"). Per the API docs, only sides
+ * with a positive amount may be voided, and the void amount must be ≤ the
+ * current amount — so each flag is sent only when there is something to
+ * subtract. "voidConverionAmount" (missing 's') is Ringba's real field name,
+ * not a typo here. No-ops when both amounts are already ≤ 0.
+ */
+export async function voidCallConversion(
+  inboundCallId: string,
+  currentConversionAmount: number,
+  currentPayoutAmount: number,
+  reason = "CPL adjustment - remove conversion (not in weekly file)",
+): Promise<void> {
+  const body: Record<string, unknown> = {
+    inboundCallId,
+    voidReason: reason,
+  };
+  if (currentConversionAmount > 0) {
+    body.voidConversion = true;
+    body.voidConverionAmount = currentConversionAmount;
+  }
+  if (currentPayoutAmount > 0) {
+    body.voidPayout = true;
+    body.voidPayoutAmount = currentPayoutAmount;
+  }
+  if (!body.voidConversion && !body.voidPayout) return;
+
+  const client = createClient();
+  const accountId = getAccountId();
+  await client.post(`/${accountId}/calls/void`, body);
 }
