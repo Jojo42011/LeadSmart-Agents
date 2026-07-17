@@ -287,6 +287,14 @@ export function matchAndClassify(
     .filter((r) => (r.costPerLead ?? 0) > 0)
     .sort((a, b) => (b.costPerLead ?? 0) - (a.costPerLead ?? 0));
 
+  // Tracking numbers (DIDs) that appear anywhere in the file — the set of 33
+  // Miles' own routing numbers. Used to scope the strip side so we never touch
+  // a call that isn't 33 Miles' (the fetch now returns every buyer's calls).
+  const fileTrackingSet = new Set<string>();
+  for (const r of fileRows) {
+    if (r.trackingLast10) fileTrackingSet.add(r.trackingLast10);
+  }
+
   // Auto-detect the timezone offset that produces the most matches.
   let offsetHours = DEFAULT_OFFSET_HOURS;
   let bestCount = -1;
@@ -320,9 +328,21 @@ export function matchAndClassify(
       (c) => !usedCallIds.has(c.inboundCallId) &&
         Math.abs(c.callDtMs - fileUtc) <= MATCH_TOLERANCE_MS,
     );
-    candidates.sort(
-      (a, b) => Math.abs(a.callDtMs - fileUtc) - Math.abs(b.callDtMs - fileUtc),
-    );
+    // Rank candidates for the SAME caller+time: a call that came through this
+    // file row's tracking # (the 33 Miles DID) wins first, then a CPL-target
+    // named call, then nearest in time. This keeps us from claiming another
+    // buyer's call when the same consumer called several buyers that week.
+    const score = (c: CplCall): number => {
+      let s = 0;
+      if (fr.trackingLast10 && c.trackingLast10 === fr.trackingLast10) s += 1000;
+      if (c.isCplTargetName) s += 100;
+      return s;
+    };
+    candidates.sort((a, b) => {
+      const ds = score(b) - score(a);
+      if (ds !== 0) return ds;
+      return Math.abs(a.callDtMs - fileUtc) - Math.abs(b.callDtMs - fileUtc);
+    });
     const best = candidates[0];
 
     if (!best) {
@@ -365,15 +385,20 @@ export function matchAndClassify(
     });
   }
 
-  // CPL calls not claimed by any billable file row. Only touch calls that carry
-  // revenue but no payout (revenue that should not stand) — $0 calls (old DID
-  // noise) and fully-paid calls are left untouched.
+  // CPL calls not claimed by any billable file row. Only touch calls that are
+  // confirmed 33 Miles (marker-named OR dialed a tracking # present in the file)
+  // AND carry revenue but no payout. $0 calls (old DID noise), fully-paid calls,
+  // and any call that isn't provably 33 Miles are all left untouched — the fetch
+  // now returns every buyer, so this scope is what protects other buyers.
   let stripped = 0;
   let leftUntouched = 0;
   for (const call of calls) {
     if (usedCallIds.has(call.inboundCallId)) continue;
+    const isThirtyThreeMiles =
+      call.isCplTargetName ||
+      (!!call.trackingLast10 && fileTrackingSet.has(call.trackingLast10));
     const revenueNoPayout = call.conversionAmount > 0 && call.payoutAmount <= 0;
-    if (revenueNoPayout) {
+    if (isThirtyThreeMiles && revenueNoPayout) {
       stripped += 1;
       out.push({
         action: "strip",

@@ -58,6 +58,7 @@ export interface CplCall {
   trackingLast10: string;
   publisherName: string;
   target: string;
+  isCplTargetName: boolean; // target/campaign/buyer/publisher matched a CPL marker
   conversionAmount: number;
   payoutAmount: number;
 }
@@ -258,14 +259,22 @@ export async function fetchCplCalls(
   let unparseableDt = 0;
   let emptyCaller = 0;
   let withRevenue = 0;
+  let trackingPopulated = 0;
 
+  // NOTE: we no longer drop non-CPL-target calls here. Ringba's campaign/target
+  // naming is unreliable (33 Miles calls come in under differently-named
+  // campaigns), so we return EVERY call in the window and let the matcher scope
+  // writes by the FILE: revenue is only set on calls a billable file row claims
+  // (caller + time, tracking # as tiebreaker), and strips are limited to 33
+  // Miles calls (marker name OR a tracking # that appears in the file). The
+  // isCplTargetName flag is retained only for that strip scoping.
   const calls: CplCall[] = [];
   for (const row of all) {
     const inboundCallId = str(row, "inboundCallId");
     if (!inboundCallId) continue;
     const target = targetLabel(row);
-    if (!isCplTarget(target)) continue;
-    cplTargetCount += 1;
+    const isTgt = isCplTarget(target);
+    if (isTgt) cplTargetCount += 1;
 
     const callDt = str(row, "callDt");
     const callerNumber = str(row, "inboundPhoneNumber");
@@ -275,6 +284,7 @@ export async function fetchCplCalls(
     if (Number.isNaN(callDtMs)) unparseableDt += 1;
     if (!last10(callerNumber)) emptyCaller += 1;
     if (conversionAmount > 0) withRevenue += 1;
+    if (last10(trackingNumber)) trackingPopulated += 1;
     calls.push({
       inboundCallId,
       callDt,
@@ -285,16 +295,18 @@ export async function fetchCplCalls(
       trackingLast10: last10(trackingNumber),
       publisherName: str(row, "publisherName"),
       target,
+      isCplTargetName: isTgt,
       conversionAmount,
       payoutAmount: num(row, "payoutAmount"),
     });
   }
 
   console.log(
-    "[CPL] CPL-target calls: %d (of %d fetched). withRevenue: %d, unparseable callDt: %d, empty caller: %d",
+    "[CPL] %d calls in window | CPL-target-named: %d | withRevenue: %d | tracking# populated: %d | unparseable callDt: %d | empty caller: %d",
+    calls.length,
     cplTargetCount,
-    all.length,
     withRevenue,
+    trackingPopulated,
     unparseableDt,
     emptyCaller,
   );
