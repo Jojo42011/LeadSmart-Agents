@@ -2697,7 +2697,10 @@ app.post(
         return;
       }
 
-      const parsed = parseCplWorkbook(buffer);
+      // Source selector from the UI; anything but "inquirly" is 33 Miles so
+      // existing clients that send no mode keep the original behavior.
+      const mode = req.body?.mode === "inquirly" ? "inquirly" : "33miles";
+      const parsed = parseCplWorkbook(buffer, mode);
       // Fetch scoped to the callers we actually set (billable rows). These are
       // the calls that must be found; every one should exist in Ringba, so the
       // caller-filter's "did it work?" check is clean.
