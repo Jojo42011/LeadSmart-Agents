@@ -23,6 +23,7 @@
         --amber: #ffb000;
         --purple: #b388ff;
         --red: #ff4444;
+        --orange: #ff8a3c;
         --font: "JetBrains Mono", ui-monospace, monospace;
       }
 
@@ -200,6 +201,50 @@
       .sev--mid .sev__fill { background: var(--amber); }
       .sev--high .sev__fill { background: var(--red); }
 
+      /* Publisher risk score — banded colors matching the legend */
+      .risk-cell { cursor: pointer; }
+      .risk-cell:hover .sev__bar { border-color: var(--text-dim); }
+      .risk--clean .sev__fill { background: var(--green); }
+      .risk--watch .sev__fill { background: var(--amber); }
+      .risk--suspicious .sev__fill { background: var(--orange); }
+      .risk--high .sev__fill { background: var(--red); }
+      .risk-chip {
+        display: inline-block;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 2px 6px;
+        margin-left: 8px;
+        border: 1px solid;
+      }
+      .risk-chip--clean { color: var(--green); border-color: rgba(0, 255, 136, 0.4); }
+      .risk-chip--watch { color: var(--amber); border-color: rgba(255, 176, 0, 0.45); }
+      .risk-chip--suspicious { color: var(--orange); border-color: rgba(255, 138, 60, 0.5); }
+      .risk-chip--high { color: var(--red); border-color: rgba(255, 68, 68, 0.5); }
+      .risk-hint { font-size: 8px; color: var(--text-dim); letter-spacing: 1px; margin-top: 3px; }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 14px;
+        border: 1px solid var(--border);
+        background: var(--bg-panel);
+        padding: 8px 14px;
+        margin-bottom: 10px;
+        font-size: 10px;
+        letter-spacing: 1px;
+      }
+      .legend__title { color: var(--text-dim); font-size: 9px; letter-spacing: 2px; text-transform: uppercase; }
+      .legend__item { display: inline-flex; align-items: center; gap: 6px; }
+      .legend__swatch { width: 10px; height: 10px; border: 1px solid var(--border-bright); display: inline-block; }
+
+      .reason-text { font-size: 11px; color: var(--text); margin-top: 4px; max-width: 460px; }
+
+      .breakdown b { color: var(--text); }
+      .breakdown__counts { margin-bottom: 8px; }
+      .breakdown__call { margin: 5px 0; }
+
       .mono-dim { color: var(--text-dim); font-size: 11px; }
 
       .btn-block {
@@ -318,6 +363,14 @@
       </div>
 
       <div class="section-head"><h2>Publisher risk</h2><div class="line"></div></div>
+      <div class="legend">
+        <span class="legend__title">Risk score</span>
+        <span class="legend__item"><span class="legend__swatch" style="background: var(--green)"></span>0–40 Clean</span>
+        <span class="legend__item"><span class="legend__swatch" style="background: var(--amber)"></span>40–70 Watch</span>
+        <span class="legend__item"><span class="legend__swatch" style="background: var(--orange)"></span>70–85 Suspicious</span>
+        <span class="legend__item"><span class="legend__swatch" style="background: var(--red)"></span>85+ High Risk</span>
+        <span class="legend__item mono-dim">score = 60% flag rate + 40% worst flag severity · click a score for the breakdown</span>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -403,6 +456,14 @@
         let modalBlock = true;
         let toastTimer = null;
         let expandedCallId = null;
+        let expandedPublisher = null;
+        let publishersCache = [];
+        let allFlags = [];
+
+        // Fetch more flags than we render so the per-publisher risk breakdown
+        // has enough history to count by reason and pick top calls.
+        const FEED_FETCH_LIMIT = 300;
+        const FEED_RENDER_LIMIT = 100;
 
         function esc(s) {
           return String(s == null ? "" : s)
@@ -471,6 +532,112 @@
           );
         }
 
+        // Risk score bands: 0-40 clean, 40-70 watch, 70-85 suspicious, 85+ high risk.
+        function riskInfo(score) {
+          const s = Math.max(0, Math.min(100, Number(score) || 0));
+          if (s >= 85) return { key: "high", label: "HIGH RISK" };
+          if (s >= 70) return { key: "suspicious", label: "SUSPICIOUS" };
+          if (s >= 40) return { key: "watch", label: "WATCH" };
+          return { key: "clean", label: "CLEAN" };
+        }
+
+        function riskCell(score, expanded) {
+          const s = Math.max(0, Math.min(100, Number(score) || 0));
+          const info = riskInfo(s);
+          return (
+            '<span class="sev risk--' + info.key + '"><span class="sev__bar"><span class="sev__fill" style="width:' +
+            s + '%"></span></span>' + s + "</span>" +
+            '<span class="risk-chip risk-chip--' + info.key + '">' + info.label + "</span>" +
+            '<div class="risk-hint">' + (expanded ? "▲ hide breakdown" : "▼ what's driving this?") + "</div>"
+          );
+        }
+
+        function parseDetail(detail) {
+          if (!detail) return {};
+          if (typeof detail === "string") {
+            try { return JSON.parse(detail); } catch { return {}; }
+          }
+          return typeof detail === "object" ? detail : {};
+        }
+
+        // Plain-English one-liner for a flag, e.g.
+        // "VOIP number — Google Voice carrier, fraud score 91"
+        // "Shared caller ID — appeared under 3 publishers"
+        function plainReason(f) {
+          const d = parseDetail(f.detail);
+          if (f.reason === "voip") {
+            const parts = [];
+            if (d.carrier) parts.push(d.carrier + " carrier");
+            else if (d.lineType) parts.push(d.lineType + " line");
+            if (typeof d.fraudScore === "number") parts.push("fraud score " + d.fraudScore);
+            if (!parts.length && Array.isArray(d.signals) && d.signals.length) {
+              parts.push(d.signals.join(", "));
+            }
+            return "VOIP number" + (parts.length ? " — " + parts.join(", ") : "");
+          }
+          if (f.reason === "shared_caller") {
+            const n =
+              typeof d.publisherCount === "number" && d.publisherCount > 0
+                ? d.publisherCount
+                : Array.isArray(d.publishers) ? d.publishers.length : 0;
+            return "Shared caller ID" + (n ? " — appeared under " + n + " publisher" + (n === 1 ? "" : "s") : "");
+          }
+          if (f.reason === "ai_analysis") {
+            const verdict = d.verdict ? String(d.verdict).replace(/_/g, " ") : "suspicious";
+            let out = "AI call analysis — " + verdict;
+            if (typeof d.duplicates === "number" && d.duplicates > 1) {
+              out += "; identical script across " + d.duplicates + " calls";
+            } else if (Array.isArray(d.reasons) && d.reasons.length) {
+              out += "; " + d.reasons[0];
+            }
+            return out;
+          }
+          return "";
+        }
+
+        function flagsFor(publisherName) {
+          return allFlags.filter((fl) => fl.publisherName === publisherName);
+        }
+
+        // What's driving a publisher's risk score: flag counts by reason plus
+        // their top flagged calls, built from the recent flag feed.
+        function riskBreakdownHtml(p) {
+          const flags = flagsFor(p.publisherName);
+          if (!flags.length) {
+            return (
+              "No flags for this publisher in the last " + allFlags.length +
+              " feed entries (" + p.flaggedCalls + " flagged all-time — older flags have rolled out of the recent feed)."
+            );
+          }
+          const counts = { voip: 0, shared_caller: 0, ai_analysis: 0, other: 0 };
+          for (const fl of flags) {
+            if (counts[fl.reason] != null) counts[fl.reason] += 1;
+            else counts.other += 1;
+          }
+          const top = flags
+            .slice()
+            .sort((a, b) => (Number(b.severity) || 0) - (Number(a.severity) || 0))
+            .slice(0, 3);
+          const lines = [];
+          lines.push(
+            '<div class="breakdown__counts"><b>What\'s driving this score</b> — ' +
+            "VOIP flags: <b>" + counts.voip + "</b> · Shared caller ID: <b>" + counts.shared_caller +
+            "</b> · AI flags: <b>" + counts.ai_analysis + "</b>" +
+            (counts.other ? " · Other: <b>" + counts.other + "</b>" : "") +
+            ' <span class="mono-dim">(from this publisher\'s ' + flags.length +
+            " most recent flags · score = 60% flag rate + 40% worst severity)</span></div>"
+          );
+          lines.push("<b>Top flagged calls</b>");
+          for (const fl of top) {
+            lines.push(
+              '<div class="breakdown__call">' + severityCell(fl.severity) + " · " +
+              esc(fmtCaller(fl.callerNumber)) + " · " + esc(plainReason(fl) || fl.reason) +
+              ' <span class="mono-dim">' + esc(fmtTime(fl.callDt || fl.createdAt)) + "</span></div>"
+            );
+          }
+          return lines.join("");
+        }
+
         function detailHtml(detail) {
           if (!detail) return "";
           try {
@@ -516,7 +683,12 @@
 
         async function loadPublishers() {
           const data = await fetchJson("/api/fraud/publishers");
-          const rows = data.publishers || [];
+          publishersCache = data.publishers || [];
+          renderPublishers();
+        }
+
+        function renderPublishers() {
+          const rows = publishersCache;
           if (!rows.length) {
             publishersBody.innerHTML =
               '<tr><td class="empty" colspan="6">No publishers scanned yet — run a scan.</td></tr>';
@@ -526,13 +698,15 @@
           for (const p of rows) {
             const tr = document.createElement("tr");
             const blocked = p.status === "blocked";
+            const expanded = expandedPublisher === p.publisherName;
             tr.innerHTML =
               "<td>" + esc(p.publisherName) + "</td>" +
               "<td>" + statusBadge(p.status) + "</td>" +
-              "<td>" + severityCell(p.riskScore) + "</td>" +
+              '<td class="risk-cell" title="Click for the risk breakdown">' + riskCell(p.riskScore, expanded) + "</td>" +
               "<td>" + p.flaggedCalls + " / " + p.totalCalls + "</td>" +
               '<td class="mono-dim">' + fmtTime(p.updatedAt) + "</td>" +
               "<td></td>";
+            tr.children[2].addEventListener("click", () => toggleRiskBreakdown(p.publisherName));
             const actionTd = tr.lastElementChild;
             const btn = document.createElement("button");
             btn.className = "btn-block" + (blocked ? " btn-unblock" : "");
@@ -540,18 +714,35 @@
             btn.addEventListener("click", () => openBlockModal(p.publisherName, !blocked));
             actionTd.appendChild(btn);
             publishersBody.appendChild(tr);
+
+            if (expanded) {
+              const dr = document.createElement("tr");
+              dr.className = "detail-row";
+              dr.innerHTML = '<td colspan="6"><div class="breakdown">' + riskBreakdownHtml(p) + "</div></td>";
+              publishersBody.appendChild(dr);
+            }
           }
         }
 
+        function toggleRiskBreakdown(publisherName) {
+          expandedPublisher = expandedPublisher === publisherName ? null : publisherName;
+          renderPublishers();
+        }
+
         async function loadFeed() {
-          const data = await fetchJson("/api/fraud/feed?limit=100");
-          const flags = data.flags || [];
-          if (!flags.length) {
+          const data = await fetchJson("/api/fraud/feed?limit=" + FEED_FETCH_LIMIT);
+          allFlags = data.flags || [];
+          renderFeed();
+        }
+
+        function renderFeed() {
+          if (!allFlags.length) {
             feedBody.innerHTML =
               '<tr><td class="empty" colspan="6">No flagged calls. Either traffic is clean or a scan has not run yet.</td></tr>';
             return;
           }
           feedBody.innerHTML = "";
+          const flags = allFlags.slice(0, FEED_RENDER_LIMIT);
           for (const f of flags) {
             const tr = document.createElement("tr");
             tr.style.cursor = "pointer";
@@ -559,7 +750,8 @@
               '<td class="mono-dim">' + fmtTime(f.createdAt) + "</td>" +
               "<td>" + esc(f.publisherName) + "</td>" +
               "<td>" + esc(fmtCaller(f.callerNumber)) + "</td>" +
-              "<td>" + reasonBadge(f.reason) + "</td>" +
+              "<td>" + reasonBadge(f.reason) +
+                '<div class="reason-text">' + esc(plainReason(f)) + "</div></td>" +
               "<td>" + severityCell(f.severity) + "</td>" +
               '<td class="mono-dim">' + (expandedCallId === f.inboundCallId ? "▲" : "▼") + "</td>";
             tr.addEventListener("click", () => toggleDetail(f, tr));
@@ -576,16 +768,23 @@
               feedBody.appendChild(dr);
             }
           }
+          if (allFlags.length > FEED_RENDER_LIMIT) {
+            const more = document.createElement("tr");
+            more.innerHTML =
+              '<td class="empty" colspan="6">Showing ' + FEED_RENDER_LIMIT + " of " +
+              allFlags.length + " recent flags (all are counted in the risk breakdowns above).</td>";
+            feedBody.appendChild(more);
+          }
         }
 
         async function toggleDetail(flag) {
           if (expandedCallId === flag.inboundCallId) {
             expandedCallId = null;
-            await loadFeed();
+            renderFeed();
             return;
           }
           expandedCallId = flag.inboundCallId;
-          await loadFeed();
+          renderFeed();
           try {
             const d = await fetchJson("/api/fraud/call/" + encodeURIComponent(flag.inboundCallId));
             const el = document.getElementById("detail-" + flag.id);
@@ -691,7 +890,9 @@
 
         async function refresh() {
           try {
-            await Promise.all([loadSummary(), loadPublishers(), loadFeed()]);
+            // Feed first: the publisher risk breakdowns are built from allFlags.
+            await Promise.all([loadSummary(), loadFeed()]);
+            await loadPublishers();
             setError(null);
           } catch (err) {
             setError(err.message || "Failed to load fraud data");

@@ -81,6 +81,43 @@ function seedDigitalTwinV2(db: ReturnType<typeof getHullDb>): void {
   console.log("[hull/memory] Digital-twin seed v2 applied (%d facts)", facts.length);
 }
 
+/**
+ * Fraud risk-scoring knowledge (v3) — how the risk score is computed, what the
+ * bands mean, and what each detector looks for, so Jarvis can explain a
+ * publisher's score when Seth asks. Idempotent via a system_state marker.
+ */
+function seedFraudScoringV3(db: ReturnType<typeof getHullDb>): void {
+  const marker = db
+    .prepare("SELECT value FROM system_state WHERE key = 'seed_v3'")
+    .get() as { value: string } | undefined;
+  if (marker) return;
+
+  const now = new Date().toISOString();
+  const insertFact = db.prepare(
+    `INSERT INTO facts (id, content, category, keywords, strength, importance, access_count, last_accessed, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+  );
+
+  const facts: Array<{ content: string; keywords: string; importance: number }> = [
+    { content: "A publisher's fraud risk score (0-100) is 60% their flag rate (flagged calls divided by total scanned calls) plus 40% the worst severity of any single flag on their calls", keywords: "risk score,formula,flag rate,severity,explain,how computed", importance: 9 },
+    { content: "Fraud risk score bands: 0-40 is clean, 40-70 is watch, 70-85 is suspicious, 85 and above is high risk — the Fraud Station legend and colors follow these bands", keywords: "risk score,bands,ranges,clean,watch,suspicious,high risk,legend", importance: 9 },
+    { content: "Fraud flags come from three detectors: VOIP or virtual-carrier caller numbers via IPQS phone intel, the same caller ID appearing under multiple publishers, and AI analysis of call recordings for fake or scripted callers", keywords: "detectors,voip,ipqs,shared caller,ai analysis,three checks", importance: 8 },
+    { content: "Shared-caller flag severity is 50 plus 15 per publisher sharing the number, capped at 100; AI analysis flags calls scoring 70 or higher, and identical transcripts across multiple calls floor the AI score at 85", keywords: "severity,shared caller,ai threshold,duplicate script,scripted", importance: 8 },
+    { content: "The fraud scan covers connected calls with recordings (duration over 0 seconds), not just converted calls; blocking a publisher is always a manual action from the Fraud Station", keywords: "scan scope,connected calls,recordings,duration,manual block", importance: 8 },
+  ];
+
+  const tx = db.transaction(() => {
+    for (const f of facts) {
+      insertFact.run(randomUUID(), f.content, "fraud", f.keywords, 1.3, f.importance, now, now);
+    }
+    db.prepare(
+      "INSERT INTO system_state (key, value) VALUES ('seed_v3', ?)",
+    ).run(now);
+  });
+  tx();
+  console.log("[hull/memory] Fraud risk-scoring seed v3 applied (%d facts)", facts.length);
+}
+
 export function bootstrapHullMemory(): void {
   const db = getHullDb();
 
@@ -88,6 +125,7 @@ export function bootstrapHullMemory(): void {
   if (factCount > 0) {
     console.log("[hull/memory] Already bootstrapped with", factCount, "facts");
     seedDigitalTwinV2(db);
+    seedFraudScoringV3(db);
     return;
   }
 
@@ -175,5 +213,6 @@ export function bootstrapHullMemory(): void {
 
   tx();
   seedDigitalTwinV2(db);
+  seedFraudScoringV3(db);
   console.log("[hull/memory] Bootstrap complete");
 }

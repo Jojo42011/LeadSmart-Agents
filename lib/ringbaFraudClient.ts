@@ -6,7 +6,7 @@ import axios, { AxiosInstance } from "axios";
  * never alter scrub behavior.
  *
  * Endpoints used (Ringba API v2, https://developers.ringba.com/):
- *  - POST /{accountId}/calllogs                — converted calls w/ caller number + recording
+ *  - POST /{accountId}/calllogs                — connected calls (duration > 0) w/ caller number + recording
  *  - GET  /{accountId}/Affiliates              — publishers (affiliates): id, name, enabled
  *  - PATCH /{accountId}/Affiliates/{id}        — plain-object body; { enabled: false } blocks
  */
@@ -52,6 +52,7 @@ export interface FraudCallRecord {
   targetName: string | null;
   buyer: string | null;
   recordingUrl: string | null;
+  durationSeconds: number;
 }
 
 interface RawCallRow {
@@ -87,6 +88,7 @@ function normalizeCallRow(row: RawCallRow): FraudCallRecord | null {
     targetName: readStr(row, "targetName") ?? readStr(row, "target"),
     buyer: readStr(row, "buyer"),
     recordingUrl: readStr(row, "recordingUrl"),
+    durationSeconds: readNum(row, "callLengthInSeconds"),
   };
 }
 
@@ -98,7 +100,7 @@ const CALL_COLUMNS_FULL = [
   "payoutAmount",
   "targetName",
   "buyer",
-  "hasConverted",
+  "callLengthInSeconds",
   "recordingUrl",
 ];
 
@@ -122,11 +124,20 @@ async function fetchPage(
     reportEnd,
     size: PAGE_SIZE,
     offset,
+    // Documented filter schema (developers.ringba.com "Get Call Log With
+    // Filters"): groups of { anyConditionToMatch } are AND'd; the previous
+    // { anyMatch, filters } shape was undocumented and silently ignored.
+    // Scope is connected calls (duration > 0) — recording presence is
+    // enforced locally because some accounts reject the recordingUrl column.
     filters: [
       {
-        anyMatch: true,
-        filters: [
-          { column: "hasConverted", value: "true", isNegativeMatch: false },
+        anyConditionToMatch: [
+          {
+            column: "callLengthInSeconds",
+            value: "0",
+            isNegativeMatch: false,
+            comparisonType: "GREATER_THAN",
+          },
         ],
       },
     ],
@@ -137,8 +148,10 @@ async function fetchPage(
 }
 
 /**
- * Converted calls in [reportStart, reportEnd] with caller number + recording.
- * Falls back to a column set without recordingUrl if the full set is rejected.
+ * Connected calls (duration > 0) with a recording in [reportStart, reportEnd].
+ * Falls back to a column set without recordingUrl if the full set is rejected;
+ * in that fallback the recording requirement is skipped (it can't be known).
+ * Name kept as fetchConvertedCallsForFraud so callers don't churn.
  */
 export async function fetchConvertedCallsForFraud(
   reportStart: string,
@@ -191,9 +204,15 @@ export async function fetchConvertedCallsForFraud(
     await sleep(PAGE_DELAY_MS);
   }
 
+  const hasRecordingColumn = columns.includes("recordingUrl");
   const calls = all
     .map(normalizeCallRow)
-    .filter((row): row is FraudCallRecord => row !== null);
+    .filter((row): row is FraudCallRecord => row !== null)
+    .filter(
+      (row) =>
+        row.durationSeconds > 0 &&
+        (!hasRecordingColumn || Boolean(row.recordingUrl))
+    );
 
   return { calls, truncated };
 }
