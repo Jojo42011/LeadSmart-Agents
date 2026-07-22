@@ -257,6 +257,28 @@ export function publishersForCaller(callerNumber: string): string[] {
   return rows.map((r) => r.publisherName);
 }
 
+/**
+ * Distinct publishers this caller has appeared under with activity on/after
+ * `sinceIso`. The (callerNumber, publisherName) primary key already collapses
+ * repeat calls from the same caller under the same publisher into ONE row, so a
+ * number hammering a single publisher never counts as multiple publishers.
+ * lastSeenAt is the most recent sighting, so the filter answers "seen under
+ * this publisher within the window."
+ */
+export function publishersForCallerSince(
+  callerNumber: string,
+  sinceIso: string
+): string[] {
+  const rows = getFraudDb()
+    .prepare(
+      `SELECT publisherName FROM caller_index
+       WHERE callerNumber = ? AND lastSeenAt >= ?
+       ORDER BY publisherName`
+    )
+    .all(callerNumber, sinceIso) as Array<{ publisherName: string }>;
+  return rows.map((r) => r.publisherName);
+}
+
 // ---------- flagged calls ----------
 
 export interface FlagCallInput {
@@ -315,6 +337,23 @@ export function listFlaggedCalls(limit: number): FlaggedCallRow[] {
     .all(Math.min(Math.max(limit, 1), 500)) as FlaggedCallRow[];
 }
 
+/** Every flag for one publisher, worst first — backs the risk-score breakdown. */
+export function listFlaggedCallsForPublisher(
+  publisherName: string,
+  limit: number
+): FlaggedCallRow[] {
+  return getFraudDb()
+    .prepare(
+      `SELECT id, inboundCallId, publisherName, callerNumber, callDt,
+              reason, severity, detail, createdAt
+       FROM flagged_calls
+       WHERE publisherName = ?
+       ORDER BY severity DESC, id DESC
+       LIMIT ?`
+    )
+    .all(publisherName, Math.min(Math.max(limit, 1), 500)) as FlaggedCallRow[];
+}
+
 export function flaggedCallsForCall(inboundCallId: string): FlaggedCallRow[] {
   return getFraudDb()
     .prepare(
@@ -357,10 +396,17 @@ export function getPublisherFraud(publisherName: string): PublisherFraudRow | nu
   return row ?? null;
 }
 
+/**
+ * Publishers worth showing on the war-room table: only those actually flagged
+ * or blocked. Clear publishers with zero flags are noise — they used to fill
+ * the bottom of the table and made "flagged" indistinguishable from "scanned."
+ */
 export function listPublisherFraud(): PublisherFraudRow[] {
   return getFraudDb()
     .prepare(
-      "SELECT * FROM publisher_fraud ORDER BY (status = 'blocked') DESC, riskScore DESC, publisherName"
+      `SELECT * FROM publisher_fraud
+       WHERE status = 'blocked' OR flaggedCalls > 0
+       ORDER BY (status = 'blocked') DESC, riskScore DESC, publisherName`
     )
     .all() as PublisherFraudRow[];
 }
@@ -434,6 +480,44 @@ export function recomputePublisherRisk(publisherName: string): PublisherFraudRow
     );
 
   return getPublisherFraud(publisherName)!;
+}
+
+/**
+ * One-shot cleanup for the old low-threshold shared-caller rule: delete any
+ * shared_caller flag whose recorded publisherCount is below `minPublishers`
+ * (default 3), then recompute risk for every publisher that lost a flag.
+ * Idempotent — after the first pass nothing matches. Returns how many flags
+ * were removed so callers can log it. Only touches shared_caller flags; VOIP
+ * and AI flags are never affected.
+ */
+export function pruneStaleSharedCallerFlags(minPublishers = 3): number {
+  const database = getFraudDb();
+
+  const affected = database
+    .prepare(
+      `SELECT DISTINCT publisherName FROM flagged_calls
+       WHERE reason = 'shared_caller'
+         AND COALESCE(CAST(json_extract(detail, '$.publisherCount') AS INTEGER), 0) < ?`
+    )
+    .all(minPublishers) as Array<{ publisherName: string }>;
+
+  if (affected.length === 0) {
+    return 0;
+  }
+
+  const del = database
+    .prepare(
+      `DELETE FROM flagged_calls
+       WHERE reason = 'shared_caller'
+         AND COALESCE(CAST(json_extract(detail, '$.publisherCount') AS INTEGER), 0) < ?`
+    )
+    .run(minPublishers);
+
+  for (const { publisherName } of affected) {
+    recomputePublisherRisk(publisherName);
+  }
+
+  return del.changes;
 }
 
 export function setPublisherNotifiedAt(publisherName: string, at: string): void {

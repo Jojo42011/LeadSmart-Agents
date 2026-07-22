@@ -68,6 +68,7 @@ import { chicagoDateParts, secondMondayHoldForMonth } from "./lib/chicagoTime";
 import {
   fraudSummary,
   listFlaggedCalls,
+  listFlaggedCallsForPublisher,
   listPublisherFraud,
   getPublisherFraud,
   getCallAnalysis,
@@ -2559,6 +2560,46 @@ app.get("/api/fraud/publishers", (_req, res) => {
     res.status(500).json({
       error:
         err instanceof Error ? err.message : "Failed to read publisher risk",
+    });
+  }
+});
+
+/**
+ * Risk-score breakdown for one publisher: its flags (worst first) with counts
+ * by reason, read straight from the fraud DB so the reason is always exact —
+ * never dependent on how much of the feed the client happens to have loaded.
+ */
+app.get("/api/fraud/publisher/:name/flags", (req, res) => {
+  try {
+    const publisherName = decodePublisherParam(req.params.name).trim();
+    if (!publisherName) {
+      res.status(400).json({ error: "Publisher name is required" });
+      return;
+    }
+    const limit = Math.min(parseInt(String(req.query.limit ?? "200"), 10) || 200, 500);
+    const flags = listFlaggedCallsForPublisher(publisherName, limit).map((flag) => {
+      let detail: unknown = null;
+      try {
+        detail = flag.detail ? JSON.parse(flag.detail) : null;
+      } catch {
+        detail = flag.detail;
+      }
+      return { ...flag, detail };
+    });
+
+    const counts = { voip: 0, shared_caller: 0, ai_analysis: 0, other: 0 };
+    for (const flag of flags) {
+      if (flag.reason in counts) {
+        counts[flag.reason as keyof typeof counts] += 1;
+      } else {
+        counts.other += 1;
+      }
+    }
+
+    res.json({ publisherName, counts, flags });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read publisher flags",
     });
   }
 });

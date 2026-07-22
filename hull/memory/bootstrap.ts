@@ -118,6 +118,43 @@ function seedFraudScoringV3(db: ReturnType<typeof getHullDb>): void {
   console.log("[hull/memory] Fraud risk-scoring seed v3 applied (%d facts)", facts.length);
 }
 
+/**
+ * Shared-caller threshold update (v4) — supersedes the old "2+ publishers"
+ * description from v3 with the tightened rule, so Jarvis explains the current
+ * behavior. High strength/importance so it wins retrieval over the stale v3
+ * facts (which decay out on their own). Idempotent via a system_state marker.
+ */
+function seedFraudScoringV4(db: ReturnType<typeof getHullDb>): void {
+  const marker = db
+    .prepare("SELECT value FROM system_state WHERE key = 'seed_v4'")
+    .get() as { value: string } | undefined;
+  if (marker) return;
+
+  const now = new Date().toISOString();
+  const insertFact = db.prepare(
+    `INSERT INTO facts (id, content, category, keywords, strength, importance, access_count, last_accessed, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+  );
+
+  const facts: Array<{ content: string; keywords: string; importance: number }> = [
+    { content: "Shared caller ID only flags when the SAME number appears under 3 or more distinct publishers within 24 hours, or 4 or more distinct publishers within 7 days. A caller under just 2 publishers is normal consumer behavior and is never flagged", keywords: "shared caller,threshold,3 publishers,24 hours,4 publishers,week,false positive", importance: 9 },
+    { content: "For shared caller ID, the same number appearing repeatedly under the SAME publisher counts as one publisher, not many — repeat calls to a single publisher never trip the shared-caller signal", keywords: "shared caller,same publisher,distinct,repeat calls,dedup", importance: 8 },
+    { content: "Shared caller ID flag severity is 50 plus 12 per distinct publisher (so 3 publishers scores about 86, 4 about 98), which is why a genuinely broad shared caller lands in the HIGH RISK band", keywords: "shared caller,severity,50,12 per publisher,high risk", importance: 7 },
+    { content: "The Fraud Station only lists publishers that are actually flagged or blocked, sorted worst-first; clicking a publisher's risk score shows the exact flag counts by reason and its worst flagged calls", keywords: "fraud station,list,flagged only,breakdown,risk score,click", importance: 7 },
+  ];
+
+  const tx = db.transaction(() => {
+    for (const f of facts) {
+      insertFact.run(randomUUID(), f.content, "fraud", f.keywords, 1.4, f.importance, now, now);
+    }
+    db.prepare(
+      "INSERT INTO system_state (key, value) VALUES ('seed_v4', ?)",
+    ).run(now);
+  });
+  tx();
+  console.log("[hull/memory] Fraud shared-caller threshold seed v4 applied (%d facts)", facts.length);
+}
+
 export function bootstrapHullMemory(): void {
   const db = getHullDb();
 
@@ -126,6 +163,7 @@ export function bootstrapHullMemory(): void {
     console.log("[hull/memory] Already bootstrapped with", factCount, "facts");
     seedDigitalTwinV2(db);
     seedFraudScoringV3(db);
+    seedFraudScoringV4(db);
     return;
   }
 
@@ -214,5 +252,6 @@ export function bootstrapHullMemory(): void {
   tx();
   seedDigitalTwinV2(db);
   seedFraudScoringV3(db);
+  seedFraudScoringV4(db);
   console.log("[hull/memory] Bootstrap complete");
 }
