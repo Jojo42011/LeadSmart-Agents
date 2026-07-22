@@ -18,7 +18,8 @@ import {
   getFraudPollState,
   listFlaggedCalls,
   markCallProcessed,
-  publishersForCaller,
+  pruneStaleSharedCallerFlags,
+  publishersForCallerSince,
   recomputePublisherRisk,
   recordCallerSighting,
   saveCallAnalysis,
@@ -196,6 +197,20 @@ async function analyzeTranscript(
 /** AI verdicts at or above this score raise an ai_analysis flag. */
 const AI_FLAG_THRESHOLD = 70;
 
+/**
+ * Shared-caller thresholds. A caller ID appearing under 2 publishers is normal
+ * consumer behavior at this call volume and must NOT flag. It only flags when
+ * the SAME number is seen under enough DISTINCT publishers inside a window:
+ *   - 3+ distinct publishers within 24 hours, or
+ *   - 4+ distinct publishers within 7 days.
+ * Repeat calls from one caller under the same publisher never count twice — the
+ * caller_index primary key collapses them (see publishersForCallerSince).
+ */
+const SHARED_CALLER_24H_MIN = 3;
+const SHARED_CALLER_7D_MIN = 4;
+const SHARED_CALLER_24H_MS = 24 * 60 * 60 * 1000;
+const SHARED_CALLER_7D_MS = 7 * 24 * 60 * 60 * 1000;
+
 async function runTranscriptionPass(
   result: FraudScanResult,
   recordingUrlByCallId: Map<string, string>,
@@ -358,6 +373,25 @@ async function executeFraudScan(): Promise<FraudScanResult> {
     isIpqsConfigured() ? "configured" : "NOT configured"
   );
 
+  // Retire shared-caller flags raised under the old 2-publisher rule so the
+  // HIGH-RISK list reflects only the current threshold. Idempotent after the
+  // first scan. Never touches VOIP or AI flags.
+  try {
+    const pruned = pruneStaleSharedCallerFlags(SHARED_CALLER_24H_MIN);
+    if (pruned > 0) {
+      console.log(
+        "[Fraud] Pruned %d stale shared-caller flag(s) below the %d-publisher threshold",
+        pruned,
+        SHARED_CALLER_24H_MIN
+      );
+    }
+  } catch (err) {
+    console.warn(
+      "[Fraud] shared-caller prune failed: %s",
+      err instanceof Error ? err.message : err
+    );
+  }
+
   const { calls, truncated } = await fetchConvertedCallsForFraud(
     window.start,
     window.end
@@ -519,12 +553,29 @@ async function processCall(
     }
   }
 
-  // Step 2 — same caller ID under more than one publisher.
+  // Step 2 — same caller ID under multiple DISTINCT publishers within a window.
+  // 2 publishers is normal at this volume and never flags; only 3+ in 24h or
+  // 4+ in 7 days does. Distinctness is guaranteed by the caller_index PK, so a
+  // caller repeatedly hitting one publisher can never trip this.
   if (callerNumber) {
-    const publishers = publishersForCaller(callerNumber);
-    if (publishers.length > 1) {
-      const severity = Math.min(100, 50 + publishers.length * 15);
-      // Every publisher this caller has appeared under gets its risk recomputed.
+    const now = Date.now();
+    const since24h = new Date(now - SHARED_CALLER_24H_MS).toISOString();
+    const since7d = new Date(now - SHARED_CALLER_7D_MS).toISOString();
+    const publishers24h = publishersForCallerSince(callerNumber, since24h);
+    const publishers7d = publishersForCallerSince(callerNumber, since7d);
+
+    const hit24h = publishers24h.length >= SHARED_CALLER_24H_MIN;
+    const hit7d = publishers7d.length >= SHARED_CALLER_7D_MIN;
+
+    if (hit24h || hit7d) {
+      // Report against whichever window is the stronger signal.
+      const windowLabel = hit24h ? "24h" : "7d";
+      const publishers = hit24h ? publishers24h : publishers7d;
+      const count = publishers.length;
+      // 3 pubs/24h → 86, 4 → 98; 4 pubs/7d → 98. Clears the 85 HIGH-RISK line
+      // only when the sharing is genuinely broad.
+      const severity = Math.min(100, 50 + count * 12);
+
       for (const publisherName of publishers) {
         touchedPublishers.add(publisherName);
       }
@@ -537,14 +588,15 @@ async function processCall(
         severity,
         detail: {
           publishers,
-          publisherCount: publishers.length,
+          publisherCount: count,
+          window: windowLabel,
           payoutAmount: call.payoutAmount,
         },
       });
       if (isNew) {
         result.sharedCallerFlags += 1;
         proposeAlert(call.publisherName, {
-          reason: `Same caller ID across ${publishers.length} publishers`,
+          reason: `Same caller ID across ${count} publishers in ${windowLabel}`,
           severity,
           callerNumber,
           signals: publishers.map((p) => `seen under: ${p}`),

@@ -458,12 +458,11 @@
         let expandedCallId = null;
         let expandedPublisher = null;
         let publishersCache = [];
-        let allFlags = [];
+        let feedFlags = [];
+        // Per-publisher breakdown cache: publisherName -> { counts, flags }.
+        const breakdownCache = new Map();
 
-        // Fetch more flags than we render so the per-publisher risk breakdown
-        // has enough history to count by reason and pick top calls.
-        const FEED_FETCH_LIMIT = 300;
-        const FEED_RENDER_LIMIT = 100;
+        const FEED_LIMIT = 150;
 
         function esc(s) {
           return String(s == null ? "" : s)
@@ -595,37 +594,26 @@
           return "";
         }
 
-        function flagsFor(publisherName) {
-          return allFlags.filter((fl) => fl.publisherName === publisherName);
-        }
-
-        // What's driving a publisher's risk score: flag counts by reason plus
-        // their top flagged calls, built from the recent flag feed.
-        function riskBreakdownHtml(p) {
-          const flags = flagsFor(p.publisherName);
+        // What's driving a publisher's risk score: exact flag counts by reason
+        // plus their worst flagged calls, from /api/fraud/publisher/:name/flags
+        // (the real DB, so the reason is always present and accurate).
+        function riskBreakdownHtml(data) {
+          const flags = data.flags || [];
           if (!flags.length) {
-            return (
-              "No flags for this publisher in the last " + allFlags.length +
-              " feed entries (" + p.flaggedCalls + " flagged all-time — older flags have rolled out of the recent feed)."
-            );
+            return '<span class="mono-dim">No active flags for this publisher — risk has cleared. ' +
+              "If it is still listed it was blocked manually.</span>";
           }
-          const counts = { voip: 0, shared_caller: 0, ai_analysis: 0, other: 0 };
-          for (const fl of flags) {
-            if (counts[fl.reason] != null) counts[fl.reason] += 1;
-            else counts.other += 1;
-          }
-          const top = flags
-            .slice()
-            .sort((a, b) => (Number(b.severity) || 0) - (Number(a.severity) || 0))
-            .slice(0, 3);
+          const counts = data.counts || { voip: 0, shared_caller: 0, ai_analysis: 0, other: 0 };
+          const top = flags.slice(0, 3);
           const lines = [];
           lines.push(
             '<div class="breakdown__counts"><b>What\'s driving this score</b> — ' +
-            "VOIP flags: <b>" + counts.voip + "</b> · Shared caller ID: <b>" + counts.shared_caller +
-            "</b> · AI flags: <b>" + counts.ai_analysis + "</b>" +
+            "VOIP flags: <b>" + (counts.voip || 0) + "</b> · Shared caller ID: <b>" + (counts.shared_caller || 0) +
+            "</b> · AI flags: <b>" + (counts.ai_analysis || 0) + "</b>" +
             (counts.other ? " · Other: <b>" + counts.other + "</b>" : "") +
-            ' <span class="mono-dim">(from this publisher\'s ' + flags.length +
-            " most recent flags · score = 60% flag rate + 40% worst severity)</span></div>"
+            ' <span class="mono-dim">(' + flags.length +
+            " flagged call" + (flags.length === 1 ? "" : "s") +
+            " · score = 60% flag rate + 40% worst severity)</span></div>"
           );
           lines.push("<b>Top flagged calls</b>");
           for (const fl of top) {
@@ -718,32 +706,52 @@
             if (expanded) {
               const dr = document.createElement("tr");
               dr.className = "detail-row";
-              dr.innerHTML = '<td colspan="6"><div class="breakdown">' + riskBreakdownHtml(p) + "</div></td>";
+              const cached = breakdownCache.get(p.publisherName);
+              dr.innerHTML =
+                '<td colspan="6"><div class="breakdown">' +
+                (cached ? riskBreakdownHtml(cached) : '<span class="mono-dim">Loading breakdown…</span>') +
+                "</div></td>";
               publishersBody.appendChild(dr);
             }
           }
         }
 
-        function toggleRiskBreakdown(publisherName) {
-          expandedPublisher = expandedPublisher === publisherName ? null : publisherName;
-          renderPublishers();
+        async function toggleRiskBreakdown(publisherName) {
+          if (expandedPublisher === publisherName) {
+            expandedPublisher = null;
+            renderPublishers();
+            return;
+          }
+          expandedPublisher = publisherName;
+          renderPublishers(); // shows "Loading breakdown…" until the fetch lands
+          if (!breakdownCache.has(publisherName)) {
+            try {
+              const data = await fetchJson(
+                "/api/fraud/publisher/" + encodeURIComponent(publisherName) + "/flags"
+              );
+              breakdownCache.set(publisherName, data);
+            } catch (err) {
+              breakdownCache.set(publisherName, { flags: [], counts: {}, error: err.message });
+            }
+          }
+          // Re-render only if this publisher is still the expanded one.
+          if (expandedPublisher === publisherName) renderPublishers();
         }
 
         async function loadFeed() {
-          const data = await fetchJson("/api/fraud/feed?limit=" + FEED_FETCH_LIMIT);
-          allFlags = data.flags || [];
+          const data = await fetchJson("/api/fraud/feed?limit=" + FEED_LIMIT);
+          feedFlags = data.flags || [];
           renderFeed();
         }
 
         function renderFeed() {
-          if (!allFlags.length) {
+          if (!feedFlags.length) {
             feedBody.innerHTML =
               '<tr><td class="empty" colspan="6">No flagged calls. Either traffic is clean or a scan has not run yet.</td></tr>';
             return;
           }
           feedBody.innerHTML = "";
-          const flags = allFlags.slice(0, FEED_RENDER_LIMIT);
-          for (const f of flags) {
+          for (const f of feedFlags) {
             const tr = document.createElement("tr");
             tr.style.cursor = "pointer";
             tr.innerHTML =
@@ -767,13 +775,6 @@
                 "</pre><div id=\"detail-" + esc(f.id) + "\">" + detailHtml(f.detail) + "</div></td>";
               feedBody.appendChild(dr);
             }
-          }
-          if (allFlags.length > FEED_RENDER_LIMIT) {
-            const more = document.createElement("tr");
-            more.innerHTML =
-              '<td class="empty" colspan="6">Showing ' + FEED_RENDER_LIMIT + " of " +
-              allFlags.length + " recent flags (all are counted in the risk breakdowns above).</td>";
-            feedBody.appendChild(more);
           }
         }
 
@@ -890,9 +891,20 @@
 
         async function refresh() {
           try {
-            // Feed first: the publisher risk breakdowns are built from allFlags.
-            await Promise.all([loadSummary(), loadFeed()]);
-            await loadPublishers();
+            // Drop cached breakdowns so a scan's new flags show on next open.
+            breakdownCache.clear();
+            await Promise.all([loadSummary(), loadFeed(), loadPublishers()]);
+            // Re-fetch the breakdown for whichever publisher is open.
+            if (expandedPublisher) {
+              const name = expandedPublisher;
+              try {
+                breakdownCache.set(
+                  name,
+                  await fetchJson("/api/fraud/publisher/" + encodeURIComponent(name) + "/flags")
+                );
+              } catch { /* breakdown refresh is best-effort */ }
+              if (expandedPublisher === name) renderPublishers();
+            }
             setError(null);
           } catch (err) {
             setError(err.message || "Failed to load fraud data");
