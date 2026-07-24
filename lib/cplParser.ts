@@ -15,9 +15,10 @@ import type { CplRowInput } from "./cplDb";
  *
  * A second source mode, "inquirly", handles the Inquirly export instead:
  *   Date Posted (one cell, "26-07-04 7:37:27" = 2026-07-04 07:37:27),
- *   Origin Phone (the caller ID), Revenue (the amount), Billable (Yes/No)
- * Only rows with Billable = Yes are processed; everything downstream
- * (matching, payout %, preview, apply) is identical to 33 Miles mode.
+ *   Origin Phone (the caller ID), Revenue (the amount)
+ * Any row with Revenue > 0 is processed; the Billable column is ignored
+ * entirely (real earnings rows aren't always marked "Yes"). Everything
+ * downstream (matching, payout %, preview, apply) is identical to 33 Miles mode.
  *
  * Caller IDs may be dash-formatted (954-487-0148); last10()
  * strips non-digits before matching. The "Time (EST)" label has proven
@@ -204,17 +205,14 @@ export function parseCplWorkbook(
   let kService: string | null = null;
   let kDuration: string | null = null;
   let kTracking: string | null = null;
-  let kBillable: string | null = null;
 
   if (source === "inquirly") {
     kCaller = findKey(keys, "origin phone", "origin");
     kCpl = findKey(keys, "revenue");
     kDate = findKey(keys, "date posted", "date");
-    kBillable = findKey(keys, "billable");
     if (!kCaller) throw new Error('Missing an "Origin Phone" column');
     if (!kDate) throw new Error('Missing a "Date Posted" column');
     if (!kCpl) throw new Error('Missing a "Revenue" column');
-    if (!kBillable) throw new Error('Missing a "Billable" column');
   } else {
     kCaller = findKey(keys, "caller");
     kCpl = findKey(keys, "cost per lead", "cpl", "cost");
@@ -233,15 +231,6 @@ export function parseCplWorkbook(
   let maxMs = -Infinity;
 
   for (const raw of json) {
-    // Inquirly: only Billable = Yes rows exist as far as this tool is
-    // concerned — No/blank rows are neither matched nor used for strip scoping.
-    if (kBillable) {
-      const flag = String(raw[kBillable] ?? "").trim().toLowerCase();
-      if (flag !== "yes") {
-        skipped += 1;
-        continue;
-      }
-    }
     const callerId = String(raw[kCaller] ?? "").trim();
     let ymd: Ymd | null;
     let hm: Hm | null;
@@ -254,6 +243,16 @@ export function parseCplWorkbook(
       hm = parseTimeCell(raw[kTime!]);
     }
     if (!callerId || !ymd || !hm) {
+      skipped += 1;
+      continue;
+    }
+
+    const costPerLead = kCpl ? parseMoney(raw[kCpl]) : null;
+
+    // Inquirly: any row carrying a dollar amount is billable, regardless of the
+    // Billable column (real earnings rows aren't always marked "Yes"). Rows with
+    // no revenue are skipped — nothing to add, and not used for strip scoping.
+    if (source === "inquirly" && !((costPerLead ?? 0) > 0)) {
       skipped += 1;
       continue;
     }
@@ -276,7 +275,7 @@ export function parseCplWorkbook(
       callerLast10: last10(callerId),
       trackingNumber,
       trackingLast10: last10(trackingNumber),
-      costPerLead: kCpl ? parseMoney(raw[kCpl]) : null,
+      costPerLead,
       etLabel: `${dateLabel} ${timeLabel} ET`,
       utcMs,
       naiveUtcMs,
