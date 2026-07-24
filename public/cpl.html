@@ -82,6 +82,15 @@
       .newval { color: var(--green); }
       .empty { color: var(--dim); text-align: center; padding: 24px !important; }
 
+      /* SET rows whose Ringba revenue is already > $0 and is being changed — flag
+         for a visual review before confirming (33 Miles only). */
+      tr.warn td { background: rgba(255,176,0,.09); }
+      tr.warn:hover td { background: rgba(255,176,0,.14); }
+      tr.warn td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
+      .warn-icon { margin-right: 4px; }
+      .warn-note-row td { background: rgba(255,176,0,.05); border-bottom: 1px solid var(--border); }
+      .warn-note { color: var(--amber); font-size: 10px; letter-spacing: .3px; white-space: normal; }
+
       .badge { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 1px; padding: 3px 7px; border: 1px solid; }
       .badge--set { color: var(--green); border-color: rgba(0,255,136,.45); background: rgba(0,255,136,.08); }
       .badge--strip { color: var(--amber); border-color: rgba(255,176,0,.45); background: rgba(255,176,0,.08); }
@@ -240,6 +249,9 @@
 
         function renderPreview(data) {
           currentBatch = data;
+          // Remember which source this preview was parsed as, so renderRows can
+          // gate the "revenue changing" warning to 33 Miles only.
+          currentBatch.mode = sourceSelect.value;
           applied = false;
           const c = data.counts;
           summary.innerHTML =
@@ -263,12 +275,32 @@
             '<div class="stat__value ' + (tone ? "stat__value--" + tone : "") + '">' + value + "</div></div>";
         }
 
+        // Flag a SET row whose Ringba revenue is already > $0 and is being changed
+        // to a different amount — the "previously auto-updated" case Seth reviews
+        // by hand. 33 Miles only; Inquirly is never flagged. Returns {cur, nw} or null.
+        function changeWarning(r, mode) {
+          if (mode === "inquirly") return null;
+          if (r.action !== "set") return null;
+          const cur = Number(r.currentRevenue);
+          const nw = Number(r.newRevenue);
+          if (!Number.isFinite(cur) || !Number.isFinite(nw)) return null;
+          if (cur <= 0) return null;
+          if (Math.abs(cur - nw) < 0.005) return null; // unchanged (float-safe)
+          return { cur, nw };
+        }
+
         function renderRows(rows) {
           rowsBody.innerHTML = "";
           if (!rows.length) { rowsBody.innerHTML = '<tr><td class="empty" colspan="9">No rows.</td></tr>'; return; }
+          const mode = currentBatch && currentBatch.mode;
           for (const r of rows) {
+            const warn = changeWarning(r, mode);
             const tr = document.createElement("tr");
+            if (warn) tr.className = "warn";
             const when = r.callDt ? fmtDt(r.callDt) : (r.fileTimeEt || "—");
+            const newRev = r.action === "no_match"
+              ? "—"
+              : (warn ? '<span class="warn-icon" title="Revenue changing — review">⚠️</span>' : "") + money(r.newRevenue);
             tr.innerHTML =
               "<td>" + actionBadge(r.action) + "</td>" +
               "<td>" + esc(r.publisherName || "—") + "</td>" +
@@ -276,10 +308,20 @@
               "<td>" + esc(when) + "</td>" +
               '<td class="num">' + money(r.currentRevenue) + "</td>" +
               '<td class="num">' + money(r.currentPayout) + "</td>" +
-              '<td class="num newval">' + (r.action === "no_match" ? "—" : money(r.newRevenue)) + "</td>" +
+              '<td class="num newval">' + newRev + "</td>" +
               '<td class="num newval">' + (r.action === "no_match" ? "—" : money(r.newPayout)) + "</td>" +
               "<td>" + resultBadge(r) + "</td>";
             rowsBody.appendChild(tr);
+            if (warn) {
+              const noteRow = document.createElement("tr");
+              noteRow.className = "warn-note-row";
+              noteRow.innerHTML =
+                "<td></td>" +
+                '<td colspan="8" class="warn-note">⚠️ Amount changing from ' +
+                money(warn.cur) + " to " + money(warn.nw) +
+                " — review before confirming.</td>";
+              rowsBody.appendChild(noteRow);
+            }
           }
         }
 
