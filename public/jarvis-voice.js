@@ -272,6 +272,9 @@
         } else if (transcript) {
           latestTurnTranscript = transcript;
         }
+        if (latestTurnTranscript) {
+          window.onJarvisPartialTranscript?.(latestTurnTranscript, false);
+        }
         return;
       }
 
@@ -292,6 +295,9 @@
       if (event === "EndOfTurn") {
         const finalText = transcript || latestTurnTranscript;
         latestTurnTranscript = finalText;
+        if (finalText) {
+          window.onJarvisPartialTranscript?.(finalText, true);
+        }
         scheduleCommit(finalText, event);
       }
       return;

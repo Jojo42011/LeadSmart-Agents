@@ -104,6 +104,12 @@ import { getFullGraph } from "./hull/memory/readApi";
 import { buildMemoryPacketForQuery } from "./hull/brain/tools";
 import { handleActivation } from "./hull/briefing";
 import {
+  getScrubStatus,
+  getPaymentSummary,
+  getFraudStatus,
+} from "./hull/brain/opsData";
+import { appendTurn, recentTurns } from "./hull/memory/conversations";
+import {
   getMemoryOverview,
   getGraphForEntity,
   getMemoryIdentity,
@@ -3008,6 +3014,71 @@ app.post("/api/jarvis/chat", express.json({ limit: "256kb" }), (req, res) => {
   void handleChatMessage(req, res);
 });
 
+// Live pulse across all three departments — powers the ops strip in the
+// Jarvis UI and gives it the same ambient awareness the brain gets per turn.
+app.get("/api/jarvis/ops-pulse", (_req, res) => {
+  try {
+    res.json({
+      at: new Date().toISOString(),
+      scrub: getScrubStatus(),
+      payments: getPaymentSummary(),
+      fraud: getFraudStatus(),
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "ops pulse failed",
+    });
+  }
+});
+
+// Server-side chat history so a conversation survives refreshes and mode
+// switches (chat <-> voice) in the unified Jarvis page.
+app.get("/api/jarvis/chat/history", (req, res) => {
+  try {
+    const sessionId =
+      typeof req.query.sessionId === "string"
+        ? req.query.sessionId.trim().slice(0, 80)
+        : "";
+    if (!sessionId) {
+      res.status(400).json({ error: "sessionId required" });
+      return;
+    }
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(String(req.query.limit ?? "60"), 10) || 60)
+    );
+    res.json({ sessionId, turns: recentTurns(sessionId, limit) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "history failed",
+    });
+  }
+});
+
+// Voice exchanges sync into the same server-side session as typed chat, so
+// switching between the orb and the keyboard never loses context.
+app.post("/api/jarvis/chat/append", (req, res) => {
+  try {
+    const sessionId =
+      typeof req.body?.sessionId === "string"
+        ? req.body.sessionId.trim().slice(0, 80)
+        : "";
+    const role = req.body?.role === "assistant" ? "assistant" : "user";
+    const text =
+      typeof req.body?.text === "string" ? req.body.text.trim() : "";
+    if (!sessionId || !text) {
+      res.status(400).json({ error: "sessionId and text required" });
+      return;
+    }
+    appendTurn(sessionId, role, text);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "append failed",
+    });
+  }
+});
+
 app.post(
   "/api/memory/ingest",
   express.json({ limit: "8mb" }),
@@ -3070,8 +3141,9 @@ app.get("/api/memory/graph/full", (req, res) => {
   }
 });
 
+// The chat-first experience now lives at /jarvis; keep old links working.
 app.get("/jarvis-chat", (_req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, "jarvis-chat.html"));
+  res.redirect("/jarvis");
 });
 
 app.get("/memory-map", (_req, res) => {

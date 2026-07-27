@@ -209,6 +209,59 @@ export function getFraudStatus(): Record<string, unknown> {
   }
 }
 
+/**
+ * Live snapshot injected into the system prompt on EVERY agent turn, so Jarvis
+ * always knows where the three departments stand without having to call a tool.
+ * Tools remain the drill-down path; this is ambient awareness.
+ */
+export function buildOpsPromptText(): string {
+  const lines: string[] = [];
+  try {
+    const s = getScrubStatus();
+    if (s.available) {
+      const l24 = s.last24h as { voided: number; errors: number };
+      lines.push(
+        `SCRUB: ${s.totalSuccessfulScrubs} lifetime voids ($${s.totalPayoutVoided} payout / $${s.totalRevenueVoided} revenue recovered). Last 24h: ${l24.voided} voided, ${l24.errors} errors. Last poll: ${s.lastSuccessfulPollAt ?? "never"}.`,
+      );
+    } else {
+      lines.push("SCRUB: no data yet (scrub database not found).");
+    }
+  } catch {
+    lines.push("SCRUB: status unavailable right now.");
+  }
+  try {
+    const p = getPaymentSummary();
+    if (p.available) {
+      lines.push(
+        `PAYMENTS (${p.currentMonth}): ${p.affiliatesPaidThisMonth} affiliates paid this month, ${p.weeklyPaymentsLast7Days} weekly payments in the last 7 days, ${p.wiseAffiliatesWithLinkedRecipientId} Wise affiliates with linked recipient IDs.`,
+      );
+    } else {
+      lines.push("PAYMENTS: no data yet (payment database not found).");
+    }
+  } catch {
+    lines.push("PAYMENTS: status unavailable right now.");
+  }
+  try {
+    const f = getFraudStatus();
+    if (f.available) {
+      const top = (
+        f.topRiskPublishers as Array<{ publisherName: string; riskScore: number }>
+      )
+        .slice(0, 3)
+        .map((t) => `${t.publisherName} (${t.riskScore})`)
+        .join(", ");
+      lines.push(
+        `FRAUD: ${f.flaggedCallsLast24h} calls flagged in the last 24h (${f.flaggedCallsTotal} total). Last scan: ${f.lastScanAt ?? "never"}.${top ? ` Top risk publishers: ${top}.` : ""}`,
+      );
+    } else {
+      lines.push("FRAUD: no scans have run yet.");
+    }
+  } catch {
+    lines.push("FRAUD: status unavailable right now.");
+  }
+  return lines.join("\n");
+}
+
 /** Compact one-paragraph ops snapshot for the daily activation brief. */
 export function buildOpsBriefText(): string {
   const parts: string[] = [];
