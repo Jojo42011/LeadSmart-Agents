@@ -191,17 +191,52 @@ export function getFraudStatus(): Record<string, unknown> {
       )
       .all();
 
+    const flagsByReason = db
+      .prepare(
+        "SELECT reason, COUNT(DISTINCT inboundCallId) AS count FROM flagged_calls GROUP BY reason",
+      )
+      .all() as Array<{ reason: string; count: number }>;
+
     const state = db
       .prepare("SELECT lastScanAt FROM fraud_poll_state WHERE id = 1")
       .get() as { lastScanAt: string | null } | undefined;
+
+    // No-connect watchlist (robocalls/solicitors) — tables appear with the
+    // first scan after the upgrade, so tolerate their absence.
+    let noConnect: Record<string, unknown> = { available: false };
+    try {
+      const nc = db
+        .prepare(
+          `SELECT COUNT(DISTINCT callerNumber) AS numbers,
+                  COALESCE(SUM(attempts), 0) AS attempts,
+                  COUNT(DISTINCT CASE WHEN lastSeenAt >= datetime('now', '-1 day') THEN callerNumber END) AS numbers24h
+           FROM no_connect_index`,
+        )
+        .get() as { numbers: number; attempts: number; numbers24h: number | null };
+      const blocked = db
+        .prepare("SELECT COUNT(*) AS c FROM blocked_numbers")
+        .get() as { c: number };
+      noConnect = {
+        available: true,
+        numbersTracked: nc.numbers,
+        numbersActiveLast24h: nc.numbers24h ?? 0,
+        totalAttempts: nc.attempts,
+        blockedNumbers: blocked.c,
+        note: "Robocalls/solicitors (calls that never connected) — separate from the fraud feed, never in publisher risk scores.",
+      };
+    } catch {
+      // pre-upgrade database — no no-connect tables yet
+    }
 
     return {
       available: true,
       flaggedCallsTotal: totals.total,
       flaggedCallsLast24h: totals.last24h ?? 0,
+      flagsByReason,
       publishersByStatus: statuses,
       topRiskPublishers: topRisk,
       recentFlags,
+      noConnect,
       lastScanAt: state?.lastScanAt ?? null,
     };
   } finally {
@@ -250,8 +285,13 @@ export function buildOpsPromptText(): string {
         .slice(0, 3)
         .map((t) => `${t.publisherName} (${t.riskScore})`)
         .join(", ");
+      const nc = f.noConnect as Record<string, unknown> | undefined;
+      const ncText =
+        nc && nc.available
+          ? ` No-connect watchlist (robocalls, separate from fraud): ${nc.numbersActiveLast24h} numbers active 24h, ${nc.blockedNumbers} blocked.`
+          : "";
       lines.push(
-        `FRAUD: ${f.flaggedCallsLast24h} calls flagged in the last 24h (${f.flaggedCallsTotal} total). Last scan: ${f.lastScanAt ?? "never"}.${top ? ` Top risk publishers: ${top}.` : ""}`,
+        `FRAUD: ${f.flaggedCallsLast24h} calls flagged in the last 24h (${f.flaggedCallsTotal} total). Last scan: ${f.lastScanAt ?? "never"}.${top ? ` Top risk publishers: ${top}.` : ""}${ncText}`,
       );
     } else {
       lines.push("FRAUD: no scans have run yet.");

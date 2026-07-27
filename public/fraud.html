@@ -190,6 +190,9 @@
       .badge--voip { color: var(--red); border-color: rgba(255, 68, 68, 0.45); background: rgba(255, 68, 68, 0.08); }
       .badge--shared { color: var(--amber); border-color: rgba(255, 176, 0, 0.45); background: rgba(255, 176, 0, 0.08); }
       .badge--ai { color: var(--purple); border-color: rgba(179, 136, 255, 0.45); background: rgba(179, 136, 255, 0.08); }
+      .badge--vertical { color: #ff7a45; border-color: rgba(255, 122, 69, 0.5); background: rgba(255, 122, 69, 0.08); }
+      .badge--nc-blocked { color: var(--red); border-color: rgba(255, 68, 68, 0.5); background: rgba(255, 68, 68, 0.12); }
+      .badge--nc-open { color: var(--text-dim); border-color: var(--border-bright); }
       .badge--status-clear { color: var(--green); border-color: rgba(0, 255, 136, 0.4); }
       .badge--status-suspicious { color: var(--amber); border-color: rgba(255, 176, 0, 0.45); background: rgba(255, 176, 0, 0.08); }
       .badge--status-blocked { color: var(--red); border-color: rgba(255, 68, 68, 0.5); background: rgba(255, 68, 68, 0.12); }
@@ -407,6 +410,32 @@
           </tbody>
         </table>
       </div>
+
+      <div class="section-head" style="margin-top: 28px;"><h2>No connect · robocalls &amp; solicitors</h2><div class="line"></div></div>
+      <div class="legend">
+        <span class="legend__item mono-dim" id="ncSummaryLine">
+          Calls that never connected — robocalls and solicitors. Kept out of the fraud feed and publisher
+          risk scores. Blocking a number stops it account-wide in Ringba.
+        </span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Caller</th>
+              <th>Attempts</th>
+              <th>Publishers hit</th>
+              <th>First seen</th>
+              <th>Last seen</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="noConnectBody">
+            <tr><td class="empty" colspan="7">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <!-- BLOCK CONFIRM MODAL -->
@@ -511,8 +540,18 @@
         function reasonBadge(reason) {
           if (reason === "voip") return '<span class="badge badge--voip">VOIP</span>';
           if (reason === "shared_caller") return '<span class="badge badge--shared">SHARED ID</span>';
+          if (reason === "cross_vertical") return '<span class="badge badge--vertical">CROSS-VERTICAL</span>';
           if (reason === "ai_analysis") return '<span class="badge badge--ai">AI</span>';
           return '<span class="badge">' + esc(reason) + "</span>";
+        }
+
+        function fmtCategoryBreakdown(categories) {
+          if (!Array.isArray(categories) || !categories.length) return "";
+          return categories.map(function (c) {
+            return c.serviceCategory + " (" + (c.publisherCount || 0) + " pub" +
+              ((c.publisherCount || 0) === 1 ? "" : "s") + " / " + (c.callCount || 0) + " call" +
+              ((c.callCount || 0) === 1 ? "" : "s") + ")";
+          }).join(" · ");
         }
 
         function statusBadge(status) {
@@ -581,6 +620,13 @@
                 : Array.isArray(d.publishers) ? d.publishers.length : 0;
             return "Shared caller ID" + (n ? " — appeared under " + n + " publisher" + (n === 1 ? "" : "s") : "");
           }
+          if (f.reason === "cross_vertical") {
+            const n = typeof d.categoryCount === "number" ? d.categoryCount :
+              Array.isArray(d.categories) ? d.categories.length : 0;
+            const breakdown = fmtCategoryBreakdown(d.categories);
+            return "Recycled across " + n + " service verticals in 7d" +
+              (breakdown ? " — " + breakdown : "");
+          }
           if (f.reason === "ai_analysis") {
             const verdict = d.verdict ? String(d.verdict).replace(/_/g, " ") : "suspicious";
             let out = "AI call analysis — " + verdict;
@@ -603,12 +649,13 @@
             return '<span class="mono-dim">No active flags for this publisher — risk has cleared. ' +
               "If it is still listed it was blocked manually.</span>";
           }
-          const counts = data.counts || { voip: 0, shared_caller: 0, ai_analysis: 0, other: 0 };
+          const counts = data.counts || { voip: 0, shared_caller: 0, cross_vertical: 0, ai_analysis: 0, other: 0 };
           const top = flags.slice(0, 3);
           const lines = [];
           lines.push(
             '<div class="breakdown__counts"><b>What\'s driving this score</b> — ' +
             "VOIP flags: <b>" + (counts.voip || 0) + "</b> · Shared caller ID: <b>" + (counts.shared_caller || 0) +
+            "</b> · Cross-vertical: <b>" + (counts.cross_vertical || 0) +
             "</b> · AI flags: <b>" + (counts.ai_analysis || 0) + "</b>" +
             (counts.other ? " · Other: <b>" + counts.other + "</b>" : "") +
             ' <span class="mono-dim">(' + flags.length +
@@ -642,6 +689,11 @@
           if (Array.isArray(detail.publishers) && detail.publishers.length) {
             parts.push("Publishers sharing this caller: " + detail.publishers.map(esc).join(" · "));
           }
+          if (Array.isArray(detail.categories) && detail.categories.length) {
+            parts.push("Service breakdown (7d): " + esc(fmtCategoryBreakdown(detail.categories)));
+          }
+          if (detail.thisCallCategory) parts.push("This call's service: " + esc(detail.thisCallCategory));
+          if (detail.campaignName) parts.push("Campaign: " + esc(detail.campaignName));
           if (detail.verdict) parts.push("AI verdict: " + esc(detail.verdict));
           if (Array.isArray(detail.reasons) && detail.reasons.length) {
             parts.push("AI reasons: " + detail.reasons.map(esc).join("; "));
@@ -813,6 +865,80 @@
           }
         }
 
+        // ---------- NO-CONNECT SECTION (robocalls / solicitors) ----------
+
+        const noConnectBody = document.getElementById("noConnectBody");
+        const ncSummaryLine = document.getElementById("ncSummaryLine");
+        let noConnectRows = [];
+
+        async function loadNoConnect() {
+          const data = await fetchJson("/api/fraud/noconnect");
+          noConnectRows = data.numbers || [];
+          const s = data.summary || {};
+          ncSummaryLine.textContent =
+            (s.numbers24h || 0) + " numbers active in 24h · " +
+            (s.numbersTotal || 0) + " tracked · " +
+            (s.attemptsTotal || 0) + " total attempts · " +
+            (s.blockedNumbers || 0) + " blocked. " +
+            "No-connects stay out of the fraud feed and risk scores; blocking stops the number account-wide in Ringba.";
+          renderNoConnect();
+        }
+
+        function renderNoConnect() {
+          if (!noConnectRows.length) {
+            noConnectBody.innerHTML =
+              '<tr><td class="empty" colspan="7">No no-connect calls tracked yet — they accumulate from the next scan.</td></tr>';
+            return;
+          }
+          noConnectBody.innerHTML = "";
+          for (const n of noConnectRows) {
+            const blocked = !!n.blockedAt;
+            const tr = document.createElement("tr");
+            tr.innerHTML =
+              "<td>" + esc(fmtCaller(n.callerNumber)) + "</td>" +
+              "<td><b>" + (n.attempts || 0) + "</b></td>" +
+              "<td>" + (n.publisherCount || 0) + "</td>" +
+              '<td class="mono-dim">' + fmtTime(n.firstSeenAt) + "</td>" +
+              '<td class="mono-dim">' + fmtTime(n.lastSeenAt) + "</td>" +
+              "<td>" + (blocked
+                ? '<span class="badge badge--nc-blocked">BLOCKED</span>'
+                : '<span class="badge badge--nc-open">OPEN</span>') + "</td>" +
+              "<td></td>";
+            const actionTd = tr.lastElementChild;
+            const btn = document.createElement("button");
+            btn.className = "btn-block" + (blocked ? " btn-unblock" : "");
+            btn.textContent = blocked ? "UNBLOCK" : "BLOCK";
+            btn.addEventListener("click", () => { void toggleNumberBlock(n, btn); });
+            actionTd.appendChild(btn);
+            noConnectBody.appendChild(tr);
+          }
+        }
+
+        async function toggleNumberBlock(row, btn) {
+          const blocked = !!row.blockedAt;
+          const pretty = fmtCaller(row.callerNumber);
+          const message = blocked
+            ? "Unblock " + pretty + " in Ringba? Calls from it will route again."
+            : "Block " + pretty + " account-wide in Ringba? " +
+              "Every future call from this number will be terminated (" +
+              (row.attempts || 0) + " no-connect attempts across " +
+              (row.publisherCount || 0) + " publishers).";
+          if (!confirm(message)) return;
+          btn.disabled = true;
+          try {
+            const path = blocked ? "unblock" : "block";
+            await fetchJson(
+              "/api/fraud/noconnect/" + path + "/" + encodeURIComponent(row.callerNumber),
+              { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }
+            );
+            showToast((blocked ? "Unblocked " : "Blocked ") + pretty + " in Ringba", false);
+            await loadNoConnect();
+          } catch (err) {
+            btn.disabled = false;
+            showToast(err.message || "Number block failed", true);
+          }
+        }
+
         // ---------- BLOCK / UNBLOCK ----------
 
         function openBlockModal(publisherName, block) {
@@ -877,7 +1003,8 @@
             const r = data.result || {};
             showToast(
               "Scan done: " + (r.callsProcessed ?? 0) + " new calls, " +
-              ((r.voipFlags ?? 0) + (r.sharedCallerFlags ?? 0) + (r.aiFlags ?? 0)) + " new flags",
+              ((r.voipFlags ?? 0) + (r.sharedCallerFlags ?? 0) + (r.crossVerticalFlags ?? 0) + (r.aiFlags ?? 0)) +
+              " new flags, " + (r.noConnectNew ?? 0) + " no-connects",
               false
             );
             await refresh();
@@ -893,7 +1020,7 @@
           try {
             // Drop cached breakdowns so a scan's new flags show on next open.
             breakdownCache.clear();
-            await Promise.all([loadSummary(), loadFeed(), loadPublishers()]);
+            await Promise.all([loadSummary(), loadFeed(), loadPublishers(), loadNoConnect()]);
             // Re-fetch the breakdown for whichever publisher is open.
             if (expandedPublisher) {
               const name = expandedPublisher;

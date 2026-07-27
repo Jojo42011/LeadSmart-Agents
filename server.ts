@@ -76,12 +76,19 @@ import {
   getPhoneIntel,
   setPublisherBlocked,
   setPublisherRingbaAffiliateId,
+  listNoConnectNumbers,
+  noConnectSummary,
+  markNumberBlocked,
+  markNumberUnblocked,
 } from "./lib/fraudDb";
 import {
   listRingbaAffiliates,
   matchAffiliateByName,
   setRingbaAffiliateEnabled,
+  blockNumberInRingba,
+  unblockNumberInRingba,
 } from "./lib/ringbaFraudClient";
+import { normalizePhoneNumber } from "./lib/ipqsClient";
 import { runFraudScan, isFraudScanRunning } from "./agents/fraudAgent";
 import { startFraudScheduler } from "./lib/fraudScheduler";
 
@@ -2593,7 +2600,7 @@ app.get("/api/fraud/publisher/:name/flags", (req, res) => {
       return { ...flag, detail };
     });
 
-    const counts = { voip: 0, shared_caller: 0, ai_analysis: 0, other: 0 };
+    const counts = { voip: 0, shared_caller: 0, cross_vertical: 0, ai_analysis: 0, other: 0 };
     for (const flag of flags) {
       if (flag.reason in counts) {
         counts[flag.reason as keyof typeof counts] += 1;
@@ -2717,6 +2724,79 @@ app.post("/api/fraud/block/:name", (req, res) => {
 
 app.post("/api/fraud/unblock/:name", (req, res) => {
   void handleFraudBlockToggle(req, res, false);
+});
+
+// ---------- No-connect section (robocalls / solicitors) ----------
+// A separate watchlist per Seth: no-connects never enter the fraud feed or
+// publisher risk scores, but their numbers can be blocked in Ringba.
+
+app.get("/api/fraud/noconnect", (_req, res) => {
+  try {
+    res.json({
+      summary: noConnectSummary(),
+      numbers: listNoConnectNumbers(200),
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read no-connect data",
+    });
+  }
+});
+
+/**
+ * Block/unblock a caller number on Ringba's account-level blocked list.
+ * The local record is only written after Ringba confirms — a number is never
+ * shown as blocked unless Ringba actually stopped it.
+ */
+async function handleNumberBlockToggle(
+  req: express.Request,
+  res: express.Response,
+  block: boolean
+): Promise<void> {
+  const number = normalizePhoneNumber(String(req.params.number || ""));
+  if (!number) {
+    res.status(400).json({ error: "A valid phone number is required" });
+    return;
+  }
+
+  try {
+    const ringba = block
+      ? await blockNumberInRingba(number)
+      : await unblockNumberInRingba(number);
+
+    if (block) {
+      markNumberBlocked(
+        number,
+        `ok (${ringba.httpStatus})`,
+        typeof req.body?.note === "string" ? req.body.note.slice(0, 300) : null
+      );
+    } else {
+      markNumberUnblocked(number);
+    }
+
+    console.log(
+      "[Fraud] %s number %s in Ringba (HTTP %d)",
+      block ? "BLOCKED" : "UNBLOCKED",
+      number,
+      ringba.httpStatus
+    );
+    res.json({ ok: true, number, ringbaStatus: ringba.httpStatus });
+  } catch (err) {
+    res.status(502).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : `Failed to ${block ? "block" : "unblock"} number`,
+    });
+  }
+}
+
+app.post("/api/fraud/noconnect/block/:number", (req, res) => {
+  void handleNumberBlockToggle(req, res, true);
+});
+
+app.post("/api/fraud/noconnect/unblock/:number", (req, res) => {
+  void handleNumberBlockToggle(req, res, false);
 });
 
 // ====================================================================

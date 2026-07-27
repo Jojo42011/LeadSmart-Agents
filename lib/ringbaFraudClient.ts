@@ -49,6 +49,7 @@ export interface FraudCallRecord {
   publisherName: string;
   inboundPhoneNumber: string | null;
   payoutAmount: number;
+  campaignName: string | null;
   targetName: string | null;
   buyer: string | null;
   recordingUrl: string | null;
@@ -85,6 +86,7 @@ function normalizeCallRow(row: RawCallRow): FraudCallRecord | null {
     publisherName,
     inboundPhoneNumber: readStr(row, "inboundPhoneNumber"),
     payoutAmount: readNum(row, "payoutAmount"),
+    campaignName: readStr(row, "campaignName") ?? readStr(row, "campaign"),
     targetName: readStr(row, "targetName") ?? readStr(row, "target"),
     buyer: readStr(row, "buyer"),
     recordingUrl: readStr(row, "recordingUrl"),
@@ -98,6 +100,7 @@ const CALL_COLUMNS_FULL = [
   "publisherName",
   "inboundPhoneNumber",
   "payoutAmount",
+  "campaignName",
   "targetName",
   "buyer",
   "callLengthInSeconds",
@@ -107,6 +110,11 @@ const CALL_COLUMNS_FULL = [
 /** Retry set for accounts whose calllogs reject the recordingUrl column. */
 const CALL_COLUMNS_NO_RECORDING = CALL_COLUMNS_FULL.filter(
   (column) => column !== "recordingUrl"
+);
+
+/** Last-resort set for accounts that also reject campaignName. */
+const CALL_COLUMNS_MINIMAL = CALL_COLUMNS_NO_RECORDING.filter(
+  (column) => column !== "campaignName"
 );
 
 async function fetchPage(
@@ -182,7 +190,19 @@ export async function fetchConvertedCallsForFraud(
           JSON.stringify(err.response?.data ?? null)
         );
         columns = CALL_COLUMNS_NO_RECORDING;
-        records = await fetchPage(client, accountId, reportStart, reportEnd, columns, offset);
+        try {
+          records = await fetchPage(client, accountId, reportStart, reportEnd, columns, offset);
+        } catch (err2) {
+          if (axios.isAxiosError(err2) && err2.response?.status === 400) {
+            console.warn(
+              "[Fraud/Ringba] calllogs also rejected campaignName — retrying minimal column set"
+            );
+            columns = CALL_COLUMNS_MINIMAL;
+            records = await fetchPage(client, accountId, reportStart, reportEnd, columns, offset);
+          } else {
+            throw err2;
+          }
+        }
       } else {
         throw err;
       }
@@ -215,6 +235,232 @@ export async function fetchConvertedCallsForFraud(
     );
 
   return { calls, truncated };
+}
+
+// ---------- no-connect calls (robocalls / solicitors) ----------
+
+export interface NoConnectCallRecord {
+  inboundCallId: string;
+  callDt: string | null;
+  publisherName: string;
+  inboundPhoneNumber: string | null;
+  campaignName: string | null;
+  targetName: string | null;
+}
+
+const NO_CONNECT_COLUMNS = [
+  "inboundCallId",
+  "callDt",
+  "publisherName",
+  "inboundPhoneNumber",
+  "campaignName",
+  "targetName",
+  "callLengthInSeconds",
+];
+
+const NO_CONNECT_COLUMNS_MINIMAL = NO_CONNECT_COLUMNS.filter(
+  (column) => column !== "campaignName"
+);
+
+/** Robocall volume can be huge — cap harder than the connected fetch. */
+const NO_CONNECT_MAX_PAGES = 5;
+
+async function fetchNoConnectPage(
+  client: AxiosInstance,
+  accountId: string,
+  reportStart: string,
+  reportEnd: string,
+  columns: string[],
+  offset: number
+): Promise<RawCallRow[]> {
+  const response = await client.post<{
+    report?: { records?: RawCallRow[] };
+  }>(`/${accountId}/calllogs`, {
+    reportStart,
+    reportEnd,
+    size: PAGE_SIZE,
+    offset,
+    // Inverse of the fraud-scan scope: duration exactly 0 = never connected.
+    // These are robocalls/solicitors — tracked in their own section, never in
+    // the main fraud feed or publisher risk scores.
+    filters: [
+      {
+        anyConditionToMatch: [
+          {
+            column: "callLengthInSeconds",
+            value: "0",
+            isNegativeMatch: false,
+            comparisonType: "EQUALS",
+          },
+        ],
+      },
+    ],
+    valueColumns: columns.map((column) => ({ column })),
+    orderByColumns: [{ column: "callDt", direction: "asc" }],
+  });
+  return response.data?.report?.records ?? [];
+}
+
+/**
+ * No-connect calls (duration = 0) in [reportStart, reportEnd] — the robocall /
+ * solicitor stream. Page cap is deliberate: repeat offenders reappear every
+ * window, so sampling a truncated window still surfaces the worst numbers, and
+ * we never hold the main scan window back for this feed.
+ */
+export async function fetchNoConnectCallsForFraud(
+  reportStart: string,
+  reportEnd: string
+): Promise<{ calls: NoConnectCallRecord[]; truncated: boolean }> {
+  const client = createClient();
+  const accountId = getAccountId();
+
+  let columns = NO_CONNECT_COLUMNS;
+  const all: RawCallRow[] = [];
+  let offset = 0;
+  let pages = 0;
+  let truncated = false;
+
+  for (;;) {
+    pages += 1;
+    let records: RawCallRow[];
+    try {
+      records = await fetchNoConnectPage(
+        client, accountId, reportStart, reportEnd, columns, offset
+      );
+    } catch (err) {
+      if (
+        columns === NO_CONNECT_COLUMNS &&
+        axios.isAxiosError(err) &&
+        err.response?.status === 400
+      ) {
+        console.warn(
+          "[Fraud/Ringba] no-connect calllogs rejected campaignName — retrying minimal column set"
+        );
+        columns = NO_CONNECT_COLUMNS_MINIMAL;
+        records = await fetchNoConnectPage(
+          client, accountId, reportStart, reportEnd, columns, offset
+        );
+      } else {
+        throw err;
+      }
+    }
+
+    all.push(...records);
+    if (records.length < PAGE_SIZE) {
+      break;
+    }
+    if (pages >= NO_CONNECT_MAX_PAGES) {
+      truncated = true;
+      console.warn(
+        "[Fraud/Ringba] no-connect window truncated at %d pages — repeat offenders resurface next scan",
+        NO_CONNECT_MAX_PAGES
+      );
+      break;
+    }
+    offset += PAGE_SIZE;
+    await sleep(PAGE_DELAY_MS);
+  }
+
+  const calls: NoConnectCallRecord[] = [];
+  for (const row of all) {
+    const inboundCallId = readStr(row, "inboundCallId");
+    const publisherName = readStr(row, "publisherName");
+    if (!inboundCallId || !publisherName) {
+      continue;
+    }
+    if (readNum(row, "callLengthInSeconds") !== 0) {
+      continue;
+    }
+    calls.push({
+      inboundCallId,
+      callDt: readStr(row, "callDt"),
+      publisherName,
+      inboundPhoneNumber: readStr(row, "inboundPhoneNumber"),
+      campaignName: readStr(row, "campaignName") ?? readStr(row, "campaign"),
+      targetName: readStr(row, "targetName") ?? readStr(row, "target"),
+    });
+  }
+
+  return { calls, truncated };
+}
+
+// ---------- blocked numbers (account-level number blocking) ----------
+
+/**
+ * Add a number to Ringba's account-level blocked list — Ringba then terminates
+ * any inbound call from it. API: POST /{accountId}/bulkBlockedNumbers with an
+ * E.164 CSV list. `replace: false` is critical — true would WIPE the existing
+ * blocked list and replace it with this one number.
+ * Both JSON key casings are sent because SDK docs show snake_case while the
+ * Ringba API is otherwise camelCase; the server ignores the unknown one.
+ */
+export async function blockNumberInRingba(
+  e164Number: string
+): Promise<{ httpStatus: number; body: unknown }> {
+  const client = createClient();
+  const accountId = getAccountId();
+
+  console.log("[Fraud/Ringba] POST bulkBlockedNumbers %s", e164Number);
+  try {
+    const response = await client.post<unknown>(
+      `/${accountId}/bulkBlockedNumbers`,
+      {
+        replace: false,
+        e164CsvList: e164Number,
+        e164_csv_list: e164Number,
+      }
+    );
+    console.log(
+      "[Fraud/Ringba] bulkBlockedNumbers response %d: %s",
+      response.status,
+      JSON.stringify(response.data ?? null).slice(0, 300)
+    );
+    return { httpStatus: response.status, body: response.data };
+  } catch (err) {
+    if (axios.isAxiosError(err)) {
+      console.error(
+        "[Fraud/Ringba] block number %s failed %s: %s",
+        e164Number,
+        err.response?.status ?? "network",
+        JSON.stringify(err.response?.data ?? null)
+      );
+      throw new Error(
+        `Ringba number block failed (${err.response?.status ?? "network"}): ` +
+          JSON.stringify(err.response?.data ?? err.message)
+      );
+    }
+    throw err;
+  }
+}
+
+/** Remove a number from Ringba's blocked list. */
+export async function unblockNumberInRingba(
+  e164Number: string
+): Promise<{ httpStatus: number; body: unknown }> {
+  const client = createClient();
+  const accountId = getAccountId();
+
+  console.log("[Fraud/Ringba] DELETE bulkBlockedNumbers/%s", e164Number);
+  try {
+    const response = await client.delete<unknown>(
+      `/${accountId}/bulkBlockedNumbers/${encodeURIComponent(e164Number)}`
+    );
+    return { httpStatus: response.status, body: response.data };
+  } catch (err) {
+    if (axios.isAxiosError(err)) {
+      console.error(
+        "[Fraud/Ringba] unblock number %s failed %s: %s",
+        e164Number,
+        err.response?.status ?? "network",
+        JSON.stringify(err.response?.data ?? null)
+      );
+      throw new Error(
+        `Ringba number unblock failed (${err.response?.status ?? "network"}): ` +
+          JSON.stringify(err.response?.data ?? err.message)
+      );
+    }
+    throw err;
+  }
 }
 
 // ---------- affiliates (publishers) ----------

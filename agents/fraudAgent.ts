@@ -2,9 +2,11 @@ import { createHash } from "crypto";
 import OpenAI from "openai";
 import {
   fetchConvertedCallsForFraud,
+  fetchNoConnectCallsForFraud,
   downloadRecording,
   type FraudCallRecord,
 } from "../lib/ringbaFraudClient";
+import { deriveServiceCategory } from "../lib/fraudCategories";
 import {
   lookupPhone,
   evaluatePhoneIntel,
@@ -13,15 +15,19 @@ import {
 } from "../lib/ipqsClient";
 import {
   bumpPublisherTotals,
+  callerServiceBreakdownSince,
   flagCall,
   getCallAnalysis,
   getFraudPollState,
   listFlaggedCalls,
   markCallProcessed,
+  pruneNoConnectIndex,
   pruneStaleSharedCallerFlags,
   publishersForCallerSince,
   recomputePublisherRisk,
+  recordCallerServiceSighting,
   recordCallerSighting,
+  recordNoConnectSighting,
   saveCallAnalysis,
   setFraudPollState,
   transcriptHashCount,
@@ -46,10 +52,13 @@ export interface FraudScanResult {
   callsProcessed: number;
   voipFlags: number;
   sharedCallerFlags: number;
+  crossVerticalFlags: number;
   aiFlags: number;
   ipqsLookups: number;
   transcriptionsRun: number;
   errors: number;
+  noConnectSeen: number;
+  noConnectNew: number;
   publishersAlerted: string[];
 }
 
@@ -211,6 +220,17 @@ const SHARED_CALLER_7D_MIN = 4;
 const SHARED_CALLER_24H_MS = 24 * 60 * 60 * 1000;
 const SHARED_CALLER_7D_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Cross-vertical rule (Seth): the same caller inside ONE service vertical is
+ * normal shopping no matter how it splits across publishers — but the same
+ * caller across 3+ DIFFERENT service categories within 7 days is a recycled
+ * fake lead. Two categories stays silent (plumber + electrician in the same
+ * week is a real homeowner). Tunable without a redeploy via env.
+ */
+function crossVerticalMinCategories(): number {
+  return Math.max(2, envInt("FRAUD_CROSS_VERTICAL_MIN", 3));
+}
+
 async function runTranscriptionPass(
   result: FraudScanResult,
   recordingUrlByCallId: Map<string, string>,
@@ -359,10 +379,13 @@ async function executeFraudScan(): Promise<FraudScanResult> {
     callsProcessed: 0,
     voipFlags: 0,
     sharedCallerFlags: 0,
+    crossVerticalFlags: 0,
     aiFlags: 0,
     ipqsLookups: 0,
     transcriptionsRun: 0,
     errors: 0,
+    noConnectSeen: 0,
+    noConnectNew: 0,
     publishersAlerted: [],
   };
 
@@ -457,6 +480,43 @@ async function executeFraudScan(): Promise<FraudScanResult> {
     );
   }
 
+  // No-connect pass — robocalls/solicitors (duration = 0). A completely
+  // separate watchlist: nothing here flags calls, alerts publishers, or feeds
+  // risk scores. Aggregate-only writes; failures never break the main scan.
+  try {
+    const { calls: noConnectCalls } = await fetchNoConnectCallsForFraud(
+      window.start,
+      window.end
+    );
+    result.noConnectSeen = noConnectCalls.length;
+    for (const nc of noConnectCalls) {
+      if (!nc.inboundPhoneNumber) {
+        continue;
+      }
+      if (wasCallProcessed(nc.inboundCallId)) {
+        continue;
+      }
+      const number = normalizePhoneNumber(nc.inboundPhoneNumber);
+      if (!number) {
+        continue;
+      }
+      recordNoConnectSighting(
+        number,
+        nc.publisherName,
+        nc.callDt ?? new Date().toISOString()
+      );
+      markCallProcessed(nc.inboundCallId);
+      result.noConnectNew += 1;
+    }
+    pruneNoConnectIndex();
+  } catch (err) {
+    result.errors += 1;
+    console.warn(
+      "[Fraud] no-connect pass failed: %s",
+      err instanceof Error ? err.message : err
+    );
+  }
+
   // Alerts — one per publisher per scan, throttled inside notifyFraudAlert.
   for (const [publisherName, draft] of alertDrafts) {
     const row = recomputePublisherRisk(publisherName);
@@ -480,14 +540,17 @@ async function executeFraudScan(): Promise<FraudScanResult> {
   );
 
   console.log(
-    "[Fraud] Scan complete: %d seen, %d new, %d voip flags, %d shared-caller flags, %d ai flags, %d IPQS lookups, %d transcriptions, %d errors",
+    "[Fraud] Scan complete: %d seen, %d new, %d voip flags, %d shared-caller flags, %d cross-vertical flags, %d ai flags, %d IPQS lookups, %d transcriptions, %d no-connect calls (%d new), %d errors",
     result.callsSeen,
     result.callsProcessed,
     result.voipFlags,
     result.sharedCallerFlags,
+    result.crossVerticalFlags,
     result.aiFlags,
     result.ipqsLookups,
     result.transcriptionsRun,
+    result.noConnectSeen,
+    result.noConnectNew,
     result.errors
   );
 
@@ -508,6 +571,19 @@ async function processCall(
   if (callerNumber) {
     recordCallerSighting(
       callerNumber,
+      call.publisherName,
+      call.callDt ?? new Date().toISOString()
+    );
+  }
+
+  // Step 2b bookkeeping — the same sighting split by service vertical. An
+  // unknown category (null) is never recorded: cross-vertical detection only
+  // counts services we could actually identify from the campaign/target name.
+  const serviceCategory = deriveServiceCategory(call.campaignName, call.targetName);
+  if (callerNumber && serviceCategory) {
+    recordCallerServiceSighting(
+      callerNumber,
+      serviceCategory,
       call.publisherName,
       call.callDt ?? new Date().toISOString()
     );
@@ -600,6 +676,53 @@ async function processCall(
           severity,
           callerNumber,
           signals: publishers.map((p) => `seen under: ${p}`),
+        });
+      }
+    }
+  }
+
+  // Step 2c — cross-vertical recycling: same caller ID across DIFFERENT
+  // service categories within 7 days. Same-vertical shopping never trips this
+  // (it stays one category regardless of publisher count); a lead recycled
+  // through plumbing + HVAC + roofing does.
+  if (callerNumber && serviceCategory) {
+    const since7d = new Date(Date.now() - SHARED_CALLER_7D_MS).toISOString();
+    const breakdown = callerServiceBreakdownSince(callerNumber, since7d);
+    const categoryCount = breakdown.length;
+    const minCategories = crossVerticalMinCategories();
+
+    if (categoryCount >= minCategories) {
+      // Same scale as shared_caller: 3 categories → 86, 4+ → 98+. Clears the
+      // 85 HIGH-RISK line only when the recycling is genuinely cross-vertical.
+      const severity = Math.min(100, 50 + categoryCount * 12);
+
+      touchedPublishers.add(call.publisherName);
+      const isNew = flagCall({
+        inboundCallId: call.inboundCallId,
+        publisherName: call.publisherName,
+        callerNumber,
+        callDt: call.callDt,
+        reason: "cross_vertical",
+        severity,
+        detail: {
+          categories: breakdown,
+          categoryCount,
+          window: "7d",
+          thisCallCategory: serviceCategory,
+          campaignName: call.campaignName,
+          payoutAmount: call.payoutAmount,
+        },
+      });
+      if (isNew) {
+        result.crossVerticalFlags += 1;
+        proposeAlert(call.publisherName, {
+          reason: `Same caller across ${categoryCount} service verticals in 7 days`,
+          severity,
+          callerNumber,
+          signals: breakdown.map(
+            (b) =>
+              `${b.serviceCategory}: ${b.publisherCount} pub${b.publisherCount === 1 ? "" : "s"} / ${b.callCount} call${b.callCount === 1 ? "" : "s"}`
+          ),
         });
       }
     }
