@@ -113,6 +113,40 @@ export function getFraudDb(): Database.Database {
       lastScanAt TEXT,
       lastWindowEnd TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS caller_service_index (
+      callerNumber TEXT NOT NULL,
+      serviceCategory TEXT NOT NULL,
+      publisherName TEXT NOT NULL,
+      callCount INTEGER NOT NULL DEFAULT 0,
+      firstSeenAt TEXT NOT NULL,
+      lastSeenAt TEXT NOT NULL,
+      PRIMARY KEY (callerNumber, serviceCategory, publisherName)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_caller_service_number
+      ON caller_service_index (callerNumber);
+
+    CREATE TABLE IF NOT EXISTS no_connect_index (
+      callerNumber TEXT NOT NULL,
+      publisherName TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      firstSeenAt TEXT NOT NULL,
+      lastSeenAt TEXT NOT NULL,
+      PRIMARY KEY (callerNumber, publisherName)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_no_connect_number
+      ON no_connect_index (callerNumber);
+    CREATE INDEX IF NOT EXISTS idx_no_connect_last
+      ON no_connect_index (lastSeenAt DESC);
+
+    CREATE TABLE IF NOT EXISTS blocked_numbers (
+      callerNumber TEXT PRIMARY KEY,
+      blockedAt TEXT NOT NULL,
+      ringbaStatus TEXT,
+      note TEXT
+    );
   `);
 
   const row = db
@@ -279,6 +313,181 @@ export function publishersForCallerSince(
   return rows.map((r) => r.publisherName);
 }
 
+// ---------- caller service index (cross-vertical tracking) ----------
+
+/**
+ * Per-(caller, service, publisher) sighting counts. This is what powers Seth's
+ * rule: shared caller ID split across services with call counts. A caller
+ * hammering multiple publishers inside ONE vertical stays one category here;
+ * the same number recycled across verticals accumulates distinct categories.
+ */
+export function recordCallerServiceSighting(
+  callerNumber: string,
+  serviceCategory: string,
+  publisherName: string,
+  callDt: string
+): void {
+  getFraudDb()
+    .prepare(
+      `INSERT INTO caller_service_index (
+         callerNumber, serviceCategory, publisherName, callCount, firstSeenAt, lastSeenAt
+       ) VALUES (?, ?, ?, 1, ?, ?)
+       ON CONFLICT(callerNumber, serviceCategory, publisherName) DO UPDATE SET
+         callCount = callCount + 1,
+         lastSeenAt = excluded.lastSeenAt`
+    )
+    .run(callerNumber, serviceCategory, publisherName, callDt, callDt);
+}
+
+export interface CallerServiceBreakdownRow {
+  serviceCategory: string;
+  publisherCount: number;
+  callCount: number;
+}
+
+/**
+ * Distinct service categories a caller has hit since `sinceIso`, with how many
+ * publishers and how many calls inside each — e.g. plumbing: 2 pubs / 5 calls,
+ * hvac: 1 pub / 2 calls. Category count drives the cross-vertical flag; the
+ * per-category values are what the dashboard shows.
+ */
+export function callerServiceBreakdownSince(
+  callerNumber: string,
+  sinceIso: string
+): CallerServiceBreakdownRow[] {
+  return getFraudDb()
+    .prepare(
+      `SELECT serviceCategory,
+              COUNT(DISTINCT publisherName) AS publisherCount,
+              SUM(callCount) AS callCount
+       FROM caller_service_index
+       WHERE callerNumber = ? AND lastSeenAt >= ?
+       GROUP BY serviceCategory
+       ORDER BY callCount DESC, serviceCategory`
+    )
+    .all(callerNumber, sinceIso) as CallerServiceBreakdownRow[];
+}
+
+// ---------- no-connect tracking (robocalls / solicitors) ----------
+
+export function recordNoConnectSighting(
+  callerNumber: string,
+  publisherName: string,
+  callDt: string
+): void {
+  getFraudDb()
+    .prepare(
+      `INSERT INTO no_connect_index (
+         callerNumber, publisherName, attempts, firstSeenAt, lastSeenAt
+       ) VALUES (?, ?, 1, ?, ?)
+       ON CONFLICT(callerNumber, publisherName) DO UPDATE SET
+         attempts = attempts + 1,
+         lastSeenAt = excluded.lastSeenAt`
+    )
+    .run(callerNumber, publisherName, callDt, callDt);
+}
+
+export interface NoConnectNumberRow {
+  callerNumber: string;
+  attempts: number;
+  publisherCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  blockedAt: string | null;
+  ringbaStatus: string | null;
+}
+
+/** Aggregated no-connect numbers, worst offenders first. */
+export function listNoConnectNumbers(limit: number): NoConnectNumberRow[] {
+  return getFraudDb()
+    .prepare(
+      `SELECT n.callerNumber,
+              SUM(n.attempts) AS attempts,
+              COUNT(DISTINCT n.publisherName) AS publisherCount,
+              MIN(n.firstSeenAt) AS firstSeenAt,
+              MAX(n.lastSeenAt) AS lastSeenAt,
+              b.blockedAt AS blockedAt,
+              b.ringbaStatus AS ringbaStatus
+       FROM no_connect_index n
+       LEFT JOIN blocked_numbers b ON b.callerNumber = n.callerNumber
+       GROUP BY n.callerNumber
+       ORDER BY (b.blockedAt IS NOT NULL), attempts DESC, lastSeenAt DESC
+       LIMIT ?`
+    )
+    .all(Math.min(Math.max(limit, 1), 500)) as NoConnectNumberRow[];
+}
+
+export function noConnectSummary(): {
+  numbersTotal: number;
+  numbers24h: number;
+  attemptsTotal: number;
+  blockedNumbers: number;
+} {
+  const database = getFraudDb();
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const totals = database
+    .prepare(
+      `SELECT COUNT(DISTINCT callerNumber) AS numbers,
+              COALESCE(SUM(attempts), 0) AS attempts
+       FROM no_connect_index`
+    )
+    .get() as { numbers: number; attempts: number };
+  const recent = database
+    .prepare(
+      "SELECT COUNT(DISTINCT callerNumber) AS c FROM no_connect_index WHERE lastSeenAt >= ?"
+    )
+    .get(since) as { c: number };
+  const blocked = database
+    .prepare("SELECT COUNT(*) AS c FROM blocked_numbers")
+    .get() as { c: number };
+  return {
+    numbersTotal: totals.numbers,
+    numbers24h: recent.c,
+    attemptsTotal: totals.attempts,
+    blockedNumbers: blocked.c,
+  };
+}
+
+export function markNumberBlocked(
+  callerNumber: string,
+  ringbaStatus: string,
+  note: string | null
+): void {
+  getFraudDb()
+    .prepare(
+      `INSERT INTO blocked_numbers (callerNumber, blockedAt, ringbaStatus, note)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(callerNumber) DO UPDATE SET
+         blockedAt = excluded.blockedAt,
+         ringbaStatus = excluded.ringbaStatus,
+         note = excluded.note`
+    )
+    .run(callerNumber, new Date().toISOString(), ringbaStatus, note);
+}
+
+export function markNumberUnblocked(callerNumber: string): void {
+  getFraudDb()
+    .prepare("DELETE FROM blocked_numbers WHERE callerNumber = ?")
+    .run(callerNumber);
+}
+
+/**
+ * Housekeeping: drop no-connect pairs stale for `days` (blocked numbers are
+ * kept forever). Robocallers rotate numbers, so without this the index grows
+ * without bound.
+ */
+export function pruneNoConnectIndex(days = 90): number {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const result = getFraudDb()
+    .prepare(
+      `DELETE FROM no_connect_index
+       WHERE lastSeenAt < ?
+         AND callerNumber NOT IN (SELECT callerNumber FROM blocked_numbers)`
+    )
+    .run(cutoff);
+  return result.changes;
+}
+
 // ---------- flagged calls ----------
 
 export interface FlagCallInput {
@@ -286,7 +495,7 @@ export interface FlagCallInput {
   publisherName: string;
   callerNumber: string | null;
   callDt: string | null;
-  reason: "voip" | "shared_caller" | "ai_analysis";
+  reason: "voip" | "shared_caller" | "cross_vertical" | "ai_analysis";
   severity: number;
   detail: Record<string, unknown>;
 }
