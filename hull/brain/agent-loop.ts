@@ -13,6 +13,7 @@ import {
   searchFacts,
 } from "../memory/retrieval";
 import { executeHullTool, getHullToolDefinitions } from "./tools";
+import { buildOpsPromptText } from "./opsData";
 
 const MAX_AGENT_STEPS = 8;
 const MAX_TOOL_CHARS = 12000;
@@ -76,6 +77,14 @@ function stripMarkdownForSpeech(text: string): string {
 
 function buildSystemPrompt(memoryPacket: string, opts: AgentLoopOptions): string {
   let system = LEADSMART_SYSTEM_PROMPT;
+  try {
+    const ops = buildOpsPromptText();
+    if (ops) {
+      system += `\n\nLIVE OPS SNAPSHOT (pulled fresh for this message — trust it over memory):\n${ops}\nCall get_scrub_status / get_payment_summary / get_fraud_status only when you need detail beyond this snapshot.`;
+    }
+  } catch {
+    // Snapshot is best-effort ambient awareness; the tools still work.
+  }
   if (memoryPacket) {
     system += `\n\nRELEVANT MEMORY:\n${memoryPacket}`;
   }

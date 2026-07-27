@@ -4,933 +4,1574 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>JARVIS // LEADSMART</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
     <style>
       :root {
-        --bg: #0a0a0a;
+        --bg: #0d0d0f;
+        --surface: #17171a;
+        --surface-2: #1e1e22;
+        --line: rgba(255, 255, 255, 0.07);
+        --text: #ececf1;
+        --text-soft: #b4b4be;
+        --text-dim: #6e6e7a;
+        --accent: #00d4ff;
         --cyan: #00ffff;
-        --cyan-dim: #007a7a;
-        --cyan-soft: #00b3b3;
-        --blue-deep: #0a0a2e;
-        --blue: #0033aa;
-        --green: #19e08a;
+        --green: #00e08b;
         --amber: #e0a000;
-        --red: #e0392b;
-        --text: #b8d8d8;
-        --text-dim: #5a7a7a;
+        --red: #ff5c6c;
+        --sans: "Inter", -apple-system, "Segoe UI", sans-serif;
+        --mono: "JetBrains Mono", ui-monospace, monospace;
       }
-
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
-
-      html,
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; }
       body {
-        height: 100%;
-        width: 100%;
-        overflow: hidden;
         background: var(--bg);
         color: var(--text);
-        font-family: "Courier New", Courier, monospace;
+        font-family: var(--sans);
+        font-size: 15px;
+        -webkit-font-smoothing: antialiased;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .hidden { display: none !important; }
+      ::selection { background: rgba(0, 212, 255, 0.25); }
+
+      /* ---------- header ---------- */
+      .top {
+        display: flex; align-items: center; gap: 14px;
+        padding: 12px 22px 8px;
+        flex-shrink: 0;
+      }
+      .brand {
+        font-family: var(--mono); font-size: 13px; font-weight: 700;
+        letter-spacing: 3px; color: var(--text);
+        white-space: nowrap;
+      }
+      .brand .dot {
+        display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+        background: var(--accent); margin-right: 9px; vertical-align: 1px;
+        box-shadow: 0 0 10px var(--accent);
+        animation: breathe 3.2s ease-in-out infinite;
+      }
+      @keyframes breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+      .top__spacer { flex: 1; }
+      .top a, .top button.linklike {
+        background: none; border: none; cursor: pointer;
+        color: var(--text-dim); font-family: var(--sans);
+        font-size: 12.5px; font-weight: 500; text-decoration: none;
+        padding: 6px 10px; border-radius: 8px;
+        transition: color 0.15s, background 0.15s;
+        white-space: nowrap;
+      }
+      .top a:hover, .top button.linklike:hover { color: var(--text); background: var(--surface); }
+
+      /* ---------- live ops strip ---------- */
+      .opsrow {
+        display: flex; gap: 8px; align-items: stretch;
+        padding: 0 22px 10px;
+        overflow-x: auto; scrollbar-width: none;
+        flex-shrink: 0;
+      }
+      .opsrow::-webkit-scrollbar { display: none; }
+      .ops {
+        display: flex; align-items: center; gap: 9px;
+        background: var(--surface);
+        border: 1px solid var(--line); border-radius: 12px;
+        padding: 7px 13px; cursor: pointer; flex-shrink: 0;
+        font-family: var(--mono); font-size: 11px; letter-spacing: 0.5px;
+        color: var(--text-soft);
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .ops:hover { border-color: rgba(0, 212, 255, 0.35); background: var(--surface-2); }
+      .ops__dot {
+        width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+        background: var(--text-dim);
+      }
+      .ops__dot--ok { background: var(--green); box-shadow: 0 0 8px rgba(0, 224, 139, 0.6); }
+      .ops__dot--warn { background: var(--amber); box-shadow: 0 0 8px rgba(224, 160, 0, 0.5); }
+      .ops__dot--err { background: var(--red); box-shadow: 0 0 8px rgba(255, 92, 108, 0.5); }
+      .ops__name { color: var(--text-dim); font-weight: 700; letter-spacing: 1.5px; }
+      .ops__stat { color: var(--text); white-space: nowrap; }
+      .ops__stat b { color: var(--accent); font-weight: 700; }
+
+      /* ---------- conversation ---------- */
+      .scroll { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+      .thread {
+        max-width: 740px; margin: 0 auto;
+        padding: 14px 24px 40px;
       }
 
-      /* Full-viewport hex grid texture */
-      .hexgrid {
-        position: fixed;
-        inset: 0;
-        z-index: 0;
-        opacity: 0.5;
-        pointer-events: none;
-        background-color: var(--bg);
+      .turn { margin-bottom: 26px; animation: rise 0.25s ease both; }
+      @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+      .turn--user { display: flex; justify-content: flex-end; }
+      .turn--user .bubble {
+        max-width: 78%;
+        background: var(--surface-2);
+        border-radius: 18px;
+        padding: 11px 16px;
+        line-height: 1.65;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .turn--jarvis { display: flex; gap: 14px; }
+      .avatar {
+        width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%;
+        margin-top: 2px;
+        background: radial-gradient(circle at 35% 35%, rgba(0, 212, 255, 0.9), rgba(0, 212, 255, 0.15) 70%);
+        box-shadow: 0 0 14px rgba(0, 212, 255, 0.35);
+      }
+      .reply { min-width: 0; line-height: 1.7; color: var(--text); }
+      .reply p { margin: 0 0 10px; }
+      .reply p:last-child { margin-bottom: 0; }
+      .reply ul, .reply ol { margin: 4px 0 10px 20px; }
+      .reply li { margin-bottom: 4px; }
+      .reply strong { font-weight: 600; color: #fff; }
+      .reply code {
+        font-family: var(--mono); font-size: 12.5px;
+        background: var(--surface-2); border-radius: 5px; padding: 1.5px 6px;
+      }
+      .reply pre {
+        background: var(--surface); border: 1px solid var(--line);
+        border-radius: 10px; padding: 12px 14px; margin: 6px 0 12px;
+        overflow-x: auto;
+      }
+      .reply pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; }
+      .reply .note {
+        font-size: 11.5px; color: var(--text-dim); margin-top: 8px;
+      }
+      .reply--error { color: var(--red); }
+
+      .voicetag {
+        display: inline-block; font-family: var(--mono); font-size: 9px;
+        letter-spacing: 1.5px; text-transform: uppercase;
+        color: var(--accent); border: 1px solid rgba(0, 212, 255, 0.35);
+        border-radius: 5px; padding: 1px 6px; margin-bottom: 6px;
+        opacity: 0.8;
+      }
+      .turn--user .voicetag { display: block; text-align: right; border: none; padding: 0; margin: 0 4px 4px 0; }
+
+      /* typing indicator */
+      .dots { display: inline-flex; gap: 5px; padding: 8px 0; }
+      .dots span {
+        width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim);
+        animation: blink 1.2s ease-in-out infinite;
+      }
+      .dots span:nth-child(2) { animation-delay: 0.18s; }
+      .dots span:nth-child(3) { animation-delay: 0.36s; }
+      @keyframes blink { 0%, 70%, 100% { opacity: 0.25; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-2px); } }
+
+      /* caret during typewriter reveal */
+      .caret::after {
+        content: ""; display: inline-block; width: 7px; height: 15px;
+        background: var(--accent); margin-left: 2px; vertical-align: -2px;
+        animation: blink 0.9s steps(1) infinite;
+      }
+
+      /* ---------- empty state ---------- */
+      .empty {
+        max-width: 740px; margin: 0 auto; padding: 9vh 24px 0;
+        text-align: center;
+      }
+      .empty h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.3px; margin-bottom: 8px; }
+      .empty .brief {
+        color: var(--text-soft); font-size: 14px; line-height: 1.7;
+        max-width: 560px; margin: 0 auto 30px;
+      }
+      .chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+      .chip {
+        background: none; cursor: pointer;
+        border: 1px solid var(--line); border-radius: 14px;
+        color: var(--text-soft); font-family: var(--sans); font-size: 13px;
+        padding: 10px 16px;
+        transition: border-color 0.15s, background 0.15s, color 0.15s;
+      }
+      .chip:hover { border-color: rgba(0, 212, 255, 0.4); background: var(--surface); color: var(--text); }
+
+      /* ---------- composer ---------- */
+      .composerwrap {
+        flex-shrink: 0;
+        padding: 10px 24px calc(18px + env(safe-area-inset-bottom));
+        background: linear-gradient(transparent, var(--bg) 40%);
+      }
+      .composer {
+        max-width: 740px; margin: 0 auto;
+        display: flex; align-items: flex-end; gap: 6px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 26px;
+        padding: 8px 8px 8px 6px;
+        transition: border-color 0.15s, box-shadow 0.15s;
+      }
+      .composer:focus-within {
+        border-color: rgba(255, 255, 255, 0.16);
+        box-shadow: 0 6px 30px rgba(0, 0, 0, 0.45);
+      }
+      .iconbtn {
+        width: 38px; height: 38px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: none; border: none; border-radius: 50%; cursor: pointer;
+        color: var(--text-dim); font-size: 20px; line-height: 1;
+        transition: background 0.15s, color 0.15s;
+      }
+      .iconbtn:hover { background: var(--surface-2); color: var(--text); }
+      .composer textarea {
+        flex: 1; background: none; border: none; outline: none; resize: none;
+        color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.55;
+        max-height: 180px; padding: 9px 4px;
+      }
+      .composer textarea::placeholder { color: var(--text-dim); }
+
+      /* JARVIS mode (voice orb) button */
+      .orbbtn {
+        width: 38px; height: 38px; flex-shrink: 0; position: relative;
+        display: flex; align-items: center; justify-content: center;
+        border: none; border-radius: 50%; cursor: pointer;
+        background: radial-gradient(circle at 35% 35%, rgba(0, 255, 255, 0.85), rgba(0, 90, 130, 0.9) 75%);
+        box-shadow: 0 0 12px rgba(0, 212, 255, 0.45), inset 0 0 8px rgba(255, 255, 255, 0.25);
+        transition: transform 0.12s, box-shadow 0.2s;
+        animation: orbPulse 3.4s ease-in-out infinite;
+      }
+      .orbbtn:hover {
+        transform: scale(1.08);
+        box-shadow: 0 0 22px rgba(0, 212, 255, 0.75), inset 0 0 10px rgba(255, 255, 255, 0.35);
+      }
+      @keyframes orbPulse {
+        0%, 100% { box-shadow: 0 0 10px rgba(0, 212, 255, 0.35), inset 0 0 8px rgba(255, 255, 255, 0.2); }
+        50% { box-shadow: 0 0 20px rgba(0, 212, 255, 0.65), inset 0 0 10px rgba(255, 255, 255, 0.3); }
+      }
+      .orbbtn svg { width: 15px; height: 15px; color: #032027; }
+
+      .sendbtn {
+        width: 38px; height: 38px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        border: none; border-radius: 50%; cursor: pointer;
+        background: var(--text); color: var(--bg);
+        transition: opacity 0.15s, transform 0.1s;
+      }
+      .sendbtn:disabled { opacity: 0.25; cursor: default; }
+      .sendbtn svg { width: 16px; height: 16px; }
+      .footnote {
+        max-width: 740px; margin: 8px auto 0; text-align: center;
+        font-size: 11px; color: var(--text-dim);
+      }
+
+      /* ---------- memory sheet ---------- */
+      .sheetveil {
+        position: fixed; inset: 0; z-index: 40;
+        background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(2px);
+        opacity: 0; pointer-events: none; transition: opacity 0.2s;
+      }
+      .sheetveil.open { opacity: 1; pointer-events: auto; }
+      .sheet {
+        position: fixed; left: 50%; bottom: 0; z-index: 41;
+        transform: translate(-50%, 105%);
+        width: min(680px, calc(100vw - 24px));
+        max-height: 78vh; overflow-y: auto;
+        background: var(--surface);
+        border: 1px solid var(--line); border-bottom: none;
+        border-radius: 18px 18px 0 0;
+        padding: 22px 24px 30px;
+        transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+      }
+      .sheet.open { transform: translate(-50%, 0); }
+      .sheet h2 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+      .sheet .sub { font-size: 12.5px; color: var(--text-dim); margin-bottom: 18px; line-height: 1.55; }
+      .sheet input[type="text"], .sheet textarea {
+        width: 100%; background: var(--bg); border: 1px solid var(--line);
+        border-radius: 10px; color: var(--text);
+        font-family: var(--sans); font-size: 13.5px;
+        padding: 10px 12px; outline: none; margin-bottom: 10px;
+      }
+      .sheet textarea { min-height: 120px; resize: vertical; line-height: 1.6; }
+      .sheet input:focus, .sheet textarea:focus { border-color: rgba(0, 224, 139, 0.4); }
+      .drop {
+        border: 1px dashed var(--line); border-radius: 10px;
+        padding: 12px; text-align: center; cursor: pointer;
+        font-size: 12px; color: var(--text-dim); margin-bottom: 12px;
+        transition: border-color 0.15s, color 0.15s;
+      }
+      .drop:hover, .drop.over { border-color: var(--green); color: var(--green); }
+      .sheet .actions { display: flex; justify-content: flex-end; gap: 10px; }
+      .pillbtn {
+        border: none; border-radius: 20px; cursor: pointer;
+        font-family: var(--sans); font-size: 13px; font-weight: 600;
+        padding: 10px 20px;
+        background: var(--surface-2); color: var(--text-soft);
+        transition: opacity 0.15s;
+      }
+      .pillbtn--primary { background: var(--green); color: #08110c; }
+      .pillbtn:disabled { opacity: 0.4; cursor: default; }
+      .sheetstatus { font-size: 12px; color: var(--text-dim); min-height: 16px; margin: 8px 0 4px; }
+
+      .docrow {
+        display: flex; align-items: center; gap: 12px;
+        padding: 11px 2px; border-top: 1px solid var(--line);
+      }
+      .docrow:first-of-type { border-top: none; }
+      .docrow__body { flex: 1; min-width: 0; }
+      .docrow__title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .docrow__meta { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+      .docrow__meta.ok { color: var(--green); }
+      .docrow__meta.err { color: var(--red); }
+      .docrow__bar { height: 3px; border-radius: 2px; background: var(--bg); margin-top: 7px; overflow: hidden; }
+      .docrow__fill { height: 100%; background: var(--green); transition: width 0.4s; }
+      .docrow__x {
+        background: none; border: none; cursor: pointer;
+        color: var(--text-dim); font-size: 11px; font-family: var(--sans);
+        padding: 5px 8px; border-radius: 7px;
+      }
+      .docrow__x:hover { color: var(--red); background: var(--bg); }
+      .sheet .docshead {
+        font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+        color: var(--text-dim); margin: 20px 0 6px;
+      }
+
+      /* =====================================================
+         JARVIS MODE — full-screen voice orb overlay
+         ===================================================== */
+      .vo {
+        position: fixed; inset: 0; z-index: 60;
+        background: #0a0a0a;
+        display: none;
+        font-family: "Courier New", Courier, monospace;
+        color: #b8d8d8;
+      }
+      .vo.open { display: block; }
+      .vo__hexgrid {
+        position: absolute; inset: 0; z-index: 0; opacity: 0.5; pointer-events: none;
+        background-color: #0a0a0a;
         background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='100' viewBox='0 0 56 100'><g fill='none' stroke='%2300ffff' stroke-width='0.6' stroke-opacity='0.06'><path d='M28 0 L56 16 L56 50 L28 66 L0 50 L0 16 Z'/><path d='M28 66 L56 82 L56 116 L28 132 L0 116 L0 82 Z'/></g></svg>");
         background-size: 56px 100px;
       }
-
-      /* Subtle vignette: pure black at corners fading to slightly less black in center */
-      .vignette {
-        position: fixed;
-        inset: 0;
-        z-index: 1;
-        pointer-events: none;
-        background: radial-gradient(
-          ellipse at center,
-          rgba(0, 0, 0, 0) 35%,
-          rgba(0, 0, 0, 0.4) 75%,
-          rgba(0, 0, 0, 0.92) 100%
-        );
+      .vo__vignette {
+        position: absolute; inset: 0; z-index: 1; pointer-events: none;
+        background: radial-gradient(ellipse at center, rgba(0,0,0,0) 35%, rgba(0,0,0,0.4) 75%, rgba(0,0,0,0.92) 100%);
       }
-
-      /* Faint scan line traveling slowly down the viewport */
-      .scanline {
-        position: fixed;
-        left: 0;
-        right: 0;
-        top: 0;
-        height: 140px;
-        z-index: 3;
+      .vo__scanline {
+        position: absolute; left: 0; right: 0; top: 0; height: 140px; z-index: 3;
         pointer-events: none;
-        background: linear-gradient(
-          180deg,
-          rgba(0, 255, 255, 0) 0%,
-          rgba(0, 255, 255, 0.035) 50%,
-          rgba(0, 255, 255, 0) 100%
-        );
+        background: linear-gradient(180deg, rgba(0,255,255,0) 0%, rgba(0,255,255,0.035) 50%, rgba(0,255,255,0) 100%);
         animation: scanMove 8s linear infinite;
       }
       @keyframes scanMove {
-        0% {
-          transform: translateY(-140px);
-        }
-        100% {
-          transform: translateY(100vh);
-        }
+        0% { transform: translateY(-140px); }
+        100% { transform: translateY(100vh); }
       }
-
-      #app {
-        position: relative;
-        z-index: 2;
-        display: grid;
-        grid-template-rows: 56px 1fr;
-        grid-template-columns: 1fr;
-        grid-template-areas:
-          "topbar"
-          "center";
-        height: 100vh;
-        width: 100vw;
+      .vo__inner {
+        position: relative; z-index: 2;
+        display: grid; grid-template-rows: 56px 1fr;
+        height: 100%; width: 100%;
       }
-
-      .topbar__nav {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        margin-left: auto;
-        margin-right: 18px;
-      }
-      .topbar__link {
-        font-size: 10px;
-        letter-spacing: 2px;
-        color: var(--text-dim);
-        text-decoration: none;
-        padding: 6px 10px;
-        border: 1px solid transparent;
-        transition: color 0.2s, border-color 0.2s, box-shadow 0.2s;
-      }
-      .topbar__link:hover {
-        color: var(--cyan);
-        border-color: rgba(0, 255, 255, 0.35);
-        box-shadow: 0 0 12px rgba(0, 255, 255, 0.12);
-      }
-      .topbar__link--active {
-        color: var(--cyan);
-        border-color: rgba(0, 255, 255, 0.5);
-      }
-
-      /* ---------- TOP BAR ---------- */
-      .topbar {
-        grid-area: topbar;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
+      .vo__topbar {
+        display: flex; align-items: center; justify-content: space-between;
         padding: 0 22px;
         border-bottom: 1px solid rgba(0, 122, 122, 0.45);
-        background: linear-gradient(
-          180deg,
-          rgba(0, 30, 30, 0.25),
-          rgba(0, 0, 0, 0)
-        );
-        letter-spacing: 3px;
-        text-transform: uppercase;
-        font-size: 13px;
+        background: linear-gradient(180deg, rgba(0, 30, 30, 0.25), rgba(0, 0, 0, 0));
+        letter-spacing: 3px; text-transform: uppercase; font-size: 13px;
       }
-      .topbar__brand {
-        color: var(--cyan);
-        text-shadow: 0 0 8px rgba(0, 255, 255, 0.4);
-        font-weight: 700;
+      .vo__brand {
+        color: var(--cyan); text-shadow: 0 0 8px rgba(0, 255, 255, 0.4); font-weight: 700;
       }
-      .topbar__brand .slash {
-        color: var(--cyan-dim);
-        margin: 0 8px;
+      .vo__brand .slash { color: #007a7a; margin: 0 8px; }
+      .vo__brand .unit { color: #b8d8d8; }
+      .vo__exit {
+        background: none; cursor: pointer;
+        border: 1px solid rgba(0, 255, 255, 0.4); border-radius: 2px;
+        color: #00b3b3; font-family: inherit;
+        font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+        padding: 7px 14px;
+        transition: color 0.2s, border-color 0.2s, box-shadow 0.2s;
       }
-      .topbar__brand .unit {
-        color: var(--text);
+      .vo__exit:hover {
+        color: var(--cyan); border-color: var(--cyan);
+        box-shadow: 0 0 12px rgba(0, 255, 255, 0.25);
       }
-      .topbar__clock {
-        color: var(--cyan-soft);
-        letter-spacing: 4px;
-        font-variant-numeric: tabular-nums;
-      }
-
-      /* ---------- CENTER ---------- */
-      .center {
-        grid-area: center;
-        position: relative;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
+      .vo__center {
+        position: relative; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; overflow: hidden;
       }
       #orb-canvas {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        cursor: pointer;
-        z-index: 1;
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        cursor: pointer; z-index: 1;
       }
-
-      /* Faint concentric orbit rings around the orb */
-      .orbit-rings {
-        position: absolute;
-        inset: 0;
-        z-index: 1;
-        pointer-events: none;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+      /* CSS fallback orb if the 3D engine can't load */
+      .vo__fallback {
+        position: absolute; z-index: 1; width: 34vh; height: 34vh; border-radius: 50%;
+        background: radial-gradient(circle at 38% 38%, rgba(220,255,255,0.9), rgba(0,180,200,0.4) 45%, rgba(0,60,90,0.12) 75%, transparent 100%);
+        box-shadow: 0 0 90px rgba(0, 212, 255, 0.35);
+        cursor: pointer; display: none;
+        animation: fallbackPulse 3.2s ease-in-out infinite;
       }
-      .ring {
-        position: absolute;
-        border-radius: 50%;
-        border: 1px solid rgba(0, 255, 255, 0.04);
+      .vo--fallback .vo__fallback { display: block; }
+      @keyframes fallbackPulse {
+        0%, 100% { transform: scale(1); opacity: 0.85; }
+        50% { transform: scale(1.05); opacity: 1; }
       }
-      .ring--1 {
-        width: 50vh;
-        height: 50vh;
-        border-top-color: rgba(0, 255, 255, 0.2);
-        animation: spin 38s linear infinite;
+      .vo__rings {
+        position: absolute; inset: 0; z-index: 1; pointer-events: none;
+        display: flex; align-items: center; justify-content: center;
       }
-      .ring--2 {
-        width: 63vh;
-        height: 63vh;
-        border-bottom-color: rgba(0, 255, 255, 0.16);
-        animation: spin 52s linear infinite reverse;
-      }
-      .ring--3 {
-        width: 77vh;
-        height: 77vh;
-        border-left-color: rgba(0, 255, 255, 0.12);
-        animation: spin 68s linear infinite;
-      }
-      .ring--4 {
-        width: 92vh;
-        height: 92vh;
-        border-right-color: rgba(0, 255, 255, 0.09);
-        animation: spin 86s linear infinite reverse;
-      }
-      @keyframes spin {
-        from {
-          transform: rotate(0deg);
-        }
-        to {
-          transform: rotate(360deg);
-        }
-      }
-
-      .center__overlay {
-        position: relative;
-        z-index: 2;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        height: 100%;
-        width: 100%;
-        pointer-events: none;
+      .ring { position: absolute; border-radius: 50%; border: 1px solid rgba(0, 255, 255, 0.04); }
+      .ring--1 { width: 50vh; height: 50vh; border-top-color: rgba(0,255,255,0.2); animation: spin 38s linear infinite; }
+      .ring--2 { width: 63vh; height: 63vh; border-bottom-color: rgba(0,255,255,0.16); animation: spin 52s linear infinite reverse; }
+      .ring--3 { width: 77vh; height: 77vh; border-left-color: rgba(0,255,255,0.12); animation: spin 68s linear infinite; }
+      .ring--4 { width: 92vh; height: 92vh; border-right-color: rgba(0,255,255,0.09); animation: spin 86s linear infinite reverse; }
+      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+      .vo__overlay {
+        position: relative; z-index: 2;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        height: 100%; width: 100%; pointer-events: none;
       }
       .status-pill {
-        margin-top: 8%;
-        margin-bottom: auto;
-        padding: 7px 22px;
-        font-size: 11px;
-        letter-spacing: 5px;
-        text-transform: uppercase;
-        border: 1px solid var(--cyan);
-        border-radius: 2px;
-        color: var(--cyan-soft);
-        background: rgba(0, 20, 20, 0.3);
-        box-shadow: 0 0 10px rgba(0, 255, 255, 0.25),
-          inset 0 0 8px rgba(0, 255, 255, 0.1);
-        transition: color 0.5s ease, border-color 0.5s ease,
-          text-shadow 0.5s ease, background 0.5s ease;
+        margin-top: 7%; margin-bottom: auto;
+        padding: 7px 22px; font-size: 11px; letter-spacing: 5px; text-transform: uppercase;
+        border: 1px solid var(--cyan); border-radius: 2px;
+        color: #00b3b3; background: rgba(0, 20, 20, 0.3);
+        box-shadow: 0 0 10px rgba(0,255,255,0.25), inset 0 0 8px rgba(0,255,255,0.1);
+        transition: color 0.5s ease, border-color 0.5s ease, text-shadow 0.5s ease, background 0.5s ease;
       }
       .status-pill[data-state="standby"] {
-        color: var(--cyan-soft);
-        border-color: var(--cyan);
+        color: #00b3b3; border-color: var(--cyan);
         animation: pillGlow 2.8s ease-in-out infinite;
       }
       @keyframes pillGlow {
-        0%,
-        100% {
-          box-shadow: 0 0 8px rgba(0, 255, 255, 0.2),
-            inset 0 0 6px rgba(0, 255, 255, 0.08);
-          border-color: rgba(0, 255, 255, 0.55);
-        }
-        50% {
-          box-shadow: 0 0 18px rgba(0, 255, 255, 0.55),
-            inset 0 0 12px rgba(0, 255, 255, 0.18);
-          border-color: rgba(0, 255, 255, 0.95);
-        }
+        0%, 100% { box-shadow: 0 0 8px rgba(0,255,255,0.2), inset 0 0 6px rgba(0,255,255,0.08); border-color: rgba(0,255,255,0.55); }
+        50% { box-shadow: 0 0 18px rgba(0,255,255,0.55), inset 0 0 12px rgba(0,255,255,0.18); border-color: rgba(0,255,255,0.95); }
       }
       .status-pill[data-state="listening"] {
-        color: var(--bg);
-        background: var(--cyan);
-        border-color: var(--cyan);
-        text-shadow: none;
-        box-shadow: 0 0 18px rgba(0, 255, 255, 0.5);
-        animation: none;
+        color: #0a0a0a; background: var(--cyan); border-color: var(--cyan);
+        text-shadow: none; box-shadow: 0 0 18px rgba(0,255,255,0.5); animation: none;
       }
       .status-pill[data-state="processing"] {
-        color: #ffffff;
-        border-color: #ffffff;
-        text-shadow: 0 0 12px rgba(255, 255, 255, 0.9);
+        color: #ffffff; border-color: #ffffff;
+        text-shadow: 0 0 12px rgba(255,255,255,0.9);
         animation: pillPulse 0.9s ease-in-out infinite;
       }
       .status-pill[data-state="responding"] {
-        color: var(--cyan);
-        border-color: var(--cyan);
-        text-shadow: 0 0 12px rgba(0, 255, 255, 0.7);
-        animation: none;
+        color: var(--cyan); border-color: var(--cyan);
+        text-shadow: 0 0 12px rgba(0,255,255,0.7); animation: none;
       }
-      @keyframes pillPulse {
-        0%,
-        100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.4;
-        }
+      @keyframes pillPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+      .vo__caption {
+        min-height: 44px; max-width: min(640px, 86vw);
+        margin-bottom: 10px;
+        font-size: 13px; letter-spacing: 1px; line-height: 1.6;
+        color: #b8d8d8; text-align: center;
+        text-shadow: 0 0 10px rgba(0, 255, 255, 0.15);
+        opacity: 0.9;
+      }
+      .vo__caption .who {
+        display: block; font-size: 9px; letter-spacing: 3px; text-transform: uppercase;
+        color: #5a7a7a; margin-bottom: 4px;
       }
       .core-label {
-        margin-bottom: 9%;
-        margin-top: auto;
-        font-size: 11px;
-        letter-spacing: 4px;
-        color: var(--text-dim);
-        text-transform: uppercase;
-        text-align: center;
+        margin-bottom: 7%;
+        font-size: 11px; letter-spacing: 4px; color: #5a7a7a;
+        text-transform: uppercase; text-align: center;
         transition: color 0.5s ease;
         animation: labelBreath 4.5s ease-in-out infinite;
       }
-      @keyframes labelBreath {
-        0%,
-        100% {
-          opacity: 0.35;
-        }
-        50% {
-          opacity: 0.9;
-        }
-      }
+      @keyframes labelBreath { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.9; } }
       .voice-note {
-        position: absolute;
-        bottom: 18px;
-        font-size: 9px;
-        letter-spacing: 3px;
-        color: var(--amber);
-        text-transform: uppercase;
-        opacity: 0.8;
-        display: none;
+        position: absolute; bottom: 18px; left: 0; right: 0; text-align: center;
+        font-size: 9px; letter-spacing: 3px; color: #5a7a7a; text-transform: uppercase;
       }
       .voice-error {
-        margin-top: 8px;
-        font-size: 10px;
-        letter-spacing: 1px;
-        color: var(--red);
-        text-align: center;
-        max-width: 280px;
+        margin-top: 8px; font-size: 10px; letter-spacing: 1px;
+        color: var(--red); text-align: center; max-width: 320px;
       }
     </style>
   </head>
   <body>
-    <div class="hexgrid"></div>
-    <div class="vignette"></div>
-    <div class="scanline"></div>
+    <header class="top">
+      <div class="brand"><span class="dot"></span>JARVIS</div>
+      <div class="top__spacer"></div>
+      <button class="linklike" id="newChatBtn" type="button" title="Start a fresh conversation">New chat</button>
+      <a href="/memory">Memory</a>
+      <a href="https://war-room-dashboard-livid.vercel.app/">War Room</a>
+    </header>
 
-    <div id="app">
-      <!-- TOP BAR -->
-      <header class="topbar">
-        <div class="topbar__brand">
-          JARVIS<span class="slash">//</span><span class="unit">LEADSMART</span>
-        </div>
-        <nav class="topbar__nav" aria-label="LeadSmart navigation">
-          <a class="topbar__link" href="https://war-room-dashboard-livid.vercel.app/">War Room</a>
-          <a class="topbar__link" href="/memory">Memory</a>
-          <a class="topbar__link" href="/jarvis-chat">Chat</a>
-        </nav>
-        <div class="topbar__clock" id="clock">--:--:--</div>
-      </header>
-
-      <!-- CENTER -->
-      <main class="center">
-        <canvas id="orb-canvas"></canvas>
-        <div class="orbit-rings">
-          <div class="ring ring--1"></div>
-          <div class="ring ring--2"></div>
-          <div class="ring ring--3"></div>
-          <div class="ring ring--4"></div>
-        </div>
-        <div class="center__overlay">
-          <div class="status-pill" id="statusPill" data-state="standby">
-            Standby
-          </div>
-          <div class="core-label" id="coreLabel">Tap Core To Speak</div>
-          <div class="voice-note" id="jarvis-voice-status">Tap orb to start voice</div>
-          <p class="voice-error" id="jarvis-voice-error" hidden></p>
-        </div>
-        <div class="voice-note" id="voiceNote" style="display: none">Voice Unavailable</div>
-      </main>
+    <!-- live pulse of the three departments -->
+    <div class="opsrow" id="opsRow" title="Live department status — click a system to ask about it">
+      <button class="ops" type="button" data-ask="How is the scrub agent doing right now? Anything failing?">
+        <span class="ops__dot" id="opsScrubDot"></span>
+        <span class="ops__name">SCRUB</span>
+        <span class="ops__stat" id="opsScrubStat">—</span>
+      </button>
+      <button class="ops" type="button" data-ask="Where do payments stand right now? Who still needs to be paid?">
+        <span class="ops__dot" id="opsPayDot"></span>
+        <span class="ops__name">PAYMENTS</span>
+        <span class="ops__stat" id="opsPayStat">—</span>
+      </button>
+      <button class="ops" type="button" data-ask="Any fraud flags I should look at? What's the current risk picture?">
+        <span class="ops__dot" id="opsFraudDot"></span>
+        <span class="ops__name">FRAUD</span>
+        <span class="ops__stat" id="opsFraudStat">—</span>
+      </button>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <div class="scroll" id="scroll">
+      <div class="empty" id="empty">
+        <h1>What do you need?</h1>
+        <p class="brief" id="briefText">Live access to scrub, payments, and fraud — and a memory that never forgets.</p>
+        <div class="chips">
+          <button class="chip" type="button">Where is everything today?</button>
+          <button class="chip" type="button">Any fraud flags in the last 24 hours?</button>
+          <button class="chip" type="button">How are payments looking this month?</button>
+          <button class="chip" type="button">What do you remember about CPL rules?</button>
+        </div>
+      </div>
+      <div class="thread" id="thread"></div>
+    </div>
+
+    <div class="composerwrap">
+      <div class="composer">
+        <button class="iconbtn" id="attachBtn" type="button" title="Feed memory — documents, notes, anything">＋</button>
+        <textarea id="input" placeholder="Message JARVIS" rows="1"></textarea>
+        <button class="orbbtn" id="voiceModeBtn" type="button" title="JARVIS mode — talk to the orb" aria-label="Activate JARVIS voice mode">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 15a4 4 0 0 0 4-4V6a4 4 0 1 0-8 0v5a4 4 0 0 0 4 4zm6-4a6 6 0 0 1-12 0H4a8 8 0 0 0 7 7.94V22h2v-3.06A8 8 0 0 0 20 11h-2z"/></svg>
+        </button>
+        <button class="sendbtn" id="sendBtn" type="button" disabled aria-label="Send">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5l5.5 5.5-1.06 1.06L8.75 4.37V14.5h-1.5V4.37L3.56 8.06 2.5 7 8 1.5z"/></svg>
+        </button>
+      </div>
+      <div class="footnote">JARVIS watches all three departments live. Tap the orb to talk. Drop a file anywhere to feed memory.</div>
+    </div>
+
+    <!-- memory sheet -->
+    <div class="sheetveil" id="sheetVeil"></div>
+    <div class="sheet" id="sheet">
+      <h2>Feed memory</h2>
+      <div class="sub">
+        Paste long text or drop .txt / .md / .csv files. JARVIS distills it into permanent
+        memory — facts, people, rules. Remove removes everything a document taught.
+      </div>
+      <input type="text" id="docTitle" placeholder="Title" />
+      <textarea id="docText" placeholder="Paste text here…"></textarea>
+      <div class="drop" id="drop">Drop files or click to browse</div>
+      <input type="file" id="fileInput" class="hidden" accept=".txt,.md,.csv,.log,.json" multiple />
+      <div class="sheetstatus" id="sheetStatus"></div>
+      <div class="actions">
+        <button class="pillbtn" id="sheetClose" type="button">Close</button>
+        <button class="pillbtn pillbtn--primary" id="ingestBtn" type="button">Commit to memory</button>
+      </div>
+      <div class="docshead" id="docsHead">Memory documents</div>
+      <div id="docs"></div>
+    </div>
+
+    <!-- =============== JARVIS MODE (voice orb) =============== -->
+    <div class="vo" id="voiceOverlay">
+      <div class="vo__hexgrid"></div>
+      <div class="vo__vignette"></div>
+      <div class="vo__scanline"></div>
+      <div class="vo__inner">
+        <header class="vo__topbar">
+          <div class="vo__brand">
+            JARVIS<span class="slash">//</span><span class="unit">LEADSMART</span>
+          </div>
+          <button class="vo__exit" id="voiceExitBtn" type="button">✕ &nbsp;Back to chat</button>
+        </header>
+        <main class="vo__center">
+          <canvas id="orb-canvas"></canvas>
+          <div class="vo__fallback" id="orbFallback"></div>
+          <div class="vo__rings">
+            <div class="ring ring--1"></div>
+            <div class="ring ring--2"></div>
+            <div class="ring ring--3"></div>
+            <div class="ring ring--4"></div>
+          </div>
+          <div class="vo__overlay">
+            <div class="status-pill" id="statusPill" data-state="standby">Standby</div>
+            <div class="vo__caption" id="voCaption"></div>
+            <div class="core-label" id="coreLabel">Tap Core To Speak</div>
+            <p class="voice-error" id="jarvis-voice-error" hidden></p>
+          </div>
+          <div class="voice-note"><span id="jarvis-voice-status">Standby</span> · ESC to return to chat</div>
+        </main>
+      </div>
+    </div>
+
     <script>
-      "use strict";
+      (function () {
+        "use strict";
 
-      /* =========================================================
-         LIVE CLOCK
-         ========================================================= */
-      (function clock() {
-        const el = document.getElementById("clock");
-        function tick() {
-          const d = new Date();
-          const p = (n) => String(n).padStart(2, "0");
-          el.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(
-            d.getSeconds()
-          )}`;
+        /* =====================================================
+           SHARED SESSION — one conversation across chat + voice
+           ===================================================== */
+        var sessionId =
+          sessionStorage.getItem("jarvis_session_id") ||
+          sessionStorage.getItem("jarvis_chat_session") ||
+          "chat-" + Date.now() + "-" + Math.floor(Math.random() * 1e6);
+        sessionStorage.setItem("jarvis_session_id", sessionId);
+        sessionStorage.removeItem("jarvis_chat_session");
+
+        var localHistory = []; // [{role, content}] — feeds the voice brain
+
+        /* =====================================================
+           DOM
+           ===================================================== */
+        var scroll = document.getElementById("scroll");
+        var thread = document.getElementById("thread");
+        var empty = document.getElementById("empty");
+        var briefText = document.getElementById("briefText");
+        var input = document.getElementById("input");
+        var sendBtn = document.getElementById("sendBtn");
+        var attachBtn = document.getElementById("attachBtn");
+        var newChatBtn = document.getElementById("newChatBtn");
+        var voiceModeBtn = document.getElementById("voiceModeBtn");
+        var voiceOverlay = document.getElementById("voiceOverlay");
+        var voiceExitBtn = document.getElementById("voiceExitBtn");
+        var voCaption = document.getElementById("voCaption");
+        var orbFallback = document.getElementById("orbFallback");
+        var sheet = document.getElementById("sheet");
+        var sheetVeil = document.getElementById("sheetVeil");
+        var sheetClose = document.getElementById("sheetClose");
+        var sheetStatus = document.getElementById("sheetStatus");
+        var docTitle = document.getElementById("docTitle");
+        var docText = document.getElementById("docText");
+        var drop = document.getElementById("drop");
+        var fileInput = document.getElementById("fileInput");
+        var ingestBtn = document.getElementById("ingestBtn");
+        var docs = document.getElementById("docs");
+
+        var sending = false;
+        var pollTimer = null;
+
+        /* ---------- markdown-lite (escape first, then format) ---------- */
+        function esc(s) {
+          return String(s == null ? "" : s)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
-        tick();
-        setInterval(tick, 1000);
-      })();
-
-      /* =========================================================
-         SIMPLEX-ISH 3D NOISE (compact, dependency-free)
-         Classic 3D simplex noise by Stefan Gustavson, ported.
-         ========================================================= */
-      const SimplexNoise = (function () {
-        const grad3 = [
-          [1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0],
-          [1, 0, 1], [-1, 0, 1], [1, 0, -1], [-1, 0, -1],
-          [0, 1, 1], [0, -1, 1], [0, 1, -1], [0, -1, -1],
-        ];
-        const p = [];
-        for (let i = 0; i < 256; i++) p[i] = Math.floor(Math.random() * 256);
-        const perm = new Array(512);
-        const permMod12 = new Array(512);
-        for (let i = 0; i < 512; i++) {
-          perm[i] = p[i & 255];
-          permMod12[i] = perm[i] % 12;
+        function md(text) {
+          var t = esc(text);
+          t = t.replace(/```([\s\S]*?)```/g, function (_, code) { return "<pre><code>" + code.trim() + "</code></pre>"; });
+          t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+          t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+          t = t.replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[.,])/g, "$1<em>$2</em>");
+          t = t.replace(/(^|\n)((?:[-•] .*(?:\n|$))+)/g, function (_, lead, block) {
+            var items = block.trim().split("\n")
+              .map(function (l) { return "<li>" + l.replace(/^[-•] /, "") + "</li>"; }).join("");
+            return lead + "<ul>" + items + "</ul>";
+          });
+          return t.split(/\n{2,}/).map(function (p) {
+            return p.startsWith("<ul>") || p.startsWith("<pre>") ? p : "<p>" + p.replace(/\n/g, "<br />") + "</p>";
+          }).join("");
         }
-        const F3 = 1.0 / 3.0;
-        const G3 = 1.0 / 6.0;
 
-        function noise(xin, yin, zin) {
-          let n0, n1, n2, n3;
-          const s = (xin + yin + zin) * F3;
-          const i = Math.floor(xin + s);
-          const j = Math.floor(yin + s);
-          const k = Math.floor(zin + s);
-          const t = (i + j + k) * G3;
-          const X0 = i - t;
-          const Y0 = j - t;
-          const Z0 = k - t;
-          const x0 = xin - X0;
-          const y0 = yin - Y0;
-          const z0 = zin - Z0;
-          let i1, j1, k1, i2, j2, k2;
-          if (x0 >= y0) {
-            if (y0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
-            else if (x0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; j2 = 0; k2 = 1; }
-            else { i1 = 0; j1 = 0; k1 = 1; i2 = 1; j2 = 0; k2 = 1; }
-          } else {
-            if (y0 < z0) { i1 = 0; j1 = 0; k1 = 1; i2 = 0; j2 = 1; k2 = 1; }
-            else if (x0 < z0) { i1 = 0; j1 = 1; k1 = 0; i2 = 0; j2 = 1; k2 = 1; }
-            else { i1 = 0; j1 = 1; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
+        /* ---------- messages ---------- */
+        function hideEmpty() { empty.classList.add("hidden"); }
+        function toBottom() { scroll.scrollTop = scroll.scrollHeight; }
+
+        function addUser(text, fromVoice) {
+          hideEmpty();
+          var turn = document.createElement("div");
+          turn.className = "turn turn--user";
+          var wrap = document.createElement("div");
+          if (fromVoice) {
+            var tag = document.createElement("span");
+            tag.className = "voicetag";
+            tag.textContent = "voice";
+            wrap.appendChild(tag);
           }
-          const x1 = x0 - i1 + G3;
-          const y1 = y0 - j1 + G3;
-          const z1 = z0 - k1 + G3;
-          const x2 = x0 - i2 + 2.0 * G3;
-          const y2 = y0 - j2 + 2.0 * G3;
-          const z2 = z0 - k2 + 2.0 * G3;
-          const x3 = x0 - 1.0 + 3.0 * G3;
-          const y3 = y0 - 1.0 + 3.0 * G3;
-          const z3 = z0 - 1.0 + 3.0 * G3;
-          const ii = i & 255;
-          const jj = j & 255;
-          const kk = k & 255;
-          let t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
-          if (t0 < 0) n0 = 0.0;
-          else {
-            const gi0 = permMod12[ii + perm[jj + perm[kk]]];
-            t0 *= t0;
-            n0 = t0 * t0 * dot(grad3[gi0], x0, y0, z0);
-          }
-          let t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
-          if (t1 < 0) n1 = 0.0;
-          else {
-            const gi1 = permMod12[ii + i1 + perm[jj + j1 + perm[kk + k1]]];
-            t1 *= t1;
-            n1 = t1 * t1 * dot(grad3[gi1], x1, y1, z1);
-          }
-          let t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
-          if (t2 < 0) n2 = 0.0;
-          else {
-            const gi2 = permMod12[ii + i2 + perm[jj + j2 + perm[kk + k2]]];
-            t2 *= t2;
-            n2 = t2 * t2 * dot(grad3[gi2], x2, y2, z2);
-          }
-          let t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
-          if (t3 < 0) n3 = 0.0;
-          else {
-            const gi3 = permMod12[ii + 1 + perm[jj + 1 + perm[kk + 1]]];
-            t3 *= t3;
-            n3 = t3 * t3 * dot(grad3[gi3], x3, y3, z3);
-          }
-          return 32.0 * (n0 + n1 + n2 + n3);
+          var bubble = document.createElement("div");
+          bubble.className = "bubble";
+          bubble.textContent = text;
+          wrap.appendChild(bubble);
+          turn.appendChild(wrap);
+          thread.appendChild(turn);
+          toBottom();
         }
-        function dot(g, x, y, z) {
-          return g[0] * x + g[1] * y + g[2] * z;
+
+        function addJarvisShell() {
+          hideEmpty();
+          var turn = document.createElement("div");
+          turn.className = "turn turn--jarvis";
+          turn.innerHTML =
+            '<div class="avatar"></div>' +
+            '<div class="reply"><span class="dots"><span></span><span></span><span></span></span></div>';
+          thread.appendChild(turn);
+          toBottom();
+          return turn.querySelector(".reply");
         }
-        return { noise };
-      })();
 
-      /* =========================================================
-         STATE MACHINE
-         ========================================================= */
-      const STATE = {
-        STANDBY: "standby",
-        LISTENING: "listening",
-        PROCESSING: "processing",
-        RESPONDING: "responding",
-      };
-
-      // Per-state target parameters the orb interpolates toward.
-      // Amplitude / spread kept low so the sphere holds a tight, clean
-      // silhouette — a gentle breathing pulse, not a chaotic dust cloud.
-      const STATE_PARAMS = {
-        standby:    { amp: 0.035, freq: 0.55, speed: 0.18, spread: 0.015, glow: 0.55, ripple: 0.0 },
-        listening:  { amp: 0.07,  freq: 0.85, speed: 0.34, spread: 0.03,  glow: 0.85, ripple: 0.5 },
-        processing: { amp: 0.13,  freq: 1.70, speed: 0.95, spread: 0.06,  glow: 1.30, ripple: 0.2 },
-        responding: { amp: 0.06,  freq: 0.70, speed: 0.30, spread: 0.03,  glow: 1.00, ripple: 0.8 },
-      };
-
-      let currentState = STATE.STANDBY;
-      // Live (interpolated) params, start at standby values.
-      const live = Object.assign({}, STATE_PARAMS.standby);
-      let stateTimer = null;
-
-      const statusPill = document.getElementById("statusPill");
-      const coreLabel = document.getElementById("coreLabel");
-
-      const CORE_LABELS = {
-        standby: "Tap Core To Speak",
-        listening: "Listening",
-        processing: "Processing",
-        responding: "Responding",
-      };
-
-      function setState(next) {
-        currentState = next;
-        statusPill.dataset.state = next;
-        statusPill.textContent = next;
-        coreLabel.textContent = CORE_LABELS[next];
-      }
-
-      /* =========================================================
-         VOICE SESSION (jarvis-voice.js + JarvisShell sync)
-         ========================================================= */
-
-      /* =========================================================
-         STATE FLOW
-         ========================================================= */
-      function clearTimer() {
-        if (stateTimer) {
-          clearTimeout(stateTimer);
-          stateTimer = null;
+        function addJarvisStatic(text, fromVoice) {
+          var replyEl = addJarvisShell();
+          replyEl.innerHTML =
+            (fromVoice ? '<span class="voicetag">voice</span>' : "") + md(text);
+          toBottom();
+          return replyEl;
         }
-      }
 
-      function transitionTo(state) {
-        clearTimer();
-        setState(state);
-      }
-
-      window.JarvisShell = {
-        transitionTo,
-        STATE,
-        clearTimer,
-        setState,
-        getState: () => currentState,
-      };
-
-      function onCoreActivate() {
-        window.unlockJarvisVoiceAudio?.();
-        if (window.isJarvisVoiceActive?.()) {
-          window.stopJarvisVoiceSession?.();
-          return;
+        /* typewriter reveal: fast, capped ~1.6s regardless of length */
+        function reveal(replyEl, text, note) {
+          var total = text.length;
+          var step = Math.max(3, Math.ceil(total / 90));
+          var i = 0;
+          replyEl.classList.add("caret");
+          var timer = setInterval(function () {
+            i = Math.min(total, i + step);
+            replyEl.innerHTML = md(text.slice(0, i));
+            replyEl.classList.add("caret");
+            toBottom();
+            if (i >= total) {
+              clearInterval(timer);
+              replyEl.classList.remove("caret");
+              replyEl.innerHTML = md(text) + (note ? '<div class="note">' + esc(note) + "</div>" : "");
+              toBottom();
+            }
+          }, 16);
         }
-        window.toggleJarvisVoiceSession?.().catch((e) => {
-          const el = document.getElementById("jarvis-voice-error");
-          if (el) {
-            el.textContent = e?.message || String(e);
-            el.hidden = false;
+
+        async function send(text) {
+          var message = (text != null ? text : input.value).trim();
+          if (!message || sending) return;
+          sending = true;
+          input.value = "";
+          grow();
+          syncSend();
+          addUser(message, false);
+          localHistory.push({ role: "user", content: message });
+          var replyEl = addJarvisShell();
+
+          try {
+            var res = await fetch("/api/jarvis/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ sessionId: sessionId, message: message }),
+            });
+            var data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Something went wrong");
+            var note = data.toolRounds
+              ? "Checked live data · " + data.toolRounds + " lookup" + (data.toolRounds > 1 ? "s" : "")
+              : "";
+            localHistory.push({ role: "assistant", content: data.speech || "" });
+            reveal(replyEl, data.speech || "…", note);
+          } catch (err) {
+            replyEl.classList.add("reply--error");
+            replyEl.textContent = err.message || "Something went wrong";
+          } finally {
+            sending = false;
+            syncSend();
+            input.focus();
+          }
+        }
+
+        /* ---------- restore conversation after refresh ---------- */
+        async function restoreHistory() {
+          try {
+            var res = await fetch(
+              "/api/jarvis/chat/history?sessionId=" + encodeURIComponent(sessionId) + "&limit=60"
+            );
+            if (!res.ok) return false;
+            var data = await res.json();
+            var turns = data.turns || [];
+            if (!turns.length) return false;
+            for (var k = 0; k < turns.length; k++) {
+              var t = turns[k];
+              localHistory.push({ role: t.role, content: t.text });
+              if (t.role === "user") addUser(t.text, false);
+              else addJarvisStatic(t.text, false);
+            }
+            return true;
+          } catch (_) {
+            return false;
+          }
+        }
+
+        /* ---------- daily activation brief in the empty state ---------- */
+        async function loadActivationBrief() {
+          try {
+            var res = await fetch("/api/jarvis/activation");
+            if (!res.ok) return;
+            var data = await res.json();
+            if (data.text && !empty.classList.contains("hidden")) {
+              briefText.textContent = data.text;
+            }
+          } catch (_) { /* keep default subtitle */ }
+        }
+
+        /* =====================================================
+           LIVE OPS STRIP — constant awareness of the 3 systems
+           ===================================================== */
+        var opsEls = {
+          scrubDot: document.getElementById("opsScrubDot"),
+          scrubStat: document.getElementById("opsScrubStat"),
+          payDot: document.getElementById("opsPayDot"),
+          payStat: document.getElementById("opsPayStat"),
+          fraudDot: document.getElementById("opsFraudDot"),
+          fraudStat: document.getElementById("opsFraudStat"),
+        };
+
+        function dotClass(el, state) {
+          el.className = "ops__dot" + (state ? " ops__dot--" + state : "");
+        }
+        function hoursSince(iso) {
+          if (!iso) return Infinity;
+          var t = new Date(iso).getTime();
+          if (!isFinite(t)) return Infinity;
+          return (Date.now() - t) / 36e5;
+        }
+
+        async function refreshOps() {
+          try {
+            var res = await fetch("/api/jarvis/ops-pulse");
+            if (!res.ok) throw new Error();
+            var d = await res.json();
+
+            var s = d.scrub || {};
+            if (s.available) {
+              var l24 = s.last24h || { voided: 0, errors: 0 };
+              opsEls.scrubStat.innerHTML =
+                "<b>" + (l24.voided || 0) + "</b> voided 24h · " + (l24.errors || 0) + " err";
+              dotClass(opsEls.scrubDot,
+                (l24.errors || 0) > 0 ? "warn" : hoursSince(s.lastSuccessfulPollAt) <= 9 ? "ok" : "warn");
+            } else {
+              opsEls.scrubStat.textContent = "offline";
+              dotClass(opsEls.scrubDot, "err");
+            }
+
+            var p = d.payments || {};
+            if (p.available) {
+              opsEls.payStat.innerHTML =
+                "<b>" + (p.affiliatesPaidThisMonth || 0) + "</b> paid · " +
+                (p.weeklyPaymentsLast7Days || 0) + " wk";
+              dotClass(opsEls.payDot, "ok");
+            } else {
+              opsEls.payStat.textContent = "offline";
+              dotClass(opsEls.payDot, "err");
+            }
+
+            var f = d.fraud || {};
+            if (f.available) {
+              opsEls.fraudStat.innerHTML =
+                "<b>" + (f.flaggedCallsLast24h || 0) + "</b> flags 24h";
+              dotClass(opsEls.fraudDot,
+                (f.flaggedCallsLast24h || 0) > 0 ? "warn" : hoursSince(f.lastScanAt) <= 1 ? "ok" : "warn");
+            } else {
+              opsEls.fraudStat.textContent = "no scans";
+              dotClass(opsEls.fraudDot, "warn");
+            }
+          } catch (_) {
+            dotClass(opsEls.scrubDot, "");
+            dotClass(opsEls.payDot, "");
+            dotClass(opsEls.fraudDot, "");
+          }
+        }
+        refreshOps();
+        setInterval(function () {
+          if (document.visibilityState === "visible") refreshOps();
+        }, 60000);
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "visible") refreshOps();
+        });
+        document.querySelectorAll(".ops").forEach(function (chip) {
+          chip.addEventListener("click", function () {
+            var q = chip.getAttribute("data-ask");
+            if (q) void send(q);
+          });
+        });
+
+        /* =====================================================
+           JarvisChat bridge — the voice brain shares this thread
+           ===================================================== */
+        function syncTurnToServer(role, text) {
+          fetch("/api/jarvis/chat/append", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId: sessionId, role: role, text: text }),
+          }).catch(function () {});
+        }
+
+        window.JarvisChat = {
+          getSessionId: function () { return sessionId; },
+          getHistory: function () { return localHistory.slice(-24); },
+          pushTurn: function (role, text) {
+            var content = (text || "").trim();
+            if (!content) return;
+            var r = role === "assistant" ? "assistant" : "user";
+            localHistory.push({ role: r, content: content });
+            if (r === "user") addUser(content, true);
+            else addJarvisStatic(content, true);
+            syncTurnToServer(r, content);
+            if (r === "assistant") setCaption("JARVIS", content);
+          },
+        };
+
+        /* =====================================================
+           JARVIS MODE — voice overlay + orb
+           ===================================================== */
+        var voiceOpen = false;
+        var orbInited = false;
+        var orbFailed = false;
+        var orbApi = null; // { start, stop, resize }
+        var threePromise = null;
+
+        var statusPill = document.getElementById("statusPill");
+        var coreLabel = document.getElementById("coreLabel");
+        var CORE_LABELS = {
+          standby: "Tap Core To Speak",
+          listening: "Listening",
+          processing: "Processing",
+          responding: "Responding",
+        };
+        var SHELL_STATE = {
+          STANDBY: "standby",
+          LISTENING: "listening",
+          PROCESSING: "processing",
+          RESPONDING: "responding",
+        };
+        var currentState = SHELL_STATE.STANDBY;
+
+        function setOrbState(next) {
+          currentState = next;
+          statusPill.dataset.state = next;
+          statusPill.textContent = next;
+          coreLabel.textContent = CORE_LABELS[next] || next;
+        }
+
+        window.JarvisShell = {
+          STATE: SHELL_STATE,
+          transitionTo: setOrbState,
+          setState: setOrbState,
+          clearTimer: function () {},
+          getState: function () { return currentState; },
+        };
+
+        function setCaption(who, text) {
+          if (!voiceOpen) return;
+          voCaption.innerHTML =
+            '<span class="who">' + esc(who) + "</span>" +
+            esc(String(text || "").slice(0, 220));
+        }
+        window.onJarvisPartialTranscript = function (transcript) {
+          setCaption("You", transcript);
+        };
+        window.onJarvisVoiceSessionEnd = function () {
+          setOrbState(SHELL_STATE.STANDBY);
+        };
+
+        function loadThree() {
+          if (window.THREE) return Promise.resolve();
+          if (threePromise) return threePromise;
+          threePromise = new Promise(function (resolve, reject) {
+            var s = document.createElement("script");
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
+            s.onload = function () { resolve(); };
+            s.onerror = function () { threePromise = null; reject(new Error("3D engine failed to load")); };
+            document.head.appendChild(s);
+          });
+          return threePromise;
+        }
+
+        async function enterVoiceMode() {
+          if (voiceOpen) return;
+          voiceOpen = true;
+          voiceOverlay.classList.add("open");
+          voCaption.innerHTML = "";
+          window.unlockJarvisVoiceAudio && window.unlockJarvisVoiceAudio();
+          window.JarvisStreamingTts && window.JarvisStreamingTts.prewarm && window.JarvisStreamingTts.prewarm();
+
+          // Orb visual (lazy; voice works even if 3D fails).
+          loadThree().then(function () {
+            if (!orbInited) {
+              try {
+                orbApi = initOrb();
+                orbInited = true;
+              } catch (e) {
+                orbFailed = true;
+                voiceOverlay.classList.add("vo--fallback");
+                console.error("[jarvis] orb init failed:", e);
+              }
+            }
+            if (orbApi) { orbApi.resize(); orbApi.start(); }
+          }).catch(function () {
+            orbFailed = true;
+            voiceOverlay.classList.add("vo--fallback");
+          });
+
+          // Auto-start the voice session — this click is the user gesture.
+          if (!(window.isJarvisVoiceActive && window.isJarvisVoiceActive())) {
+            try {
+              await window.startJarvisVoiceSession();
+            } catch (e) {
+              var el = document.getElementById("jarvis-voice-error");
+              if (el) { el.textContent = (e && e.message) || String(e); el.hidden = false; }
+            }
+          }
+        }
+
+        function exitVoiceMode() {
+          if (!voiceOpen) return;
+          voiceOpen = false;
+          if (window.isJarvisVoiceActive && window.isJarvisVoiceActive()) {
+            window.stopJarvisVoiceSession();
+          }
+          if (orbApi) orbApi.stop();
+          voiceOverlay.classList.remove("open");
+          toBottom();
+          input.focus();
+        }
+
+        voiceModeBtn.addEventListener("click", function () { void enterVoiceMode(); });
+        voiceExitBtn.addEventListener("click", exitVoiceMode);
+
+        function onCoreActivate() {
+          window.unlockJarvisVoiceAudio && window.unlockJarvisVoiceAudio();
+          if (window.isJarvisVoiceActive && window.isJarvisVoiceActive()) {
+            window.stopJarvisVoiceSession();
+            return;
+          }
+          window.toggleJarvisVoiceSession().catch(function (e) {
+            var el = document.getElementById("jarvis-voice-error");
+            if (el) { el.textContent = (e && e.message) || String(e); el.hidden = false; }
+          });
+        }
+        orbFallback.addEventListener("click", onCoreActivate);
+
+        /* =====================================================
+           THREE.JS PARTICLE ORB (initialized on first voice mode)
+           ===================================================== */
+        function initOrb() {
+          var canvas = document.getElementById("orb-canvas");
+          canvas.addEventListener("click", onCoreActivate);
+          canvas.addEventListener("touchstart", function (e) {
+            e.preventDefault();
+            onCoreActivate();
+          }, { passive: false });
+
+          var SimplexNoise = (function () {
+            var grad3 = [
+              [1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0],
+              [1, 0, 1], [-1, 0, 1], [1, 0, -1], [-1, 0, -1],
+              [0, 1, 1], [0, -1, 1], [0, 1, -1], [0, -1, -1],
+            ];
+            var p = [];
+            for (var i = 0; i < 256; i++) p[i] = Math.floor(Math.random() * 256);
+            var perm = new Array(512);
+            var permMod12 = new Array(512);
+            for (var j = 0; j < 512; j++) {
+              perm[j] = p[j & 255];
+              permMod12[j] = perm[j] % 12;
+            }
+            var F3 = 1.0 / 3.0;
+            var G3 = 1.0 / 6.0;
+            function dot(g, x, y, z) { return g[0] * x + g[1] * y + g[2] * z; }
+            function noise(xin, yin, zin) {
+              var n0, n1, n2, n3;
+              var s = (xin + yin + zin) * F3;
+              var i = Math.floor(xin + s);
+              var j2 = Math.floor(yin + s);
+              var k = Math.floor(zin + s);
+              var t = (i + j2 + k) * G3;
+              var x0 = xin - (i - t);
+              var y0 = yin - (j2 - t);
+              var z0 = zin - (k - t);
+              var i1, j1, k1, i2, jj2, k2;
+              if (x0 >= y0) {
+                if (y0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; jj2 = 1; k2 = 0; }
+                else if (x0 >= z0) { i1 = 1; j1 = 0; k1 = 0; i2 = 1; jj2 = 0; k2 = 1; }
+                else { i1 = 0; j1 = 0; k1 = 1; i2 = 1; jj2 = 0; k2 = 1; }
+              } else {
+                if (y0 < z0) { i1 = 0; j1 = 0; k1 = 1; i2 = 0; jj2 = 1; k2 = 1; }
+                else if (x0 < z0) { i1 = 0; j1 = 1; k1 = 0; i2 = 0; jj2 = 1; k2 = 1; }
+                else { i1 = 0; j1 = 1; k1 = 0; i2 = 1; jj2 = 1; k2 = 0; }
+              }
+              var x1 = x0 - i1 + G3, y1 = y0 - j1 + G3, z1 = z0 - k1 + G3;
+              var x2 = x0 - i2 + 2.0 * G3, y2 = y0 - jj2 + 2.0 * G3, z2 = z0 - k2 + 2.0 * G3;
+              var x3 = x0 - 1.0 + 3.0 * G3, y3 = y0 - 1.0 + 3.0 * G3, z3 = z0 - 1.0 + 3.0 * G3;
+              var ii = i & 255, jj = j2 & 255, kk = k & 255;
+              var t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
+              if (t0 < 0) n0 = 0.0;
+              else {
+                var gi0 = permMod12[ii + perm[jj + perm[kk]]];
+                t0 *= t0;
+                n0 = t0 * t0 * dot(grad3[gi0], x0, y0, z0);
+              }
+              var t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
+              if (t1 < 0) n1 = 0.0;
+              else {
+                var gi1 = permMod12[ii + i1 + perm[jj + j1 + perm[kk + k1]]];
+                t1 *= t1;
+                n1 = t1 * t1 * dot(grad3[gi1], x1, y1, z1);
+              }
+              var t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
+              if (t2 < 0) n2 = 0.0;
+              else {
+                var gi2 = permMod12[ii + i2 + perm[jj + jj2 + perm[kk + k2]]];
+                t2 *= t2;
+                n2 = t2 * t2 * dot(grad3[gi2], x2, y2, z2);
+              }
+              var t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
+              if (t3 < 0) n3 = 0.0;
+              else {
+                var gi3 = permMod12[ii + 1 + perm[jj + 1 + perm[kk + 1]]];
+                t3 *= t3;
+                n3 = t3 * t3 * dot(grad3[gi3], x3, y3, z3);
+              }
+              return 32.0 * (n0 + n1 + n2 + n3);
+            }
+            return { noise: noise };
+          })();
+
+          var STATE_PARAMS = {
+            standby:    { amp: 0.035, freq: 0.55, speed: 0.18, spread: 0.015, glow: 0.55, ripple: 0.0 },
+            listening:  { amp: 0.07,  freq: 0.85, speed: 0.34, spread: 0.03,  glow: 0.85, ripple: 0.5 },
+            processing: { amp: 0.13,  freq: 1.70, speed: 0.95, spread: 0.06,  glow: 1.30, ripple: 0.2 },
+            responding: { amp: 0.06,  freq: 0.70, speed: 0.30, spread: 0.03,  glow: 1.00, ripple: 0.8 },
+          };
+          var live = Object.assign({}, STATE_PARAMS.standby);
+
+          var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+          var scene = new THREE.Scene();
+          var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+          camera.position.z = 3.4;
+
+          function radialTexture(stops) {
+            var size = 256;
+            var c = document.createElement("canvas");
+            c.width = c.height = size;
+            var ctx = c.getContext("2d");
+            var g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+            for (var i = 0; i < stops.length; i++) g.addColorStop(stops[i][0], stops[i][1]);
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, size, size);
+            return new THREE.CanvasTexture(c);
+          }
+          function spriteOf(tex) {
+            var mat = new THREE.SpriteMaterial({
+              map: tex, color: 0xffffff, transparent: true,
+              blending: THREE.AdditiveBlending, depthWrite: false,
+            });
+            var sp = new THREE.Sprite(mat);
+            scene.add(sp);
+            return { sprite: sp, material: mat };
+          }
+          var core = spriteOf(radialTexture([
+            [0.0, "rgba(220, 255, 255, 0.95)"], [0.12, "rgba(120, 255, 255, 0.7)"],
+            [0.35, "rgba(0, 200, 210, 0.28)"], [0.7, "rgba(0, 120, 150, 0.06)"],
+            [1.0, "rgba(0, 0, 0, 0)"],
+          ]));
+          var glow = spriteOf(radialTexture([
+            [0.0, "rgba(0, 200, 200, 0.5)"], [0.25, "rgba(0, 110, 140, 0.28)"],
+            [0.6, "rgba(0, 50, 90, 0.1)"], [1.0, "rgba(0, 0, 0, 0)"],
+          ]));
+          var halo = spriteOf(radialTexture([
+            [0.0, "rgba(0, 255, 255, 0)"], [0.72, "rgba(0, 255, 255, 0)"],
+            [0.85, "rgba(0, 230, 255, 0.18)"], [0.92, "rgba(0, 200, 255, 0.08)"],
+            [1.0, "rgba(0, 0, 0, 0)"],
+          ]));
+
+          function makeDotTexture() {
+            var size = 64;
+            var c = document.createElement("canvas");
+            c.width = c.height = size;
+            var ctx = c.getContext("2d");
+            var g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+            g.addColorStop(0, "rgba(255,255,255,1)");
+            g.addColorStop(0.4, "rgba(220,255,255,0.8)");
+            g.addColorStop(1, "rgba(255,255,255,0)");
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, size, size);
+            return new THREE.CanvasTexture(c);
+          }
+
+          var PARTICLE_COUNT = 5000;
+          var RADIUS = 1.0;
+          var positions = new Float32Array(PARTICLE_COUNT * 3);
+          var colors = new Float32Array(PARTICLE_COUNT * 3);
+          var sizes = new Float32Array(PARTICLE_COUNT);
+          var baseDir = new Float32Array(PARTICLE_COUNT * 3);
+          var edgeBias = new Float32Array(PARTICLE_COUNT);
+          var sizeBase = new Float32Array(PARTICLE_COUNT);
+          var colorInner = new THREE.Color(0xeaffff);
+          var colorOuter = new THREE.Color(0x33e6ff);
+
+          for (var i = 0; i < PARTICLE_COUNT; i++) {
+            var t = i / PARTICLE_COUNT;
+            var phi = Math.acos(1 - 2 * t);
+            var theta = Math.PI * (1 + Math.sqrt(5)) * i;
+            var x = Math.sin(phi) * Math.cos(theta);
+            var y = Math.sin(phi) * Math.sin(theta);
+            var z = Math.cos(phi);
+            baseDir[i * 3] = x;
+            baseDir[i * 3 + 1] = y;
+            baseDir[i * 3 + 2] = z;
+            positions[i * 3] = x * RADIUS;
+            positions[i * 3 + 1] = y * RADIUS;
+            positions[i * 3 + 2] = z * RADIUS;
+            var bias = Math.pow(Math.random(), 3.0);
+            edgeBias[i] = bias;
+            var mix = bias * 0.85 + Math.random() * 0.15;
+            var col = colorInner.clone().lerp(colorOuter, mix);
+            colors[i * 3] = col.r;
+            colors[i * 3 + 1] = col.g;
+            colors[i * 3 + 2] = col.b;
+            var s = 0.011 + Math.random() * 0.005;
+            sizeBase[i] = s;
+            sizes[i] = s;
+          }
+
+          var geometry = new THREE.BufferGeometry();
+          geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+          geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+          geometry.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
+
+          var particleMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+              uTexture: { value: makeDotTexture() },
+              uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+            },
+            vertexShader: [
+              "attribute float size;",
+              "varying vec3 vColor;",
+              "uniform float uPixelRatio;",
+              "void main() {",
+              "  vColor = color;",
+              "  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);",
+              "  gl_PointSize = size * 320.0 * uPixelRatio / -mvPosition.z;",
+              "  gl_Position = projectionMatrix * mvPosition;",
+              "}",
+            ].join("\n"),
+            fragmentShader: [
+              "uniform sampler2D uTexture;",
+              "varying vec3 vColor;",
+              "void main() {",
+              "  vec4 tex = texture2D(uTexture, gl_PointCoord);",
+              "  if (tex.a < 0.05) discard;",
+              "  gl_FragColor = vec4(vColor, tex.a);",
+              "}",
+            ].join("\n"),
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            vertexColors: true,
+          });
+
+          var points = new THREE.Points(geometry, particleMaterial);
+          scene.add(points);
+
+          var orbScale = 1;
+          var hoverLevel = 0;
+          var hoverTarget = 0;
+
+          function resize() {
+            var rect = canvas.getBoundingClientRect();
+            var w = Math.max(1, rect.width);
+            var h = Math.max(1, rect.height);
+            renderer.setSize(w, h, false);
+            camera.aspect = w / h;
+            var targetPx = window.innerHeight * 0.4;
+            var fovRad = (camera.fov * Math.PI) / 180;
+            var visibleH = 2 * Math.tan(fovRad / 2) * camera.position.z;
+            var desiredWorld = (targetPx / h) * visibleH;
+            orbScale = desiredWorld / (2 * RADIUS);
+            camera.updateProjectionMatrix();
+          }
+          window.addEventListener("resize", function () {
+            if (voiceOpen) resize();
+          });
+          canvas.addEventListener("mouseenter", function () { hoverTarget = 1; });
+          canvas.addEventListener("mouseleave", function () { hoverTarget = 0; });
+
+          var posAttr = geometry.getAttribute("position");
+          var sizeAttr = geometry.getAttribute("size");
+          var phase = 0, ripplePhase = 0, rotation = 0, breathT = 0;
+          var running = false;
+
+          function lerp(a, b, f) { return a + (b - a) * f; }
+
+          function animate() {
+            if (!running) return;
+            requestAnimationFrame(animate);
+
+            var target = STATE_PARAMS[currentState] || STATE_PARAMS.standby;
+            var ease = 0.04;
+            live.amp = lerp(live.amp, target.amp, ease);
+            live.freq = lerp(live.freq, target.freq, ease);
+            live.speed = lerp(live.speed, target.speed, ease);
+            live.spread = lerp(live.spread, target.spread, ease);
+            live.glow = lerp(live.glow, target.glow, ease);
+            live.ripple = lerp(live.ripple, target.ripple, ease);
+            hoverLevel = lerp(hoverLevel, hoverTarget, 0.08);
+
+            phase += 0.005 + live.speed * 0.02;
+            ripplePhase += 0.04 + live.speed * 0.03;
+            breathT += 0.012;
+            rotation += 0.0012 + live.speed * 0.004;
+
+            points.rotation.y = rotation;
+            points.rotation.x = Math.sin(rotation * 0.4) * 0.15;
+
+            var breath = 1 + Math.sin(breathT) * 0.015;
+            var pos = posAttr.array;
+            var szs = sizeAttr.array;
+
+            for (var i = 0; i < PARTICLE_COUNT; i++) {
+              var ix = i * 3;
+              var dx = baseDir[ix], dy = baseDir[ix + 1], dz = baseDir[ix + 2];
+              var n = SimplexNoise.noise(
+                dx * live.freq + phase,
+                dy * live.freq + phase * 0.8,
+                dz * live.freq + phase * 1.2
+              );
+              var rip = live.ripple * 0.08 *
+                Math.sin(ripplePhase - (1 - edgeBias[i]) * 6.0 + i * 0.0015);
+              var offset = RADIUS + n * live.amp + edgeBias[i] * live.spread + rip;
+              var r = offset * breath;
+              pos[ix] = dx * r;
+              pos[ix + 1] = dy * r;
+              pos[ix + 2] = dz * r;
+              szs[i] = sizeBase[i] * (1 + Math.abs(n) * 0.35);
+            }
+
+            posAttr.needsUpdate = true;
+            sizeAttr.needsUpdate = true;
+
+            var s = orbScale * (1 + 0.05 * hoverLevel);
+            points.scale.setScalar(s);
+            core.sprite.scale.set(2.2 * s, 2.2 * s, 1);
+            glow.sprite.scale.set(3.4 * s, 3.4 * s, 1);
+            halo.sprite.scale.set(2.85 * s, 2.85 * s, 1);
+
+            glow.material.opacity = 0.5 + (live.glow - 0.5) * 0.8 + hoverLevel * 0.25;
+            core.material.opacity = 0.85 + (live.glow - 0.55) * 0.4 + hoverLevel * 0.3;
+            halo.material.opacity = 0.6 + hoverLevel * 0.4;
+
+            renderer.render(scene, camera);
+          }
+
+          return {
+            resize: resize,
+            start: function () {
+              if (running) return;
+              running = true;
+              resize();
+              animate();
+            },
+            stop: function () { running = false; },
+          };
+        }
+
+        /* =====================================================
+           COMPOSER
+           ===================================================== */
+        function grow() {
+          input.style.height = "auto";
+          input.style.height = Math.min(input.scrollHeight, 180) + "px";
+        }
+        function syncSend() {
+          sendBtn.disabled = sending || !input.value.trim();
+        }
+        input.addEventListener("input", function () { grow(); syncSend(); });
+        input.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            void send();
           }
         });
-      }
+        sendBtn.addEventListener("click", function () { void send(); });
 
-      window.onJarvisVoiceSessionEnd = function () {
-        transitionTo(STATE.STANDBY);
-      };
+        document.querySelectorAll(".chip").forEach(function (chip) {
+          chip.addEventListener("click", function () { void send(chip.textContent); });
+        });
 
-      /* =========================================================
-         THREE.JS PARTICLE ORB
-         ========================================================= */
-      const canvas = document.getElementById("orb-canvas");
-      const renderer = new THREE.WebGLRenderer({
-        canvas,
-        antialias: true,
-        alpha: true,
-      });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        newChatBtn.addEventListener("click", function () {
+          sessionId = "chat-" + Date.now() + "-" + Math.floor(Math.random() * 1e6);
+          sessionStorage.setItem("jarvis_session_id", sessionId);
+          localHistory = [];
+          thread.innerHTML = "";
+          empty.classList.remove("hidden");
+          input.focus();
+        });
 
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
-      camera.position.z = 3.4;
-
-      // ----- Bright inner core sprite (intense teal/cyan center) -----
-      function makeCoreTexture() {
-        const size = 256;
-        const c = document.createElement("canvas");
-        c.width = c.height = size;
-        const ctx = c.getContext("2d");
-        const g = ctx.createRadialGradient(
-          size / 2, size / 2, 0,
-          size / 2, size / 2, size / 2
-        );
-        g.addColorStop(0.0, "rgba(220, 255, 255, 0.95)");
-        g.addColorStop(0.12, "rgba(120, 255, 255, 0.7)");
-        g.addColorStop(0.35, "rgba(0, 200, 210, 0.28)");
-        g.addColorStop(0.7, "rgba(0, 120, 150, 0.06)");
-        g.addColorStop(1.0, "rgba(0, 0, 0, 0)");
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, size, size);
-        return new THREE.CanvasTexture(c);
-      }
-      const coreMaterial = new THREE.SpriteMaterial({
-        map: makeCoreTexture(),
-        color: 0xffffff,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const core = new THREE.Sprite(coreMaterial);
-      scene.add(core);
-
-      // ----- Inner glow sprite (deep blue-green radial light) -----
-      function makeGlowTexture() {
-        const size = 256;
-        const c = document.createElement("canvas");
-        c.width = c.height = size;
-        const ctx = c.getContext("2d");
-        const g = ctx.createRadialGradient(
-          size / 2, size / 2, 0,
-          size / 2, size / 2, size / 2
-        );
-        g.addColorStop(0.0, "rgba(0, 200, 200, 0.5)");
-        g.addColorStop(0.25, "rgba(0, 110, 140, 0.28)");
-        g.addColorStop(0.6, "rgba(0, 50, 90, 0.1)");
-        g.addColorStop(1.0, "rgba(0, 0, 0, 0)");
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, size, size);
-        return new THREE.CanvasTexture(c);
-      }
-      const glowMaterial = new THREE.SpriteMaterial({
-        map: makeGlowTexture(),
-        color: 0xffffff,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const glow = new THREE.Sprite(glowMaterial);
-      scene.add(glow);
-
-      // ----- Soft outer halo bloom ring (~1.2x sphere radius) -----
-      function makeHaloTexture() {
-        const size = 256;
-        const c = document.createElement("canvas");
-        c.width = c.height = size;
-        const ctx = c.getContext("2d");
-        const g = ctx.createRadialGradient(
-          size / 2, size / 2, 0,
-          size / 2, size / 2, size / 2
-        );
-        g.addColorStop(0.0, "rgba(0, 255, 255, 0)");
-        g.addColorStop(0.72, "rgba(0, 255, 255, 0)");
-        g.addColorStop(0.85, "rgba(0, 230, 255, 0.18)");
-        g.addColorStop(0.92, "rgba(0, 200, 255, 0.08)");
-        g.addColorStop(1.0, "rgba(0, 0, 0, 0)");
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, size, size);
-        return new THREE.CanvasTexture(c);
-      }
-      const haloMaterial = new THREE.SpriteMaterial({
-        map: makeHaloTexture(),
-        color: 0xffffff,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const halo = new THREE.Sprite(haloMaterial);
-      scene.add(halo);
-
-      // ----- Particle dot texture (soft round) -----
-      function makeDotTexture() {
-        const size = 64;
-        const c = document.createElement("canvas");
-        c.width = c.height = size;
-        const ctx = c.getContext("2d");
-        const g = ctx.createRadialGradient(
-          size / 2, size / 2, 0,
-          size / 2, size / 2, size / 2
-        );
-        g.addColorStop(0, "rgba(255,255,255,1)");
-        g.addColorStop(0.4, "rgba(220,255,255,0.8)");
-        g.addColorStop(1, "rgba(255,255,255,0)");
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, size, size);
-        return new THREE.CanvasTexture(c);
-      }
-
-      // ----- Build particle sphere -----
-      const PARTICLE_COUNT = 5000;
-      const RADIUS = 1.0;
-
-      const positions = new Float32Array(PARTICLE_COUNT * 3);
-      const colors = new Float32Array(PARTICLE_COUNT * 3);
-      const sizes = new Float32Array(PARTICLE_COUNT);
-      // Base unit-sphere direction for each particle (fixed).
-      const baseDir = new Float32Array(PARTICLE_COUNT * 3);
-      // Per-particle outward bias (outer particles drift further -> fuzzy edge).
-      const edgeBias = new Float32Array(PARTICLE_COUNT);
-      const sizeBase = new Float32Array(PARTICLE_COUNT);
-
-      const colorInner = new THREE.Color(0xeaffff);
-      const colorOuter = new THREE.Color(0x33e6ff);
-
-      for (let i = 0; i < PARTICLE_COUNT; i++) {
-        // Even distribution over a sphere (golden spiral).
-        const t = i / PARTICLE_COUNT;
-        const phi = Math.acos(1 - 2 * t);
-        const theta = Math.PI * (1 + Math.sqrt(5)) * i;
-        const x = Math.sin(phi) * Math.cos(theta);
-        const y = Math.sin(phi) * Math.sin(theta);
-        const z = Math.cos(phi);
-
-        baseDir[i * 3] = x;
-        baseDir[i * 3 + 1] = y;
-        baseDir[i * 3 + 2] = z;
-
-        positions[i * 3] = x * RADIUS;
-        positions[i * 3 + 1] = y * RADIUS;
-        positions[i * 3 + 2] = z * RADIUS;
-
-        // Particles sit very close to the surface for a clean silhouette.
-        const bias = Math.pow(Math.random(), 3.0);
-        edgeBias[i] = bias;
-
-        const mix = bias * 0.85 + Math.random() * 0.15;
-        const col = colorInner.clone().lerp(colorOuter, mix);
-        colors[i * 3] = col.r;
-        colors[i * 3 + 1] = col.g;
-        colors[i * 3 + 2] = col.b;
-
-        // Small, uniform particles -> ball of energy, not a dust cloud.
-        const s = 0.011 + Math.random() * 0.005;
-        sizeBase[i] = s;
-        sizes[i] = s;
-      }
-
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute(
-        "position",
-        new THREE.BufferAttribute(positions, 3)
-      );
-      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-      geometry.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
-
-      // Custom shader so each particle can have its own size + soft round sprite.
-      const particleMaterial = new THREE.ShaderMaterial({
-        uniforms: {
-          uTexture: { value: makeDotTexture() },
-          uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-        },
-        vertexShader: `
-          attribute float size;
-          varying vec3 vColor;
-          uniform float uPixelRatio;
-          void main() {
-            vColor = color;
-            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-            gl_PointSize = size * 320.0 * uPixelRatio / -mvPosition.z;
-            gl_Position = projectionMatrix * mvPosition;
+        /* =====================================================
+           MEMORY SHEET
+           ===================================================== */
+        function openSheet() {
+          sheet.classList.add("open");
+          sheetVeil.classList.add("open");
+          void loadDocs().then(function (busy) { if (busy) startPolling(); });
+        }
+        function closeSheet() {
+          sheet.classList.remove("open");
+          sheetVeil.classList.remove("open");
+        }
+        attachBtn.addEventListener("click", openSheet);
+        sheetClose.addEventListener("click", closeSheet);
+        sheetVeil.addEventListener("click", closeSheet);
+        window.addEventListener("keydown", function (e) {
+          if (e.key === "Escape") {
+            if (voiceOpen) { exitVoiceMode(); return; }
+            closeSheet();
           }
-        `,
-        fragmentShader: `
-          uniform sampler2D uTexture;
-          varying vec3 vColor;
-          void main() {
-            vec4 tex = texture2D(uTexture, gl_PointCoord);
-            if (tex.a < 0.05) discard;
-            gl_FragColor = vec4(vColor, tex.a);
-          }
-        `,
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        vertexColors: true,
-      });
+        });
 
-      const points = new THREE.Points(geometry, particleMaterial);
-      scene.add(points);
-
-      // ----- Scale state shared between resize and the animation loop -----
-      let orbScale = 1; // base scale set by resize()
-      let hoverLevel = 0; // 0 -> 1, eased toward hoverTarget
-      let hoverTarget = 0;
-
-      // ----- Resize handling: size canvas to its display box -----
-      function resize() {
-        const rect = canvas.getBoundingClientRect();
-        const w = Math.max(1, rect.width);
-        const h = Math.max(1, rect.height);
-        renderer.setSize(w, h, false);
-        camera.aspect = w / h;
-        // Scale orb so it occupies ~40% of viewport height regardless of box.
-        const targetPx = window.innerHeight * 0.4;
-        // Adjust camera distance so the unit sphere maps near targetPx.
-        const fovRad = (camera.fov * Math.PI) / 180;
-        const visibleH = 2 * Math.tan(fovRad / 2) * camera.position.z;
-        const desiredWorld = (targetPx / h) * visibleH;
-        // Base scale so the points map to the desired world diameter (~2*RADIUS).
-        orbScale = desiredWorld / (2 * RADIUS);
-        camera.updateProjectionMatrix();
-      }
-      window.addEventListener("resize", resize);
-
-      // Hover: slight scale-up + intensified glow, pointer cursor handled in CSS.
-      canvas.addEventListener("mouseenter", () => (hoverTarget = 1));
-      canvas.addEventListener("mouseleave", () => (hoverTarget = 0));
-
-      /* =========================================================
-         ANIMATION LOOP
-         ========================================================= */
-      const posAttr = geometry.getAttribute("position");
-      const sizeAttr = geometry.getAttribute("size");
-      let phase = 0; // noise time
-      let ripplePhase = 0;
-      let rotation = 0;
-      let breathT = 0;
-      const tmp = new THREE.Vector3();
-
-      function lerp(a, b, f) {
-        return a + (b - a) * f;
-      }
-
-      function animate() {
-        requestAnimationFrame(animate);
-
-        // Smoothly interpolate live params toward target state.
-        const target = STATE_PARAMS[currentState];
-        const ease = 0.04;
-        live.amp = lerp(live.amp, target.amp, ease);
-        live.freq = lerp(live.freq, target.freq, ease);
-        live.speed = lerp(live.speed, target.speed, ease);
-        live.spread = lerp(live.spread, target.spread, ease);
-        live.glow = lerp(live.glow, target.glow, ease);
-        live.ripple = lerp(live.ripple, target.ripple, ease);
-
-        // Ease hover level toward its target.
-        hoverLevel = lerp(hoverLevel, hoverTarget, 0.08);
-
-        phase += 0.005 + live.speed * 0.02;
-        ripplePhase += 0.04 + live.speed * 0.03;
-        breathT += 0.012;
-        rotation += 0.0012 + live.speed * 0.004;
-
-        points.rotation.y = rotation;
-        points.rotation.x = Math.sin(rotation * 0.4) * 0.15;
-
-        // Breathing: subtle, gentle global scale oscillation.
-        const breath = 1 + Math.sin(breathT) * 0.015;
-
-        const pos = posAttr.array;
-        const szs = sizeAttr.array;
-
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-          const ix = i * 3;
-          const dx = baseDir[ix];
-          const dy = baseDir[ix + 1];
-          const dz = baseDir[ix + 2];
-
-          // Flowing surface noise displacement.
-          const n = SimplexNoise.noise(
-            dx * live.freq + phase,
-            dy * live.freq + phase * 0.8,
-            dz * live.freq + phase * 1.2
-          );
-
-          // Rhythmic ripple traveling outward from center (state-dependent).
-          const rip =
-            live.ripple *
-            0.08 *
-            Math.sin(ripplePhase - (1 - edgeBias[i]) * 6.0 + i * 0.0015);
-
-          // Radial offset: base radius + noise amplitude + outward edge spread + ripple.
-          const offset =
-            RADIUS +
-            n * live.amp +
-            edgeBias[i] * live.spread +
-            rip;
-
-          const r = offset * breath;
-          pos[ix] = dx * r;
-          pos[ix + 1] = dy * r;
-          pos[ix + 2] = dz * r;
-
-          // Particle size flickers slightly with noise for life.
-          szs[i] = sizeBase[i] * (1 + Math.abs(n) * 0.35);
+        function readFiles(files) {
+          var list = Array.prototype.filter.call(files || [], Boolean);
+          if (!list.length) return;
+          var pending = list.length;
+          var texts = [];
+          sheetStatus.textContent = "Reading " + pending + " file(s)…";
+          list.forEach(function (file) {
+            var reader = new FileReader();
+            reader.onload = function () {
+              texts.push({ name: file.name, text: String(reader.result || "") });
+              pending -= 1;
+              if (pending === 0) {
+                var combined = texts.map(function (t) { return t.text; }).join("\n\n");
+                docText.value = (docText.value ? docText.value + "\n\n" : "") + combined;
+                if (!docTitle.value && texts.length === 1) docTitle.value = texts[0].name;
+                sheetStatus.textContent =
+                  texts.length + " file(s) loaded · " + combined.length.toLocaleString() + " characters";
+              }
+            };
+            reader.readAsText(file);
+          });
         }
 
-        posAttr.needsUpdate = true;
-        sizeAttr.needsUpdate = true;
+        drop.addEventListener("click", function () { fileInput.click(); });
+        fileInput.addEventListener("change", function () { readFiles(fileInput.files); fileInput.value = ""; });
+        ["dragover", "dragenter"].forEach(function (evt) {
+          drop.addEventListener(evt, function (e) { e.preventDefault(); drop.classList.add("over"); });
+        });
+        ["dragleave", "drop"].forEach(function (evt) {
+          drop.addEventListener(evt, function (e) { e.preventDefault(); drop.classList.remove("over"); });
+        });
+        drop.addEventListener("drop", function (e) { readFiles(e.dataTransfer.files); });
 
-        // Apply base scale + hover scale (1.05x) to the orb and its halos.
-        const s = orbScale * (1 + 0.05 * hoverLevel);
-        points.scale.setScalar(s);
-        core.scale.set(2.2 * s, 2.2 * s, 1);
-        glow.scale.set(3.4 * s, 3.4 * s, 1);
-        halo.scale.set(2.85 * s, 2.85 * s, 1);
+        window.addEventListener("dragover", function (e) { e.preventDefault(); });
+        window.addEventListener("drop", function (e) {
+          e.preventDefault();
+          if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+            openSheet();
+            readFiles(e.dataTransfer.files);
+          }
+        });
 
-        // Glow + core intensity follow state, brighten on hover.
-        glowMaterial.opacity = 0.5 + (live.glow - 0.5) * 0.8 + hoverLevel * 0.25;
-        coreMaterial.opacity = 0.85 + (live.glow - 0.55) * 0.4 + hoverLevel * 0.3;
-        haloMaterial.opacity = 0.6 + hoverLevel * 0.4;
+        async function ingest() {
+          var text = docText.value.trim();
+          if (!text) {
+            sheetStatus.textContent = "Paste text or drop a file first.";
+            return;
+          }
+          ingestBtn.disabled = true;
+          sheetStatus.textContent = "Committing…";
+          try {
+            var res = await fetch("/api/memory/ingest", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                title: docTitle.value.trim() || "Untitled",
+                source: "chat",
+                text: text,
+              }),
+            });
+            var data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Ingestion failed");
+            sheetStatus.textContent =
+              "Learning “" + data.document.title + "” — " + data.document.chunkCount + " part(s).";
+            docText.value = "";
+            docTitle.value = "";
+            await loadDocs();
+            startPolling();
+          } catch (err) {
+            sheetStatus.textContent = err.message || "Ingestion failed";
+          } finally {
+            ingestBtn.disabled = false;
+          }
+        }
+        ingestBtn.addEventListener("click", function () { void ingest(); });
 
-        renderer.render(scene, camera);
-      }
+        function docMeta(doc) {
+          if (doc.status === "done") return { text: doc.factsExtracted + " facts learned", cls: "ok" };
+          if (doc.status === "error") return { text: doc.error || "Failed", cls: "err" };
+          if (doc.status === "retracted") return { text: "Removed from memory", cls: "" };
+          return {
+            text: "Learning… " + doc.chunksDone + "/" + doc.chunkCount + " · " + doc.factsExtracted + " facts",
+            cls: "",
+          };
+        }
 
-      resize();
-      animate();
+        async function retract(doc) {
+          if (!confirm('Remove "' + doc.title + '" from memory? Everything it taught will be forgotten.')) return;
+          try {
+            var res = await fetch("/api/memory/documents/" + encodeURIComponent(doc.id), { method: "DELETE" });
+            var data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Remove failed");
+            sheetStatus.textContent = data.retractedFacts + " fact(s) forgotten.";
+            await loadDocs();
+          } catch (err) {
+            sheetStatus.textContent = err.message || "Remove failed";
+          }
+        }
 
-      // Click / tap the core to activate.
-      canvas.addEventListener("click", onCoreActivate);
-      canvas.addEventListener("touchstart", (e) => {
-        e.preventDefault();
-        onCoreActivate();
-      }, { passive: false });
+        async function loadDocs() {
+          try {
+            var res = await fetch("/api/memory/documents");
+            var data = await res.json();
+            if (!res.ok) throw new Error();
+            var rows = data.documents || [];
+            docs.innerHTML = "";
+            if (!rows.length) {
+              docs.innerHTML = '<div class="docrow__meta" style="padding:8px 2px;">Nothing ingested yet.</div>';
+              return false;
+            }
+            var busy = false;
+            rows.forEach(function (doc) {
+              if (doc.status === "processing") busy = true;
+              var meta = docMeta(doc);
+              var pct = doc.chunkCount ? Math.round((doc.chunksDone / doc.chunkCount) * 100) : 0;
+              var row = document.createElement("div");
+              row.className = "docrow";
+              row.innerHTML =
+                '<div class="docrow__body">' +
+                '<div class="docrow__title">' + esc(doc.title) + "</div>" +
+                '<div class="docrow__meta ' + meta.cls + '">' + esc(meta.text) + "</div>" +
+                (doc.status === "processing"
+                  ? '<div class="docrow__bar"><div class="docrow__fill" style="width:' + pct + '%"></div></div>'
+                  : "") +
+                "</div>" +
+                (doc.status !== "retracted"
+                  ? '<button class="docrow__x" type="button">Remove</button>'
+                  : "");
+              var x = row.querySelector(".docrow__x");
+              if (x) x.addEventListener("click", function () { void retract(doc); });
+              docs.appendChild(row);
+            });
+            return busy;
+          } catch (_) {
+            return false;
+          }
+        }
+
+        function startPolling() {
+          if (pollTimer) return;
+          pollTimer = setInterval(async function () {
+            var busy = await loadDocs();
+            if (!busy) { clearInterval(pollTimer); pollTimer = null; }
+          }, 3000);
+        }
+
+        /* =====================================================
+           BOOT
+           ===================================================== */
+        (async function boot() {
+          var restored = await restoreHistory();
+          if (!restored) void loadActivationBrief();
+          input.focus();
+        })();
+      })();
     </script>
     <script src="/jarvis-streaming-tts.js"></script>
     <script src="/jarvis-voice.js"></script>
-    <script src="/jarvis-client.js"></script>
   </body>
 </html>
