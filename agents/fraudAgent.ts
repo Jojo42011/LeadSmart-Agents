@@ -726,6 +726,23 @@ async function processCall(
     );
   }
 
+  // Robocall cap gate (Seth) — checked BEFORE the paid IPQS lookup so
+  // robocaller numbers never burn lookup credits. More than N distinct
+  // publishers in 7 days (counting no-connect attempts too) = robocaller,
+  // not a fraud ring: reclassify onto the robocall watchlist and skip every
+  // detection signal for this call.
+  if (callerNumber) {
+    const allPublishers7d = distinctPublisherCountForCallerSince(
+      callerNumber,
+      sevenDaysAgoIso()
+    );
+    if (allPublishers7d > sharedCallerMaxPublishers()) {
+      recordNoConnectSighting(callerNumber, call.publisherName, callDt);
+      result.robocallReclassified += 1;
+      return;
+    }
+  }
+
   // Step 1 — IPQS VOIP / spoof detection.
   if (callerNumber) {
     const intel = await lookupPhone(callerNumber);
@@ -766,23 +783,10 @@ async function processCall(
     }
   }
 
-  // Robocall cap gate (Seth): more than N distinct publishers in 7 days
-  // (counting no-connect attempts too) = robocaller, not a fraud ring.
-  // Reclassify onto the robocall watchlist and skip every shared-caller-family
-  // signal below. VOIP and AI flags above are unaffected.
+  // Coordinated attack — strongest signal, checked before the slower-burn
+  // rules. Same caller, 3+ publishers, minutes apart. (The robocall cap
+  // above already excluded wide-spray numbers.)
   if (callerNumber) {
-    const allPublishers7d = distinctPublisherCountForCallerSince(
-      callerNumber,
-      sevenDaysAgoIso()
-    );
-    if (allPublishers7d > sharedCallerMaxPublishers()) {
-      recordNoConnectSighting(callerNumber, call.publisherName, callDt);
-      result.robocallReclassified += 1;
-      return;
-    }
-
-    // Coordinated attack — strongest signal, checked before the slower-burn
-    // rules. Same caller, 3+ publishers, minutes apart.
     evaluateCoordinatedAttack({
       result,
       callerNumber,
