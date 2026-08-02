@@ -16,15 +16,20 @@ import {
 import {
   bumpPublisherTotals,
   callerServiceBreakdownSince,
+  distinctPublisherCountForCallerSince,
   flagCall,
   getCallAnalysis,
   getFraudPollState,
   listFlaggedCalls,
   markCallProcessed,
+  pruneCallerEvents,
   pruneNoConnectIndex,
+  pruneOverBroadSharedCallerFlags,
   pruneStaleSharedCallerFlags,
+  publishersForCallerBetween,
   publishersForCallerSince,
   recomputePublisherRisk,
+  recordCallerEvent,
   recordCallerServiceSighting,
   recordCallerSighting,
   recordNoConnectSighting,
@@ -53,6 +58,8 @@ export interface FraudScanResult {
   voipFlags: number;
   sharedCallerFlags: number;
   crossVerticalFlags: number;
+  coordinatedFlags: number;
+  robocallReclassified: number;
   aiFlags: number;
   ipqsLookups: number;
   transcriptionsRun: number;
@@ -231,6 +238,93 @@ function crossVerticalMinCategories(): number {
   return Math.max(2, envInt("FRAUD_CROSS_VERTICAL_MIN", 3));
 }
 
+/**
+ * Robocall cap (Seth): a caller ID seen under MORE than this many distinct
+ * publishers in 7 days (connected or not) is a robocaller, not a fraud ring —
+ * real rings target 2-5 specific publishers. Such numbers are reclassified
+ * onto the no-connect/robocall watchlist and excluded from shared-caller,
+ * cross-vertical, and coordinated-attack fraud signals.
+ */
+function sharedCallerMaxPublishers(): number {
+  return Math.max(3, envInt("FRAUD_SHARED_CALLER_MAX_PUBS", 8));
+}
+
+/**
+ * Coordinated attack (Seth's strongest signal): the same caller ID under 3+
+ * publishers within a 5-minute window — e.g. seven publishers at 8:41 AM.
+ * Applies regardless of call duration. HIGH-RISK severity by construction.
+ */
+function coordinatedMinPublishers(): number {
+  return Math.max(2, envInt("FRAUD_COORDINATED_MIN_PUBS", 3));
+}
+function coordinatedWindowMinutes(): number {
+  return Math.max(1, envInt("FRAUD_COORDINATED_WINDOW_MIN", 5));
+}
+
+function sevenDaysAgoIso(): string {
+  return new Date(Date.now() - SHARED_CALLER_7D_MS).toISOString();
+}
+
+interface CoordinatedCheckInput {
+  result: FraudScanResult;
+  callerNumber: string;
+  inboundCallId: string;
+  publisherName: string;
+  callDt: string | null;
+  connected: boolean;
+  proposeAlert: (publisherName: string, draft: PublisherAlertDraft) => void;
+}
+
+/**
+ * Flag when this caller hit `coordinatedMinPublishers()`+ distinct publishers
+ * within ±window of this call. Both connected and no-connect events count —
+ * the burst pattern is the signal, not the durations. Callers must apply the
+ * robocall cap BEFORE invoking this.
+ */
+function evaluateCoordinatedAttack(input: CoordinatedCheckInput): void {
+  const callMs = input.callDt ? new Date(input.callDt).getTime() : NaN;
+  const centerMs = Number.isFinite(callMs) ? callMs : Date.now();
+  const windowMin = coordinatedWindowMinutes();
+  const windowMs = windowMin * 60 * 1000;
+  const publishers = publishersForCallerBetween(
+    input.callerNumber,
+    new Date(centerMs - windowMs).toISOString(),
+    new Date(centerMs + windowMs).toISOString()
+  );
+  const count = publishers.length;
+  if (count < coordinatedMinPublishers()) {
+    return;
+  }
+
+  // 3 publishers → 95, 4+ → 100. Always clears the HIGH-RISK line.
+  const severity = Math.min(100, 80 + count * 5);
+
+  const isNew = flagCall({
+    inboundCallId: input.inboundCallId,
+    publisherName: input.publisherName,
+    callerNumber: input.callerNumber,
+    callDt: input.callDt,
+    reason: "coordinated_attack",
+    severity,
+    detail: {
+      publishers,
+      publisherCount: count,
+      windowMinutes: windowMin,
+      connectedCall: input.connected,
+    },
+  });
+  if (isNew) {
+    input.result.coordinatedFlags += 1;
+    recomputePublisherRisk(input.publisherName);
+    input.proposeAlert(input.publisherName, {
+      reason: `Coordinated attack: same caller hit ${count} publishers within ${windowMin} minutes`,
+      severity,
+      callerNumber: input.callerNumber,
+      signals: publishers.map((p) => `hit: ${p}`),
+    });
+  }
+}
+
 async function runTranscriptionPass(
   result: FraudScanResult,
   recordingUrlByCallId: Map<string, string>,
@@ -380,6 +474,8 @@ async function executeFraudScan(): Promise<FraudScanResult> {
     voipFlags: 0,
     sharedCallerFlags: 0,
     crossVerticalFlags: 0,
+    coordinatedFlags: 0,
+    robocallReclassified: 0,
     aiFlags: 0,
     ipqsLookups: 0,
     transcriptionsRun: 0,
@@ -406,6 +502,16 @@ async function executeFraudScan(): Promise<FraudScanResult> {
         "[Fraud] Pruned %d stale shared-caller flag(s) below the %d-publisher threshold",
         pruned,
         SHARED_CALLER_24H_MIN
+      );
+    }
+    // Robocall cap, retroactively: shared-caller flags spanning more
+    // publishers than the cap were robocallers, not fraud rings.
+    const prunedBroad = pruneOverBroadSharedCallerFlags(sharedCallerMaxPublishers());
+    if (prunedBroad > 0) {
+      console.log(
+        "[Fraud] Reclassified %d shared-caller flag(s) above the %d-publisher robocall cap",
+        prunedBroad,
+        sharedCallerMaxPublishers()
       );
     }
   } catch (err) {
@@ -500,15 +606,33 @@ async function executeFraudScan(): Promise<FraudScanResult> {
       if (!number) {
         continue;
       }
-      recordNoConnectSighting(
-        number,
-        nc.publisherName,
-        nc.callDt ?? new Date().toISOString()
-      );
+      const ncDt = nc.callDt ?? new Date().toISOString();
+      recordNoConnectSighting(number, nc.publisherName, ncDt);
+      recordCallerEvent(number, nc.publisherName, ncDt, false);
       markCallProcessed(nc.inboundCallId);
       result.noConnectNew += 1;
+
+      // Coordinated attack counts no-connects too ("regardless of call
+      // duration") — but the robocall cap still wins: a number spraying more
+      // publishers than the cap stays a robocall, never a fraud flag.
+      const allPublishers7d = distinctPublisherCountForCallerSince(
+        number,
+        sevenDaysAgoIso()
+      );
+      if (allPublishers7d <= sharedCallerMaxPublishers()) {
+        evaluateCoordinatedAttack({
+          result,
+          callerNumber: number,
+          inboundCallId: nc.inboundCallId,
+          publisherName: nc.publisherName,
+          callDt: nc.callDt,
+          connected: false,
+          proposeAlert,
+        });
+      }
     }
     pruneNoConnectIndex();
+    pruneCallerEvents();
   } catch (err) {
     result.errors += 1;
     console.warn(
@@ -540,12 +664,14 @@ async function executeFraudScan(): Promise<FraudScanResult> {
   );
 
   console.log(
-    "[Fraud] Scan complete: %d seen, %d new, %d voip flags, %d shared-caller flags, %d cross-vertical flags, %d ai flags, %d IPQS lookups, %d transcriptions, %d no-connect calls (%d new), %d errors",
+    "[Fraud] Scan complete: %d seen, %d new, %d voip flags, %d shared-caller flags, %d cross-vertical flags, %d coordinated flags, %d robocall-reclassified, %d ai flags, %d IPQS lookups, %d transcriptions, %d no-connect calls (%d new), %d errors",
     result.callsSeen,
     result.callsProcessed,
     result.voipFlags,
     result.sharedCallerFlags,
     result.crossVerticalFlags,
+    result.coordinatedFlags,
+    result.robocallReclassified,
     result.aiFlags,
     result.ipqsLookups,
     result.transcriptionsRun,
@@ -566,14 +692,25 @@ async function processCall(
   const callerNumber = call.inboundPhoneNumber
     ? normalizePhoneNumber(call.inboundPhoneNumber)
     : null;
+  const callDt = call.callDt ?? new Date().toISOString();
+
+  // Connected calls ONLY feed fraud detection (Seth). The fetch already
+  // filters duration > 0 at the API and locally, but Ringba filters have been
+  // unreliable — so enforce it here too. A zero-duration call that slips
+  // through is routed to the robocall watchlist instead and never touches
+  // caller_index or any fraud signal.
+  if (call.durationSeconds <= 0) {
+    if (callerNumber) {
+      recordNoConnectSighting(callerNumber, call.publisherName, callDt);
+      recordCallerEvent(callerNumber, call.publisherName, callDt, false);
+    }
+    return;
+  }
 
   // Step 2 bookkeeping — record the sighting before evaluating cross-publisher.
   if (callerNumber) {
-    recordCallerSighting(
-      callerNumber,
-      call.publisherName,
-      call.callDt ?? new Date().toISOString()
-    );
+    recordCallerSighting(callerNumber, call.publisherName, callDt);
+    recordCallerEvent(callerNumber, call.publisherName, callDt, true);
   }
 
   // Step 2b bookkeeping — the same sighting split by service vertical. An
@@ -627,6 +764,34 @@ async function processCall(
         }
       }
     }
+  }
+
+  // Robocall cap gate (Seth): more than N distinct publishers in 7 days
+  // (counting no-connect attempts too) = robocaller, not a fraud ring.
+  // Reclassify onto the robocall watchlist and skip every shared-caller-family
+  // signal below. VOIP and AI flags above are unaffected.
+  if (callerNumber) {
+    const allPublishers7d = distinctPublisherCountForCallerSince(
+      callerNumber,
+      sevenDaysAgoIso()
+    );
+    if (allPublishers7d > sharedCallerMaxPublishers()) {
+      recordNoConnectSighting(callerNumber, call.publisherName, callDt);
+      result.robocallReclassified += 1;
+      return;
+    }
+
+    // Coordinated attack — strongest signal, checked before the slower-burn
+    // rules. Same caller, 3+ publishers, minutes apart.
+    evaluateCoordinatedAttack({
+      result,
+      callerNumber,
+      inboundCallId: call.inboundCallId,
+      publisherName: call.publisherName,
+      callDt: call.callDt,
+      connected: true,
+      proposeAlert,
+    });
   }
 
   // Step 2 — same caller ID under multiple DISTINCT publishers within a window.
