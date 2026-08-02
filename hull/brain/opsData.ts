@@ -228,6 +228,28 @@ export function getFraudStatus(): Record<string, unknown> {
       // pre-upgrade database — no no-connect tables yet
     }
 
+    // Geographic clusters (24h) — same view the dashboard section shows.
+    let geoClusters: unknown[] = [];
+    try {
+      geoClusters = db
+        .prepare(
+          `SELECT p.city AS city, COALESCE(p.region, '') AS region,
+                  COUNT(*) AS callCount,
+                  COUNT(DISTINCT e.callerNumber) AS numberCount,
+                  COUNT(DISTINCT e.publisherName) AS publisherCount
+           FROM caller_events e
+           JOIN phone_intel p ON p.phoneNumber = e.callerNumber
+           WHERE e.callDt >= datetime('now', '-1 day')
+             AND p.city IS NOT NULL AND p.city != '' AND LOWER(p.city) != 'n/a'
+           GROUP BY LOWER(p.city), LOWER(COALESCE(p.region, ''))
+           HAVING COUNT(*) >= 10
+           ORDER BY callCount DESC LIMIT 5`,
+        )
+        .all();
+    } catch {
+      // pre-upgrade database — no caller_events table yet
+    }
+
     return {
       available: true,
       flaggedCallsTotal: totals.total,
@@ -237,6 +259,7 @@ export function getFraudStatus(): Record<string, unknown> {
       topRiskPublishers: topRisk,
       recentFlags,
       noConnect,
+      geoClusters24h: geoClusters,
       lastScanAt: state?.lastScanAt ?? null,
     };
   } finally {

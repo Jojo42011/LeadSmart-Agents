@@ -147,6 +147,19 @@ export function getFraudDb(): Database.Database {
       ringbaStatus TEXT,
       note TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS caller_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      callerNumber TEXT NOT NULL,
+      publisherName TEXT NOT NULL,
+      callDt TEXT NOT NULL,
+      connected INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_caller_events_number_dt
+      ON caller_events (callerNumber, callDt);
+    CREATE INDEX IF NOT EXISTS idx_caller_events_dt
+      ON caller_events (callDt);
   `);
 
   const row = db
@@ -488,6 +501,105 @@ export function pruneNoConnectIndex(days = 90): number {
   return result.changes;
 }
 
+// ---------- caller events (time + geo clustering) ----------
+
+/**
+ * One row per call sighting (connected AND no-connect), retained ~7 days.
+ * Powers the coordinated-attack window check (same caller, N publishers,
+ * minutes apart) and 24h geographic clustering via a join to phone_intel.
+ */
+export function recordCallerEvent(
+  callerNumber: string,
+  publisherName: string,
+  callDt: string,
+  connected: boolean
+): void {
+  getFraudDb()
+    .prepare(
+      `INSERT INTO caller_events (callerNumber, publisherName, callDt, connected)
+       VALUES (?, ?, ?, ?)`
+    )
+    .run(callerNumber, publisherName, callDt, connected ? 1 : 0);
+}
+
+/** Distinct publishers this caller hit inside [startIso, endIso], any duration. */
+export function publishersForCallerBetween(
+  callerNumber: string,
+  startIso: string,
+  endIso: string
+): string[] {
+  const rows = getFraudDb()
+    .prepare(
+      `SELECT DISTINCT publisherName FROM caller_events
+       WHERE callerNumber = ? AND callDt >= ? AND callDt <= ?
+       ORDER BY publisherName`
+    )
+    .all(callerNumber, startIso, endIso) as Array<{ publisherName: string }>;
+  return rows.map((r) => r.publisherName);
+}
+
+/**
+ * Distinct publishers this caller hit since `sinceIso`, counting connected AND
+ * no-connect events — the robocall-cap input (a number spraying 9+ publishers
+ * is a robocaller, whatever the durations were).
+ */
+export function distinctPublisherCountForCallerSince(
+  callerNumber: string,
+  sinceIso: string
+): number {
+  const row = getFraudDb()
+    .prepare(
+      `SELECT COUNT(DISTINCT publisherName) AS c FROM caller_events
+       WHERE callerNumber = ? AND callDt >= ?`
+    )
+    .get(callerNumber, sinceIso) as { c: number };
+  return row.c;
+}
+
+/** Events older than `days` are dropped — window checks never look back further. */
+export function pruneCallerEvents(days = 7): number {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const result = getFraudDb()
+    .prepare("DELETE FROM caller_events WHERE callDt < ?")
+    .run(cutoff);
+  return result.changes;
+}
+
+export interface GeoClusterRow {
+  city: string;
+  region: string;
+  callCount: number;
+  numberCount: number;
+  publisherCount: number;
+  sampleNumbers: string;
+}
+
+/**
+ * Cities producing `minCalls`+ calls since `sinceIso`, via caller_events joined
+ * to cached IPQS geo data. Only numbers that have been IPQS-looked-up carry a
+ * city, so clusters reflect scanned traffic.
+ */
+export function listGeoClusters(sinceIso: string, minCalls: number): GeoClusterRow[] {
+  return getFraudDb()
+    .prepare(
+      `SELECT p.city AS city,
+              COALESCE(p.region, '') AS region,
+              COUNT(*) AS callCount,
+              COUNT(DISTINCT e.callerNumber) AS numberCount,
+              COUNT(DISTINCT e.publisherName) AS publisherCount,
+              GROUP_CONCAT(DISTINCT e.callerNumber) AS sampleNumbers
+       FROM caller_events e
+       JOIN phone_intel p ON p.phoneNumber = e.callerNumber
+       WHERE e.callDt >= ?
+         AND p.city IS NOT NULL AND p.city != '' AND LOWER(p.city) != 'n/a'
+       GROUP BY LOWER(p.city), LOWER(COALESCE(p.region, ''))
+       HAVING COUNT(*) >= ?
+       ORDER BY callCount DESC
+       LIMIT 50`
+    )
+    .all(sinceIso, Math.max(1, minCalls)) as GeoClusterRow[];
+}
+
 // ---------- flagged calls ----------
 
 export interface FlagCallInput {
@@ -495,7 +607,12 @@ export interface FlagCallInput {
   publisherName: string;
   callerNumber: string | null;
   callDt: string | null;
-  reason: "voip" | "shared_caller" | "cross_vertical" | "ai_analysis";
+  reason:
+    | "voip"
+    | "shared_caller"
+    | "cross_vertical"
+    | "coordinated_attack"
+    | "ai_analysis";
   severity: number;
   detail: Record<string, unknown>;
 }
@@ -729,6 +846,42 @@ export function pruneStaleSharedCallerFlags(minPublishers = 3): number {
   return del.changes;
 }
 
+/**
+ * Retroactive side of the robocall cap (Seth): shared-caller flags whose
+ * recorded publisherCount exceeds `maxPublishers` were robocallers, not fraud
+ * rings — delete them and recompute risk for every publisher that lost one.
+ * Idempotent; never touches VOIP, AI, cross-vertical, or coordinated flags.
+ */
+export function pruneOverBroadSharedCallerFlags(maxPublishers: number): number {
+  const database = getFraudDb();
+
+  const affected = database
+    .prepare(
+      `SELECT DISTINCT publisherName FROM flagged_calls
+       WHERE reason = 'shared_caller'
+         AND COALESCE(CAST(json_extract(detail, '$.publisherCount') AS INTEGER), 0) > ?`
+    )
+    .all(maxPublishers) as Array<{ publisherName: string }>;
+
+  if (affected.length === 0) {
+    return 0;
+  }
+
+  const del = database
+    .prepare(
+      `DELETE FROM flagged_calls
+       WHERE reason = 'shared_caller'
+         AND COALESCE(CAST(json_extract(detail, '$.publisherCount') AS INTEGER), 0) > ?`
+    )
+    .run(maxPublishers);
+
+  for (const { publisherName } of affected) {
+    recomputePublisherRisk(publisherName);
+  }
+
+  return del.changes;
+}
+
 export function setPublisherNotifiedAt(publisherName: string, at: string): void {
   ensurePublisherRow(publisherName);
   getFraudDb()
@@ -833,6 +986,101 @@ export function transcriptHashCount(transcriptHash: string): number {
     )
     .get(transcriptHash) as { c: number };
   return row.c;
+}
+
+// ---------- IPQS pipeline audit ----------
+
+/**
+ * Launch-to-date IPQS usage stats, computed from fraud.db. One paid lookup =
+ * one phone_intel row (repeat sightings serve from cache), so this is the
+ * ground truth for what the IPQS subscription is actually doing.
+ */
+export function ipqsAudit(): Record<string, unknown> {
+  const db = getFraudDb();
+
+  const intel = db
+    .prepare(
+      `SELECT COUNT(*) AS numbersLookedUp,
+              SUM(CASE WHEN voip = 1 THEN 1 ELSE 0 END) AS voipNumbers,
+              SUM(CASE WHEN fraudScore >= 85 THEN 1 ELSE 0 END) AS fraudScore85Plus,
+              SUM(CASE WHEN recentAbuse = 1 OR spammer = 1 THEN 1 ELSE 0 END) AS abuseOrSpammer,
+              SUM(CASE WHEN city IS NOT NULL AND city != '' AND LOWER(city) != 'n/a' THEN 1 ELSE 0 END) AS withCity,
+              SUM(CASE WHEN region IS NOT NULL AND region != '' AND LOWER(region) != 'n/a' THEN 1 ELSE 0 END) AS withRegion,
+              SUM(CASE WHEN fetchedAt < datetime('now', '-30 days') THEN 1 ELSE 0 END) AS cacheExpired,
+              MIN(fetchedAt) AS firstLookupAt,
+              MAX(fetchedAt) AS lastLookupAt
+       FROM phone_intel`
+    )
+    .get() as Record<string, unknown>;
+
+  const processed = db
+    .prepare("SELECT COUNT(*) AS c FROM processed_calls")
+    .get() as { c: number };
+
+  const callers = db
+    .prepare(
+      `SELECT COUNT(DISTINCT callerNumber) AS uniqueCallers,
+              COALESCE(SUM(callCount), 0) AS totalSightings
+       FROM caller_index`
+    )
+    .get() as { uniqueCallers: number; totalSightings: number };
+
+  const voipFlags = db
+    .prepare(
+      `SELECT COUNT(*) AS flags,
+              COUNT(DISTINCT inboundCallId) AS calls,
+              COUNT(DISTINCT callerNumber) AS numbers
+       FROM flagged_calls WHERE reason = 'voip'`
+    )
+    .get() as Record<string, unknown>;
+
+  const lineTypes = db
+    .prepare(
+      `SELECT COALESCE(lineType, 'unknown') AS lineType, COUNT(*) AS count
+       FROM phone_intel GROUP BY COALESCE(lineType, 'unknown')
+       ORDER BY count DESC LIMIT 8`
+    )
+    .all();
+
+  const topCarriers = db
+    .prepare(
+      `SELECT COALESCE(carrier, 'unknown') AS carrier, COUNT(*) AS count
+       FROM phone_intel GROUP BY COALESCE(carrier, 'unknown')
+       ORDER BY count DESC LIMIT 10`
+    )
+    .all();
+
+  const numbersLookedUp = Number(intel.numbersLookedUp ?? 0);
+  return {
+    generatedAt: new Date().toISOString(),
+    callsProcessedTotal: processed.c,
+    uniqueCallersSeen: callers.uniqueCallers,
+    totalCallSightings: callers.totalSightings,
+    paidLookups: numbersLookedUp,
+    // Repeat sightings of an already-looked-up number are cache hits.
+    estimatedLookupsSavedByCache: Math.max(
+      0,
+      callers.totalSightings - callers.uniqueCallers
+    ),
+    cacheEntriesOlderThan30d: Number(intel.cacheExpired ?? 0),
+    firstLookupAt: intel.firstLookupAt ?? null,
+    lastLookupAt: intel.lastLookupAt ?? null,
+    voip: {
+      numbersFlaggedVoip: Number(intel.voipNumbers ?? 0),
+      voipFlagRows: voipFlags,
+    },
+    fraudScore85PlusNumbers: Number(intel.fraudScore85Plus ?? 0),
+    abuseOrSpammerNumbers: Number(intel.abuseOrSpammer ?? 0),
+    geo: {
+      withCity: Number(intel.withCity ?? 0),
+      withRegion: Number(intel.withRegion ?? 0),
+      cityCoveragePct: numbersLookedUp
+        ? Math.round((Number(intel.withCity ?? 0) / numbersLookedUp) * 100)
+        : 0,
+    },
+    lineTypes,
+    topCarriers,
+  };
 }
 
 // ---------- dashboard summary ----------

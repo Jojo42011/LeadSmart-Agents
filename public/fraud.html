@@ -191,6 +191,7 @@
       .badge--shared { color: var(--amber); border-color: rgba(255, 176, 0, 0.45); background: rgba(255, 176, 0, 0.08); }
       .badge--ai { color: var(--purple); border-color: rgba(179, 136, 255, 0.45); background: rgba(179, 136, 255, 0.08); }
       .badge--vertical { color: #ff7a45; border-color: rgba(255, 122, 69, 0.5); background: rgba(255, 122, 69, 0.08); }
+      .badge--coordinated { color: #ff2d55; border-color: rgba(255, 45, 85, 0.6); background: rgba(255, 45, 85, 0.12); font-weight: 700; }
       .badge--nc-blocked { color: var(--red); border-color: rgba(255, 68, 68, 0.5); background: rgba(255, 68, 68, 0.12); }
       .badge--nc-open { color: var(--text-dim); border-color: var(--border-bright); }
       .badge--status-clear { color: var(--green); border-color: rgba(0, 255, 136, 0.4); }
@@ -411,11 +412,37 @@
         </table>
       </div>
 
+      <div class="section-head" style="margin-top: 28px;"><h2>Geo clusters · 24h</h2><div class="line"></div></div>
+      <div class="legend">
+        <span class="legend__item mono-dim" id="geoSummaryLine">
+          Cities producing unusually many scanned calls in the last 24 hours (10+ from one city = cluster).
+          Known fraud sources like Broken Arrow, OK surface here.
+        </span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>City</th>
+              <th>Region</th>
+              <th>Calls · 24h</th>
+              <th>Distinct numbers</th>
+              <th>Publishers hit</th>
+              <th>Sample numbers</th>
+            </tr>
+          </thead>
+          <tbody id="geoBody">
+            <tr><td class="empty" colspan="6">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
       <div class="section-head" style="margin-top: 28px;"><h2>No connect · robocalls &amp; solicitors</h2><div class="line"></div></div>
       <div class="legend">
         <span class="legend__item mono-dim" id="ncSummaryLine">
-          Calls that never connected — robocalls and solicitors. Kept out of the fraud feed and publisher
-          risk scores. Blocking a number stops it account-wide in Ringba.
+          Calls that never connected — robocalls and solicitors — plus numbers auto-reclassified here for
+          spraying 9+ publishers. Kept out of the fraud feed and publisher risk scores. Blocking a number
+          stops it account-wide in Ringba.
         </span>
       </div>
       <div class="table-wrap">
@@ -541,6 +568,7 @@
           if (reason === "voip") return '<span class="badge badge--voip">VOIP</span>';
           if (reason === "shared_caller") return '<span class="badge badge--shared">SHARED ID</span>';
           if (reason === "cross_vertical") return '<span class="badge badge--vertical">CROSS-VERTICAL</span>';
+          if (reason === "coordinated_attack") return '<span class="badge badge--coordinated">COORDINATED</span>';
           if (reason === "ai_analysis") return '<span class="badge badge--ai">AI</span>';
           return '<span class="badge">' + esc(reason) + "</span>";
         }
@@ -627,6 +655,13 @@
             return "Recycled across " + n + " service verticals in 7d" +
               (breakdown ? " — " + breakdown : "");
           }
+          if (f.reason === "coordinated_attack") {
+            const n = typeof d.publisherCount === "number" ? d.publisherCount :
+              Array.isArray(d.publishers) ? d.publishers.length : 0;
+            const w = typeof d.windowMinutes === "number" ? d.windowMinutes : 5;
+            return "Coordinated attack — hit " + n + " publishers within " + w + " minutes" +
+              (d.connectedCall === false ? " (no-connect burst)" : "");
+          }
           if (f.reason === "ai_analysis") {
             const verdict = d.verdict ? String(d.verdict).replace(/_/g, " ") : "suspicious";
             let out = "AI call analysis — " + verdict;
@@ -656,6 +691,7 @@
             '<div class="breakdown__counts"><b>What\'s driving this score</b> — ' +
             "VOIP flags: <b>" + (counts.voip || 0) + "</b> · Shared caller ID: <b>" + (counts.shared_caller || 0) +
             "</b> · Cross-vertical: <b>" + (counts.cross_vertical || 0) +
+            "</b> · Coordinated: <b>" + (counts.coordinated_attack || 0) +
             "</b> · AI flags: <b>" + (counts.ai_analysis || 0) + "</b>" +
             (counts.other ? " · Other: <b>" + counts.other + "</b>" : "") +
             ' <span class="mono-dim">(' + flags.length +
@@ -865,6 +901,39 @@
           }
         }
 
+        // ---------- GEO CLUSTERS (24h) ----------
+
+        const geoBody = document.getElementById("geoBody");
+        const geoSummaryLine = document.getElementById("geoSummaryLine");
+
+        async function loadGeoClusters() {
+          const data = await fetchJson("/api/fraud/geo-clusters");
+          const clusters = data.clusters || [];
+          geoSummaryLine.textContent =
+            clusters.length + " cluster" + (clusters.length === 1 ? "" : "s") +
+            " with " + (data.minCalls || 10) + "+ scanned calls from one city in the last 24 hours. " +
+            "Known fraud sources like Broken Arrow, OK surface here.";
+          if (!clusters.length) {
+            geoBody.innerHTML =
+              '<tr><td class="empty" colspan="6">No geographic clusters in the last 24 hours.</td></tr>';
+            return;
+          }
+          geoBody.innerHTML = "";
+          for (const c of clusters) {
+            const samples = String(c.sampleNumbers || "")
+              .split(",").slice(0, 3).map(fmtCaller).join(" · ");
+            const tr = document.createElement("tr");
+            tr.innerHTML =
+              "<td><b>" + esc(c.city) + "</b></td>" +
+              "<td>" + esc(c.region || "—") + "</td>" +
+              "<td><b>" + (c.callCount || 0) + "</b></td>" +
+              "<td>" + (c.numberCount || 0) + "</td>" +
+              "<td>" + (c.publisherCount || 0) + "</td>" +
+              '<td class="mono-dim">' + esc(samples) + (c.numberCount > 3 ? " …" : "") + "</td>";
+            geoBody.appendChild(tr);
+          }
+        }
+
         // ---------- NO-CONNECT SECTION (robocalls / solicitors) ----------
 
         const noConnectBody = document.getElementById("noConnectBody");
@@ -880,7 +949,8 @@
             (s.numbersTotal || 0) + " tracked · " +
             (s.attemptsTotal || 0) + " total attempts · " +
             (s.blockedNumbers || 0) + " blocked. " +
-            "No-connects stay out of the fraud feed and risk scores; blocking stops the number account-wide in Ringba.";
+            "Includes numbers auto-reclassified as robocalls for spraying 9+ publishers. " +
+            "These stay out of the fraud feed and risk scores; blocking stops the number account-wide in Ringba.";
           renderNoConnect();
         }
 
@@ -1003,8 +1073,11 @@
             const r = data.result || {};
             showToast(
               "Scan done: " + (r.callsProcessed ?? 0) + " new calls, " +
-              ((r.voipFlags ?? 0) + (r.sharedCallerFlags ?? 0) + (r.crossVerticalFlags ?? 0) + (r.aiFlags ?? 0)) +
-              " new flags, " + (r.noConnectNew ?? 0) + " no-connects",
+              ((r.voipFlags ?? 0) + (r.sharedCallerFlags ?? 0) + (r.crossVerticalFlags ?? 0) +
+                (r.coordinatedFlags ?? 0) + (r.aiFlags ?? 0)) +
+              " new flags (" + (r.coordinatedFlags ?? 0) + " coordinated), " +
+              (r.noConnectNew ?? 0) + " no-connects, " +
+              (r.robocallReclassified ?? 0) + " robocall-reclassified",
               false
             );
             await refresh();
@@ -1020,7 +1093,7 @@
           try {
             // Drop cached breakdowns so a scan's new flags show on next open.
             breakdownCache.clear();
-            await Promise.all([loadSummary(), loadFeed(), loadPublishers(), loadNoConnect()]);
+            await Promise.all([loadSummary(), loadFeed(), loadPublishers(), loadNoConnect(), loadGeoClusters()]);
             // Re-fetch the breakdown for whichever publisher is open.
             if (expandedPublisher) {
               const name = expandedPublisher;

@@ -80,6 +80,8 @@ import {
   noConnectSummary,
   markNumberBlocked,
   markNumberUnblocked,
+  listGeoClusters,
+  ipqsAudit,
 } from "./lib/fraudDb";
 import {
   listRingbaAffiliates,
@@ -2600,7 +2602,14 @@ app.get("/api/fraud/publisher/:name/flags", (req, res) => {
       return { ...flag, detail };
     });
 
-    const counts = { voip: 0, shared_caller: 0, cross_vertical: 0, ai_analysis: 0, other: 0 };
+    const counts = {
+      voip: 0,
+      shared_caller: 0,
+      cross_vertical: 0,
+      coordinated_attack: 0,
+      ai_analysis: 0,
+      other: 0,
+    };
     for (const flag of flags) {
       if (flag.reason in counts) {
         counts[flag.reason as keyof typeof counts] += 1;
@@ -2791,12 +2800,42 @@ async function handleNumberBlockToggle(
   }
 }
 
+// Geographic clustering — cities producing an unusual volume of scanned calls
+// in the last 24h (e.g. Broken Arrow OK / 539). Read-only view over cached
+// IPQS geo data; threshold tunable via FRAUD_GEO_CLUSTER_MIN (default 10).
+app.get("/api/fraud/geo-clusters", (_req, res) => {
+  try {
+    const minCalls = Math.max(
+      1,
+      parseInt(process.env.FRAUD_GEO_CLUSTER_MIN ?? "10", 10) || 10
+    );
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    res.json({ since, minCalls, clusters: listGeoClusters(since, minCalls) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to read geo clusters",
+    });
+  }
+});
+
 app.post("/api/fraud/noconnect/block/:number", (req, res) => {
   void handleNumberBlockToggle(req, res, true);
 });
 
 app.post("/api/fraud/noconnect/unblock/:number", (req, res) => {
   void handleNumberBlockToggle(req, res, false);
+});
+
+// Launch-to-date IPQS usage audit — lookups run, VOIP yield, geo coverage,
+// cache effectiveness. Backs the is-the-subscription-worth-it decision.
+app.get("/api/fraud/ipqs-audit", (_req, res) => {
+  try {
+    res.json(ipqsAudit());
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "IPQS audit failed",
+    });
+  }
 });
 
 // ====================================================================
