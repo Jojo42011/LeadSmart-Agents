@@ -437,10 +437,29 @@ function normalizePublisherRow(
   };
 }
 
+/**
+ * Publishers with CPL calls whose conversion amount is still UNSET. The CPL
+ * tag exists to mark money Ringba has not finalized — once the CPL updater
+ * writes real amounts onto the calls, the tag (and the HELD state and the
+ * PAY ALL exclusion that hang off it) must clear on the next dashboard load.
+ *
+ * The query behind these rows filters to conversionAmount = 0 server-side, so
+ * a surviving group row means un-finalized calls exist. The local amount check
+ * is belt-and-suspenders: if Ringba ever ignored the filter, the group would
+ * aggregate ALL the publisher's CPL calls and a non-zero sum still means
+ * amounts have been applied — either way, a fully-updated affiliate stops
+ * tagging as CPL.
+ */
 function collectCplPublisherKeys(rawRows: Record<string, unknown>[]): Set<string> {
   const keys = new Set<string>();
   for (const raw of rawRows) {
     if (!isCplTargetLabel(targetBuyerLabelFromRow(raw))) {
+      continue;
+    }
+    if (parseNumber(raw.callCount) <= 0) {
+      continue;
+    }
+    if (parseNumber(raw.conversionAmount) !== 0) {
       continue;
     }
     const publisherName = String(
@@ -520,8 +539,28 @@ export async function fetchPublisherPayouts(
       { column: "publisherName", displayName: "Publisher" },
       { column: "targetName", displayName: "Target" },
     ],
-    valueColumns: [{ column: "callCount", aggregateFunction: null }],
+    valueColumns: [
+      { column: "callCount", aggregateFunction: null },
+      { column: "conversionAmount", aggregateFunction: null },
+    ],
     orderByColumns: [{ column: "callCount", direction: "desc" }],
+    // Only calls whose conversion amount is still unset (0/null). Once the
+    // CPL updater writes real amounts, those calls drop out of this query and
+    // the affiliate's CPL tag clears. Same documented filter shape the
+    // calllogs endpoint uses; collectCplPublisherKeys re-checks the amount
+    // locally in case the filter is ever ignored.
+    filters: [
+      {
+        anyConditionToMatch: [
+          {
+            column: "conversionAmount",
+            value: "0",
+            isNegativeMatch: false,
+            comparisonType: "EQUALS",
+          },
+        ],
+      },
+    ],
   };
 
   let payoutResponse;
@@ -550,9 +589,33 @@ export async function fetchPublisherPayouts(
   } catch (error) {
     if (axios.isAxiosError(error)) {
       console.warn(
-        "[PaymentAgent] Ringba CPL target insights failed — continuing without CPL flags:",
+        "[PaymentAgent] Filtered CPL insights failed — retrying legacy unfiltered query:",
         JSON.stringify(error.response?.data, null, 2)
       );
+      // Conservative fallback: the pre-filter query (every CPL-target
+      // publisher tags, regardless of amounts). Over-tagging holds money;
+      // under-tagging could pay an un-finalized $0 CPL affiliate early.
+      try {
+        const legacyBody = {
+          ...cplBody,
+          valueColumns: [{ column: "callCount", aggregateFunction: null }],
+          filters: [] as unknown[],
+        };
+        const legacyResponse = await client.post<unknown>(
+          `/${accountId}/insights`,
+          legacyBody
+        );
+        cplPublisherKeys = collectCplPublisherKeys(
+          extractRawRows(legacyResponse.data)
+        );
+      } catch (legacyError) {
+        console.warn(
+          "[PaymentAgent] Legacy CPL insights also failed — continuing without CPL flags:",
+          axios.isAxiosError(legacyError)
+            ? JSON.stringify(legacyError.response?.data, null, 2)
+            : legacyError
+        );
+      }
     } else {
       console.warn(
         "[PaymentAgent] Ringba CPL target insights failed — continuing without CPL flags:",
