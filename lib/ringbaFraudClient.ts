@@ -160,11 +160,17 @@ async function fetchPage(
  * Falls back to a column set without recordingUrl if the full set is rejected;
  * in that fallback the recording requirement is skipped (it can't be known).
  * Name kept as fetchConvertedCallsForFraud so callers don't churn.
+ *
+ * `lastCallDt` is the newest callDt among the RAW fetched rows (rows are
+ * ordered callDt asc). On a truncated window the caller MUST advance its
+ * cursor to this point — re-scanning from the window start forever pins the
+ * window and starves every downstream check (this is exactly what froze IPQS
+ * lookups in early August).
  */
 export async function fetchConvertedCallsForFraud(
   reportStart: string,
   reportEnd: string
-): Promise<{ calls: FraudCallRecord[]; truncated: boolean }> {
+): Promise<{ calls: FraudCallRecord[]; truncated: boolean; lastCallDt: string | null }> {
   const client = createClient();
   const accountId = getAccountId();
 
@@ -234,7 +240,19 @@ export async function fetchConvertedCallsForFraud(
         (!hasRecordingColumn || Boolean(row.recordingUrl))
     );
 
-  return { calls, truncated };
+  let lastCallDt: string | null = null;
+  let lastCallMs = -Infinity;
+  for (const row of all) {
+    const dt = readStr(row, "callDt");
+    if (!dt) continue;
+    const ms = new Date(dt).getTime();
+    if (Number.isFinite(ms) && ms > lastCallMs) {
+      lastCallMs = ms;
+      lastCallDt = dt;
+    }
+  }
+
+  return { calls, truncated, lastCallDt };
 }
 
 // ---------- no-connect calls (robocalls / solicitors) ----------

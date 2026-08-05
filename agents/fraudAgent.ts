@@ -61,7 +61,14 @@ export interface FraudScanResult {
   coordinatedFlags: number;
   robocallReclassified: number;
   aiFlags: number;
+  /** Calls with a usable caller number that reached lookupPhone. */
+  ipqsAttempted: number;
+  /** Lookups served from the 30-day phone_intel cache (no API call, no cost). */
+  ipqsCacheHits: number;
+  /** Fresh paid IPQS API lookups. */
   ipqsLookups: number;
+  /** Lookups that returned no intel while IPQS is configured (API failure/unsuccessful). */
+  ipqsFailures: number;
   transcriptionsRun: number;
   errors: number;
   noConnectSeen: number;
@@ -477,7 +484,10 @@ async function executeFraudScan(): Promise<FraudScanResult> {
     coordinatedFlags: 0,
     robocallReclassified: 0,
     aiFlags: 0,
+    ipqsAttempted: 0,
+    ipqsCacheHits: 0,
     ipqsLookups: 0,
+    ipqsFailures: 0,
     transcriptionsRun: 0,
     errors: 0,
     noConnectSeen: 0,
@@ -521,7 +531,7 @@ async function executeFraudScan(): Promise<FraudScanResult> {
     );
   }
 
-  const { calls, truncated } = await fetchConvertedCallsForFraud(
+  const { calls, truncated, lastCallDt } = await fetchConvertedCallsForFraud(
     window.start,
     window.end
   );
@@ -656,11 +666,32 @@ async function executeFraudScan(): Promise<FraudScanResult> {
     result.publishersAlerted.push(publisherName);
   }
 
-  // Only advance the window when the fetch was complete; a truncated window
-  // re-scans from the same point next cycle (dedup makes that cheap).
-  setFraudPollState(
-    new Date().toISOString(),
-    truncated ? window.start : window.end
+  // Advance the window cursor. Complete fetch → window end. Truncated fetch →
+  // the newest callDt actually fetched, so the next scan resumes right behind
+  // it and a backlog drains at ~1,000 rows per scan. NEVER stay at
+  // window.start on truncation: that pins the window at the 72h cap forever
+  // (each scan re-reads the same first 1,000 rows, everything dedups, and
+  // IPQS lookups/flags flatline — the early-August outage).
+  const nextWindowEnd = truncated ? (lastCallDt ?? window.end) : window.end;
+  if (truncated) {
+    console.warn(
+      "[Fraud] window truncated — cursor advanced to last fetched call at %s (was start %s)",
+      nextWindowEnd,
+      window.start
+    );
+  }
+  setFraudPollState(new Date().toISOString(), nextWindowEnd);
+
+  // IPQS funnel — how many calls were sent to IPQS vs blocked before lookup.
+  console.log(
+    "[Fraud/IPQS] funnel: %d new calls, %d blocked by robocall cap before lookup, %d reached lookup → %d cache hits, %d fresh API lookups, %d failures (configured: %s)",
+    result.callsProcessed,
+    result.robocallReclassified,
+    result.ipqsAttempted,
+    result.ipqsCacheHits,
+    result.ipqsLookups,
+    result.ipqsFailures,
+    isIpqsConfigured() ? "yes" : "NO — set IPQS_API_KEY"
   );
 
   console.log(
@@ -746,8 +777,13 @@ async function processCall(
   // Step 1 — IPQS VOIP / spoof detection.
   if (callerNumber) {
     const intel = await lookupPhone(callerNumber);
-    if (intel && !intel.fromCache) {
+    result.ipqsAttempted += 1;
+    if (intel && intel.fromCache) {
+      result.ipqsCacheHits += 1;
+    } else if (intel) {
       result.ipqsLookups += 1;
+    } else if (isIpqsConfigured()) {
+      result.ipqsFailures += 1;
     }
     if (intel) {
       const evaluation = evaluatePhoneIntel(intel);
