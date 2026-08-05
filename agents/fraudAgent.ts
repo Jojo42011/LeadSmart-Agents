@@ -10,8 +10,10 @@ import { deriveServiceCategory } from "../lib/fraudCategories";
 import {
   lookupPhone,
   evaluatePhoneIntel,
+  getLastIpqsFailure,
   isIpqsConfigured,
   normalizePhoneNumber,
+  type IpqsFailureInfo,
 } from "../lib/ipqsClient";
 import {
   bumpPublisherTotals,
@@ -69,6 +71,8 @@ export interface FraudScanResult {
   ipqsLookups: number;
   /** Lookups that returned no intel while IPQS is configured (API failure/unsuccessful). */
   ipqsFailures: number;
+  /** Why the most recent lookup failed — pinpoints outages without log access. */
+  ipqsLastFailure: IpqsFailureInfo | null;
   transcriptionsRun: number;
   errors: number;
   noConnectSeen: number;
@@ -488,6 +492,7 @@ async function executeFraudScan(): Promise<FraudScanResult> {
     ipqsCacheHits: 0,
     ipqsLookups: 0,
     ipqsFailures: 0,
+    ipqsLastFailure: null,
     transcriptionsRun: 0,
     errors: 0,
     noConnectSeen: 0,
@@ -683,15 +688,21 @@ async function executeFraudScan(): Promise<FraudScanResult> {
   setFraudPollState(new Date().toISOString(), nextWindowEnd);
 
   // IPQS funnel — how many calls were sent to IPQS vs blocked before lookup.
+  if (result.ipqsFailures > 0) {
+    result.ipqsLastFailure = getLastIpqsFailure();
+  }
   console.log(
-    "[Fraud/IPQS] funnel: %d new calls, %d blocked by robocall cap before lookup, %d reached lookup → %d cache hits, %d fresh API lookups, %d failures (configured: %s)",
+    "[Fraud/IPQS] funnel: %d new calls, %d blocked by robocall cap before lookup, %d reached lookup → %d cache hits, %d fresh API lookups, %d failures (configured: %s)%s",
     result.callsProcessed,
     result.robocallReclassified,
     result.ipqsAttempted,
     result.ipqsCacheHits,
     result.ipqsLookups,
     result.ipqsFailures,
-    isIpqsConfigured() ? "yes" : "NO — set IPQS_API_KEY"
+    isIpqsConfigured() ? "yes" : "NO — set IPQS_API_KEY",
+    result.ipqsLastFailure
+      ? ` — last failure [${result.ipqsLastFailure.kind}]: ${result.ipqsLastFailure.message}`
+      : ""
   );
 
   console.log(

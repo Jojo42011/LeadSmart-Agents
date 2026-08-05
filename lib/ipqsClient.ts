@@ -24,6 +24,29 @@ const INTEL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const NEGATIVE_CACHE_TTL_MS = 60 * 60 * 1000;
 const negativeCache = new Map<string, number>();
 
+export interface IpqsFailureInfo {
+  at: string;
+  /** "unsuccessful" = IPQS answered success:false; "request_failed" = HTTP/network error. */
+  kind: "unsuccessful" | "request_failed";
+  /** Sanitized message — never contains the API key or request URL. */
+  message: string;
+}
+
+let lastLookupFailure: IpqsFailureInfo | null = null;
+
+function recordFailure(kind: IpqsFailureInfo["kind"], message: string): void {
+  lastLookupFailure = {
+    at: new Date().toISOString(),
+    kind,
+    message: message.slice(0, 300),
+  };
+}
+
+/** Most recent lookup failure this process has seen — surfaced in scan results. */
+export function getLastIpqsFailure(): IpqsFailureInfo | null {
+  return lastLookupFailure;
+}
+
 function isNegativelyCached(phoneNumber: string): boolean {
   const until = negativeCache.get(phoneNumber);
   if (until === undefined) return false;
@@ -129,11 +152,13 @@ export async function lookupPhone(rawNumber: string): Promise<PhoneIntel | null>
 
     const data = res.data ?? {};
     if (data.success === false) {
+      const message = String(data.message ?? "(no message)");
       console.warn(
         "[Fraud/IPQS] lookup unsuccessful for %s: %s",
         phoneNumber,
-        String(data.message ?? "(no message)")
+        message
       );
+      recordFailure("unsuccessful", message);
       negativeCache.set(phoneNumber, Date.now() + NEGATIVE_CACHE_TTL_MS);
       return null;
     }
@@ -183,11 +208,12 @@ export async function lookupPhone(rawNumber: string): Promise<PhoneIntel | null>
 
     return intel;
   } catch (err) {
-    console.warn(
-      "[Fraud/IPQS] lookup failed for %s: %s",
-      phoneNumber,
-      err instanceof Error ? err.message : String(err)
-    );
+    let message = err instanceof Error ? err.message : String(err);
+    if (axios.isAxiosError(err) && err.response) {
+      message += ` (HTTP ${err.response.status})`;
+    }
+    console.warn("[Fraud/IPQS] lookup failed for %s: %s", phoneNumber, message);
+    recordFailure("request_failed", message);
     // Serve a stale cache entry over nothing.
     return cached ? intelFromCacheRow(cached) : null;
   }
