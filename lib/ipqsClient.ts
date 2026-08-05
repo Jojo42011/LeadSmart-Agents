@@ -15,6 +15,24 @@ import { getPhoneIntel, savePhoneIntel, type PhoneIntelRow } from "./fraudDb";
 const IPQS_BASE_URL = "https://www.ipqualityscore.com/api/json/phone";
 /** Cached lookups stay fresh this long — phone intel changes slowly. */
 const INTEL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Numbers whose lookup came back success:false (invalid input, rate limit,
+ * insufficient credits) are not retried for this long. Without this, every
+ * 15-minute scan re-attempts the same doomed numbers and burns quota the
+ * moment credits refill.
+ */
+const NEGATIVE_CACHE_TTL_MS = 60 * 60 * 1000;
+const negativeCache = new Map<string, number>();
+
+function isNegativelyCached(phoneNumber: string): boolean {
+  const until = negativeCache.get(phoneNumber);
+  if (until === undefined) return false;
+  if (Date.now() >= until) {
+    negativeCache.delete(phoneNumber);
+    return false;
+  }
+  return true;
+}
 
 export interface PhoneIntel {
   phoneNumber: string;
@@ -91,6 +109,10 @@ export async function lookupPhone(rawNumber: string): Promise<PhoneIntel | null>
     return intelFromCacheRow(cached);
   }
 
+  if (isNegativelyCached(phoneNumber)) {
+    return cached ? intelFromCacheRow(cached) : null;
+  }
+
   const strictness = parseInt(process.env.IPQS_STRICTNESS ?? "1", 10);
 
   try {
@@ -112,6 +134,7 @@ export async function lookupPhone(rawNumber: string): Promise<PhoneIntel | null>
         phoneNumber,
         String(data.message ?? "(no message)")
       );
+      negativeCache.set(phoneNumber, Date.now() + NEGATIVE_CACHE_TTL_MS);
       return null;
     }
 
@@ -132,21 +155,31 @@ export async function lookupPhone(rawNumber: string): Promise<PhoneIntel | null>
       fromCache: false,
     };
 
-    savePhoneIntel({
-      phoneNumber,
-      fraudScore: intel.fraudScore,
-      lineType: intel.lineType,
-      voip: intel.voip ? 1 : 0,
-      risky: intel.risky ? 1 : 0,
-      recentAbuse: intel.recentAbuse ? 1 : 0,
-      spammer: intel.spammer ? 1 : 0,
-      valid: intel.valid ? 1 : 0,
-      carrier: intel.carrier,
-      country: intel.country,
-      city: intel.city,
-      region: intel.region,
-      raw: JSON.stringify(data),
-    });
+    // A cache-write failure must never discard a PAID lookup result — flag
+    // evaluation still runs on the returned intel; only caching is lost.
+    try {
+      savePhoneIntel({
+        phoneNumber,
+        fraudScore: intel.fraudScore,
+        lineType: intel.lineType,
+        voip: intel.voip ? 1 : 0,
+        risky: intel.risky ? 1 : 0,
+        recentAbuse: intel.recentAbuse ? 1 : 0,
+        spammer: intel.spammer ? 1 : 0,
+        valid: intel.valid ? 1 : 0,
+        carrier: intel.carrier,
+        country: intel.country,
+        city: intel.city,
+        region: intel.region,
+        raw: JSON.stringify(data),
+      });
+    } catch (saveErr) {
+      console.error(
+        "[Fraud/IPQS] cache write FAILED for %s (paid result still used): %s",
+        phoneNumber,
+        saveErr instanceof Error ? saveErr.message : String(saveErr)
+      );
+    }
 
     return intel;
   } catch (err) {
