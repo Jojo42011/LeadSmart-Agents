@@ -1421,6 +1421,7 @@
           <div class="pay-modal__panel">
             <h2 class="pay-modal__title" id="payModalTitle">Confirm payment</h2>
             <p class="pay-modal__subtitle" id="payModalSubtitle"></p>
+            <p class="pay-modal__hint" id="payModalCurrencyNote" style="color: var(--amber);"></p>
             <label class="pay-modal__section-label" id="payModalPeriodLabel">Months to include</label>
             <div class="pay-modal__months" id="payModalMonths"></div>
             <div id="payModalAmountSection">
@@ -1700,6 +1701,7 @@
       const payModalAmountSection = document.getElementById("payModalAmountSection");
       const payModalAmount = document.getElementById("payModalAmount");
       const payModalHint = document.getElementById("payModalHint");
+      const payModalCurrencyNote = document.getElementById("payModalCurrencyNote");
       const payModalCancel = document.getElementById("payModalCancel");
       const payModalConfirm = document.getElementById("payModalConfirm");
       const payModalMfaSection = document.getElementById("payModalMfaSection");
@@ -3016,6 +3018,25 @@
         }
         payModalAmount.value = Number(row.totalAmount || 0).toFixed(2);
         payModalHint.textContent = "";
+        payModalCurrencyNote.textContent = "";
+        if (method === "Wise" && hasWiseRecipientIdClient(meta)) {
+          const recipientId = String(meta.wiseRecipientId).trim();
+          payModalCurrencyNote.textContent = "Checking recipient currency…";
+          void wiseRecipientCurrency(recipientId).then((currency) => {
+            if (payModalMode !== "single" || !payModalRow || payModalRow.publisherName !== row.publisherName) {
+              return;
+            }
+            if (!currency) {
+              payModalCurrencyNote.textContent = "";
+            } else if (currency === "USD") {
+              payModalCurrencyNote.textContent = "Recipient currency: USD";
+            } else {
+              payModalCurrencyNote.textContent =
+                "Recipient is paid in " + currency +
+                " — the amount above is USD (deducted from the USD balance); Wise converts at transfer time.";
+            }
+          });
+        }
         payModal.classList.remove("hidden");
         syncPayModalAmountPreview();
       }
@@ -3042,6 +3063,24 @@
         payModalAmountSection.classList.add("hidden");
         renderPayModalPeriodOptions(getDashboardPeriodKey());
         payModalHint.textContent = "";
+        payModalCurrencyNote.textContent = "";
+        const wiseIdRows = wiseNames
+          .map((name) => String(getAffiliateMeta(name).wiseRecipientId || "").trim())
+          .filter((id) => /^\d+$/.test(id));
+        if (wiseIdRows.length) {
+          void Promise.all(
+            wiseIdRows.map((id) => wiseRecipientCurrency(id).then((c) => c || "?"))
+          ).then((currencies) => {
+            if (payModalMode !== "bulk") return;
+            const counts = {};
+            for (const c of currencies) counts[c] = (counts[c] || 0) + 1;
+            const parts = Object.keys(counts).sort().map((c) => counts[c] + "× " + c);
+            const hasNonUsd = Object.keys(counts).some((c) => c !== "USD");
+            payModalCurrencyNote.textContent =
+              "Wise recipient currencies: " + parts.join(" · ") +
+              (hasNonUsd ? " — amounts are USD; Wise converts at transfer time." : "");
+          });
+        }
         payModal.classList.remove("hidden");
         syncPayModalAmountPreview();
       }
@@ -3249,8 +3288,12 @@
 
             await fetchAffiliateMetadata();
             setBanner(null, null);
+            const conversion =
+              data.targetCurrency && data.targetCurrency !== "USD" && data.targetAmount
+                ? " (≈ " + Number(data.targetAmount).toLocaleString() + " " + data.targetCurrency + ")"
+                : "";
             showPaymentToast(
-              "Paid " + publisherName + " " + formatMoney(amount),
+              "Paid " + publisherName + " " + formatMoney(amount) + conversion,
               false
             );
             renderTable();
@@ -3377,10 +3420,30 @@
         const loc = [recipient.city, recipient.state].filter(Boolean).join(", ");
         return (
           recipient.accountHolderName +
+          (recipient.currency ? " · " + recipient.currency : "") +
           " · " + last4 +
           (loc ? " · " + loc : "") +
           " · #" + recipient.id
         );
+      }
+
+      /* Recipient target currency, cached per ID — recipients carry their own
+         currency on Wise, so nobody ever selects one manually. */
+      const wiseCurrencyCache = new Map();
+      async function wiseRecipientCurrency(recipientId) {
+        const key = String(recipientId).trim();
+        if (!/^\d+$/.test(key)) return null;
+        if (wiseCurrencyCache.has(key)) return wiseCurrencyCache.get(key);
+        try {
+          const res = await fetch("/api/payment/wise/recipient/" + encodeURIComponent(key));
+          if (!res.ok) throw new Error();
+          const data = await res.json();
+          const currency = String(data.currency || "").toUpperCase() || null;
+          wiseCurrencyCache.set(key, currency);
+          return currency;
+        } catch (err) {
+          return null;
+        }
       }
 
       async function setWiseRecipientLink(publisherName, recipientId, statusEl) {
@@ -3472,6 +3535,7 @@
             linkedEl.style.cssText = "font-size:11px;color:var(--green);";
             linkedEl.textContent =
               "✓ Linked to #" + affiliate.wiseRecipientId +
+              (affiliate.linkedCurrency ? " · " + affiliate.linkedCurrency : "") +
               (affiliate.linkedHolderName ? " — " + affiliate.linkedHolderName : "");
             const linkedStatusEl = document.createElement("div");
             linkedStatusEl.style.cssText =

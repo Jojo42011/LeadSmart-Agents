@@ -18,7 +18,14 @@ function isPlaceholderWiseTag(tag: string): boolean {
   return norm === "username" || norm === "yourname";
 }
 
-/** USD ACH statements allow at most 10 characters for the reference field. */
+/**
+ * Reference limits are per-corridor on Wise: USD ACH statements allow at most
+ * 10 characters; other currencies accept longer references but many corridors
+ * (PKR, INR, GBP, EUR, …) validate at around 35 characters. So: hard 10-char
+ * truncation ONLY for USD; a conservative 35-char cap everywhere else.
+ */
+const NON_USD_REFERENCE_MAX_LENGTH = 35;
+
 export function normalizeWiseTransferReference(
   reference: string,
   targetCurrency = "USD"
@@ -27,7 +34,7 @@ export function normalizeWiseTransferReference(
   if (targetCurrency.toUpperCase() === "USD") {
     return trimmed.slice(0, USD_ACH_REFERENCE_MAX_LENGTH);
   }
-  return trimmed.slice(0, 140);
+  return trimmed.slice(0, NON_USD_REFERENCE_MAX_LENGTH);
 }
 
 function formatWiseApiError(err: unknown, step: string): Error {
@@ -147,17 +154,41 @@ export function formatWiseRecipientIdForStorage(recipientId: number): string {
   return String(recipientId);
 }
 
-/** Verify a stored recipient ID exists in Wise. */
-export async function verifyWiseRecipientId(recipientId: number): Promise<boolean> {
+export interface WiseRecipientRecord {
+  id: number;
+  accountHolderName: string;
+  currency: string | null;
+}
+
+/**
+ * Fetch one recipient record by API ID — the source of truth for the payout
+ * target currency (recipients are created on Wise with their currency
+ * attached; nobody selects a currency manually at pay time).
+ */
+export async function getWiseRecipientById(
+  recipientId: number
+): Promise<WiseRecipientRecord | null> {
   const client = createWiseClient();
   try {
     const res = await client.get(`/v2/accounts/${recipientId}`);
     const row = asRecord(res.data);
     const id = row ? readNumber(row, "id") : null;
-    return id === recipientId;
+    if (!row || id !== recipientId) {
+      return null;
+    }
+    return {
+      id,
+      accountHolderName: readString(row, "accountHolderName") ?? "",
+      currency: readString(row, "currency"),
+    };
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Verify a stored recipient ID exists in Wise. */
+export async function verifyWiseRecipientId(recipientId: number): Promise<boolean> {
+  return (await getWiseRecipientById(recipientId)) !== null;
 }
 
 function findRecipientById(
@@ -713,7 +744,26 @@ async function targetAccountFromQuote(
   target: WisePayoutTarget | { contactId: string; resolvedVia: "contact" }
 ): Promise<{ quote: WiseQuote; targetAccountId: number }> {
   if ("recipientId" in target) {
-    const quote = await createQuote(profileId, amount, "USD", {
+    // The recipient record carries its own currency (PKR, INR, GBP, …) — use
+    // it as the quote target so Wise converts. sourceAmount stays the USD
+    // payout, so LeadSmart always sends exactly what it owes in USD and the
+    // converted amount floats.
+    const recipient = await getWiseRecipientById(target.recipientId);
+    const targetCurrency = recipient?.currency?.trim().toUpperCase() || "USD";
+    if (!recipient?.currency) {
+      console.warn(
+        "[Wise] Recipient %d has no readable currency — defaulting quote to USD",
+        target.recipientId
+      );
+    } else {
+      console.log(
+        "[Wise] Resolved recipient %d (%s) target currency: %s",
+        target.recipientId,
+        recipient.accountHolderName || "unknown holder",
+        targetCurrency
+      );
+    }
+    const quote = await createQuote(profileId, amount, targetCurrency, {
       targetAccount: target.recipientId,
     });
     return {
@@ -754,12 +804,28 @@ export async function prepareWiseTransfer(
     | { contactId: string; resolvedVia: "contact" }
     | { recipientId: number },
   reference = DEFAULT_WISE_TRANSFER_REFERENCE
-): Promise<{ transferId: number; quoteId: string }> {
+): Promise<{
+  transferId: number;
+  quoteId: string;
+  targetCurrency: string;
+  targetAmount: number;
+  rate: number;
+}> {
   const normalizedTarget = normalizePayoutTarget(target);
   const { quote, targetAccountId } = await targetAccountFromQuote(
     profileId,
     amount,
     normalizedTarget
+  );
+  // Conversion verification line — what leaves the USD balance vs what lands.
+  console.log(
+    "[Wise] Quote %s: %s %s → %s %s (rate %s)",
+    quote.id,
+    quote.sourceAmount,
+    quote.sourceCurrency,
+    quote.targetAmount,
+    quote.targetCurrency,
+    quote.rate
   );
   const transfer = await createTransfer(
     quote.id,
@@ -768,12 +834,19 @@ export async function prepareWiseTransfer(
     quote.targetCurrency
   );
   console.log(
-    "[Wise] Transfer created id=%s quote=%s reference=%s",
+    "[Wise] Transfer created id=%s quote=%s currency=%s reference=%s",
     transfer.id,
     quote.id,
+    quote.targetCurrency,
     normalizeWiseTransferReference(reference, quote.targetCurrency)
   );
-  return { transferId: transfer.id, quoteId: quote.id };
+  return {
+    transferId: transfer.id,
+    quoteId: quote.id,
+    targetCurrency: quote.targetCurrency,
+    targetAmount: quote.targetAmount,
+    rate: quote.rate,
+  };
 }
 
 /** Run quote → transfer → fund for one payout amount. */
@@ -785,7 +858,13 @@ export async function executeWisePayout(
     | { contactId: string; resolvedVia: "contact" }
     | { recipientId: number },
   reference = DEFAULT_WISE_TRANSFER_REFERENCE
-): Promise<{ transferId: number; quoteId: string }> {
+): Promise<{
+  transferId: number;
+  quoteId: string;
+  targetCurrency: string;
+  targetAmount: number;
+  rate: number;
+}> {
   const prepared = await prepareWiseTransfer(profileId, amount, target, reference);
   await fundTransfer(profileId, prepared.transferId);
   return prepared;
@@ -832,17 +911,21 @@ function maskLast4(accountNumber: unknown): string | null {
 
 /**
  * Every recipient saved on the profile, in one call:
- * GET /v1/accounts?profile={id}&currency=USD (plain array, unpaginated).
+ * GET /v1/accounts?profile={id} (plain array, unpaginated). With no currency
+ * argument ALL currencies are returned — affiliates have recipients in PKR,
+ * INR, GBP, CAD, EUR, NGN, GEL, UAH, PLN, MAD, not just USD.
  * Accept-Minor-Version: 1 extends items with name/email fields where present.
  */
 export async function listWiseRecipientsV1(
   profileId: string,
-  currency = "USD"
+  currency?: string
 ): Promise<WiseRecipientSummary[]> {
   return runWiseStep("recipient list", async () => {
     const client = createWiseClient();
     const res = await client.get<unknown>("/v1/accounts", {
-      params: { profile: profileId, currency },
+      params: currency
+        ? { profile: profileId, currency }
+        : { profile: profileId },
       headers: { "Accept-Minor-Version": "1" },
     });
 
@@ -865,7 +948,7 @@ export async function listWiseRecipientsV1(
       recipients.push({
         id,
         accountHolderName,
-        currency: readString(row, "currency") ?? currency,
+        currency: readString(row, "currency") ?? currency ?? "",
         country: readString(row, "country") ?? "",
         type: readString(row, "type") ?? "",
         active: row.active !== false,
