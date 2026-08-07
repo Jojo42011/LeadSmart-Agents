@@ -45,6 +45,7 @@ import {
   parseWiseRecipientIdInput,
   formatWiseRecipientIdForStorage,
   listWiseRecipientsV1,
+  getWiseRecipientById,
   type WiseRecipientSummary,
   type WiseAchDetails,
   type WiseRecipient,
@@ -1587,6 +1588,29 @@ function recipientNameSimilarity(publisherName: string, holderName: string): num
 
 const WISE_LINK_SUGGESTIONS = 3;
 
+// One recipient's record (holder + currency) — the pay modal uses this to
+// show at a glance that an affiliate is paid out in PKR/INR/… while the USD
+// amount remains the primary figure.
+app.get("/api/payment/wise/recipient/:id", async (req, res) => {
+  try {
+    const id = parseInt(String(req.params.id || ""), 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      res.status(400).json({ error: "Numeric Wise recipient ID required" });
+      return;
+    }
+    const recipient = await getWiseRecipientById(id);
+    if (!recipient) {
+      res.status(404).json({ error: `Wise recipient ${id} not found` });
+      return;
+    }
+    res.json(recipient);
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to fetch Wise recipient",
+    });
+  }
+});
+
 app.get("/api/admin/wise-recipients", async (_req, res) => {
   try {
     const profileId = getWiseProfileIdFromEnv();
@@ -1618,6 +1642,7 @@ app.get("/api/admin/wise-recipients", async (_req, res) => {
           publisherName,
           wiseRecipientId: linkedId,
           linkedHolderName: linkedRecipient?.accountHolderName ?? null,
+          linkedCurrency: linkedRecipient?.currency ?? null,
           suggestions,
         };
       })
@@ -2060,13 +2085,15 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
     trySendPaymentConfirmation(publisherName, amount, period, "Wise");
 
     console.log(
-      `[Payment] Wise pay success: ${publisherName} transferId=${payout.transferId} amount=${amount}`
+      `[Payment] Wise pay success: ${publisherName} transferId=${payout.transferId} amount=${amount} USD → ${payout.targetAmount} ${payout.targetCurrency}`
     );
 
     res.json({
       success: true,
       transferId: payout.transferId,
       amount,
+      targetCurrency: payout.targetCurrency,
+      targetAmount: payout.targetAmount,
       publisherName,
     });
   } catch (err) {
