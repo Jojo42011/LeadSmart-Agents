@@ -107,11 +107,58 @@ export function chicagoAddBusinessDaysYmd(
 }
 
 /**
- * Process date for Bill.com PayBills — Central Time, next business day.
- * Bill.com rejects same-day processDate (BDC_1152), including before the nominal cutoff.
+ * Process date for Bill.com PayBills, Central Time.
+ * - Mon–Fri: next business day (confirmed working — do not change).
+ * - Sat/Sun: SECOND business day (Tuesday). Bill.com rejected Monday
+ *   (2026-08-10) for a Saturday 2026-08-08 submission with BDC_1152 —
+ *   it appears to treat the next business day as effectively same-day for
+ *   weekend submissions. That behavior is inferred, not documented; the
+ *   BDC_1152 retry in billcomClient logs the rejected and accepted dates
+ *   so the real rule is visible in Fly logs if this recurs.
+ * Bill.com also rejects same-day processDate (BDC_1152), including before
+ * the nominal cutoff — hence never returning today.
  */
 export function chicagoBillcomProcessDateYmd(at: Date = new Date()): string {
+  if (isChicagoWeekend(at)) {
+    return chicagoAddBusinessDaysYmd(2, at);
+  }
   return chicagoNextBusinessDayYmd(at);
+}
+
+/**
+ * Next Mon–Fri calendar date strictly AFTER the given YYYY-MM-DD. Used by the
+ * BDC_1152 retry to advance past a date Bill.com just rejected (retrying the
+ * identical date is a wasted API call). Pure calendar math — the input is
+ * already a Chicago calendar date.
+ */
+export function nextBusinessDayAfterYmd(ymd: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!match) {
+    return chicagoNextBusinessDayYmd();
+  }
+  let cursorMs = Date.UTC(
+    parseInt(match[1], 10),
+    parseInt(match[2], 10) - 1,
+    parseInt(match[3], 10)
+  );
+  for (let i = 0; i < 14; i++) {
+    cursorMs += 24 * 60 * 60 * 1000;
+    const cursor = new Date(cursorMs);
+    const dow = cursor.getUTCDay();
+    if (dow !== 0 && dow !== 6) {
+      return chicagoYmd(
+        cursor.getUTCFullYear(),
+        cursor.getUTCMonth() + 1,
+        cursor.getUTCDate()
+      );
+    }
+  }
+  const cursor = new Date(cursorMs);
+  return chicagoYmd(
+    cursor.getUTCFullYear(),
+    cursor.getUTCMonth() + 1,
+    cursor.getUTCDate()
+  );
 }
 
 /** Second Monday (YYYY-MM-DD) of the given calendar month (month is 1-12). */
