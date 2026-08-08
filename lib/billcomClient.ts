@@ -7,8 +7,8 @@ import {
   chicagoBillcomProcessDateYmd,
   chicagoAddBusinessDaysYmd,
   chicagoDateParts,
-  chicagoNextBusinessDayYmd,
   chicagoTodayYmd,
+  nextBusinessDayAfterYmd,
 } from "./chicagoTime";
 
 const BILLCOM_V2_BASE = "https://api.bill.com/api/v2";
@@ -652,18 +652,25 @@ export async function payBill(
     return v2Request("PayBills.json", payload);
   };
 
+  // Resolve the date up front so the BDC_1152 retry knows exactly which date
+  // was rejected — the retry must advance PAST it, never resend it.
+  const initialProcessDate = ensureBillcomProcessDateYmd(
+    options?.processDate ?? billcomProcessDateYmd(newBankAccount),
+    newBankAccount
+  );
+
   let row: Record<string, unknown>;
   try {
-    const initialProcessDate =
-      options?.processDate ?? billcomProcessDateYmd(newBankAccount);
     row = await runPay(initialProcessDate);
   } catch (err) {
     if (err instanceof BillcomApiError && err.errorCode === "BDC_1152") {
-      const retryDate = newBankAccount
-        ? billcomProcessDateYmd(true)
-        : chicagoNextBusinessDayYmd();
-      console.log(
-        "[BillCom] BDC_1152 — retrying PayBills with processDate=%s",
+      const retryDate = nextBusinessDayAfterYmd(initialProcessDate);
+      // Both dates logged on purpose: Bill.com's weekend process-date rule is
+      // inferred, not documented — if this fires again, the pair shows
+      // exactly what Bill.com rejected and what it accepted.
+      console.warn(
+        "[BillCom] BDC_1152 Invalid Process Date — rejected processDate=%s, retrying with next business day %s",
+        initialProcessDate,
         retryDate
       );
       row = await runPay(retryDate);
