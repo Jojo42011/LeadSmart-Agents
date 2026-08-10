@@ -13,6 +13,7 @@ import {
   markAffiliatePaidForWeeks,
   isAffiliatePaidForWeek,
   setAffiliateBillcomVendorId,
+  setAffiliatePolyaresId,
   type AffiliateMetadata,
   type BillcomAchFieldUpdates,
   type WiseFieldUpdates,
@@ -1749,7 +1750,7 @@ app.post("/api/payment/metadata/:name", (req, res) => {
       return;
     }
 
-    const metadata = upsertAffiliateMetadata(
+    let metadata = upsertAffiliateMetadata(
       publisherName,
       paymentMethod,
       paymentTerms,
@@ -1758,6 +1759,15 @@ app.post("/api/payment/metadata/:name", (req, res) => {
       wiseFields,
       paymentEmail
     );
+
+    // Polyares Source ID (durable CSV merge key) — only when the field was
+    // sent, so saves from older clients never clear an existing link.
+    if (req.body && typeof req.body === "object" && "polyaresId" in req.body) {
+      const raw = (req.body as { polyaresId?: unknown }).polyaresId;
+      const cleaned = typeof raw === "string" ? raw.trim() : "";
+      metadata = setAffiliatePolyaresId(publisherName, cleaned || null);
+    }
+
     res.json(metadata);
   } catch (err) {
     const message =

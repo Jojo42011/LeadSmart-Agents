@@ -74,6 +74,9 @@ function migrateAffiliateMetadataSchema(database: Database.Database): void {
   if (!names.has("paymentEmail")) {
     database.exec("ALTER TABLE affiliate_metadata ADD COLUMN paymentEmail TEXT");
   }
+  if (!names.has("polyaresId")) {
+    database.exec("ALTER TABLE affiliate_metadata ADD COLUMN polyaresId TEXT");
+  }
 }
 
 function migrateScrubLogSchema(database: Database.Database): void {
@@ -367,6 +370,8 @@ export interface AffiliateMetadata {
   wiseAddressState: string | null;
   wiseAddressZip: string | null;
   paymentEmail: string | null;
+  /** Polyares "Source" affiliate ID (e.g. safderygd1) — primary CSV merge key. */
+  polyaresId: string | null;
 }
 
 export type BillcomAchFieldUpdates = {
@@ -420,6 +425,7 @@ type AffiliateMetadataRow = {
   wiseAddressState: string | null;
   wiseAddressZip: string | null;
   paymentEmail: string | null;
+  polyaresId: string | null;
 };
 
 const AFFILIATE_METADATA_SELECT =
@@ -429,7 +435,7 @@ const AFFILIATE_METADATA_SELECT =
           billcomAddressCity, billcomAddressState, billcomAddressZip,
           wiseEmail, wiseTag, wiseRecipientId, wiseAccountHolderName, wiseRoutingNumber,
           wiseAccountNumber, wiseAddressLine1, wiseAddressCity, wiseAddressState,
-          wiseAddressZip, paymentEmail
+          wiseAddressZip, paymentEmail, polyaresId
    FROM affiliate_metadata`;
 
 function loadPaidMonthsMap(
@@ -503,6 +509,7 @@ function rowToAffiliateMetadata(
     wiseAddressState: row.wiseAddressState,
     wiseAddressZip: row.wiseAddressZip,
     paymentEmail: row.paymentEmail,
+    polyaresId: row.polyaresId,
   };
 }
 
@@ -973,6 +980,49 @@ export function setAffiliateBillcomVendorId(
   );
 }
 
+/**
+ * Updates only the Polyares Source ID (the durable Polyares↔Ringba merge
+ * key), preserving other metadata. Pass null to unlink.
+ */
+export function setAffiliatePolyaresId(
+  publisherName: string,
+  polyaresId: string | null
+): AffiliateMetadata {
+  const database = getDb();
+  const updatedAt = new Date().toISOString();
+  const existing = database
+    .prepare(`${AFFILIATE_METADATA_SELECT} WHERE publisherName = ?`)
+    .get(publisherName) as AffiliateMetadataRow | undefined;
+
+  if (existing) {
+    database
+      .prepare(
+        `UPDATE affiliate_metadata SET polyaresId = ?, updatedAt = ? WHERE publisherName = ?`
+      )
+      .run(polyaresId, updatedAt, publisherName);
+  } else {
+    database
+      .prepare(
+        `INSERT INTO affiliate_metadata (
+          publisherName, paymentMethod, paymentTerms, isPaid, paidAt, updatedAt, polyaresId
+        ) VALUES (?, NULL, NULL, 0, NULL, ?, ?)`
+      )
+      .run(publisherName, updatedAt, polyaresId);
+  }
+
+  const row = database
+    .prepare(`${AFFILIATE_METADATA_SELECT} WHERE publisherName = ?`)
+    .get(publisherName) as AffiliateMetadataRow;
+
+  const paidByPublisher = loadPaidMonthsMap(database);
+  const paidWeeksByPublisher = loadPaidWeeksMap(database);
+  return rowToAffiliateMetadata(
+    row,
+    paidByPublisher[publisherName] ?? {},
+    paidWeeksByPublisher[publisherName] ?? {}
+  );
+}
+
 /** @deprecated Use toggleAffiliatePaidForMonth — legacy global toggle. */
 export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
   const database = getDb();
@@ -1019,6 +1069,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
       wiseAddressState: null,
       wiseAddressZip: null,
       paymentEmail: null,
+      polyaresId: null,
     };
   }
 
@@ -1063,6 +1114,7 @@ export function toggleAffiliatePaid(publisherName: string): AffiliateMetadata {
     wiseAddressState: existing.wiseAddressState,
     wiseAddressZip: existing.wiseAddressZip,
     paymentEmail: existing.paymentEmail,
+    polyaresId: existing.polyaresId,
   };
 }
 
