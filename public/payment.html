@@ -2072,6 +2072,7 @@
             wiseAddressState: null,
             wiseAddressZip: null,
             paymentEmail: null,
+            polyaresId: null,
           }
         );
       }
@@ -2243,7 +2244,8 @@
         billcomVendorId,
         billcomAch,
         wiseFields,
-        paymentEmail
+        paymentEmail,
+        polyaresId
       ) {
         const payload = {
           paymentMethod: paymentMethod || "Untagged",
@@ -2260,6 +2262,9 @@
         }
         if (paymentEmail !== undefined) {
           payload.paymentEmail = paymentEmail || "";
+        }
+        if (polyaresId !== undefined) {
+          payload.polyaresId = polyaresId || "";
         }
         const res = await fetch(
           "/api/payment/metadata/" + encodeURIComponent(publisherName),
@@ -2423,6 +2428,19 @@
         paymentEmailInput.value = meta.paymentEmail || "";
         paymentEmailInput.autocomplete = "off";
 
+        const polyaresIdLabel = document.createElement("label");
+        polyaresIdLabel.textContent = "Polyares ID (Source column)";
+        const polyaresIdInput = document.createElement("input");
+        polyaresIdInput.type = "text";
+        polyaresIdInput.placeholder = "e.g. safderygd1 (optional)";
+        polyaresIdInput.value = meta.polyaresId || "";
+        polyaresIdInput.autocomplete = "off";
+        polyaresIdInput.spellcheck = false;
+        const polyaresHint = document.createElement("p");
+        polyaresHint.className = "metadata-popover__billcom-hint";
+        polyaresHint.textContent =
+          "From the Polyares CSV Source column. Links this affiliate's Polyares earnings even when the names don't match. Clear to unlink.";
+
         const vendorIdWrap = document.createElement("div");
         vendorIdWrap.className = "metadata-popover__billcom-section";
         if ((meta.paymentMethod || "Untagged") !== "Bill.com") {
@@ -2551,7 +2569,8 @@
               billcomVendorId,
               null,
               wiseFields,
-              paymentEmailInput.value.trim()
+              paymentEmailInput.value.trim(),
+              polyaresIdInput.value.trim()
             );
             affiliateMetadataMap[publisherName] = data;
             closeEditPopover();
@@ -2570,6 +2589,9 @@
         popover.appendChild(termsSelect);
         popover.appendChild(paymentEmailLabel);
         popover.appendChild(paymentEmailInput);
+        popover.appendChild(polyaresIdLabel);
+        popover.appendChild(polyaresIdInput);
+        popover.appendChild(polyaresHint);
         popover.appendChild(vendorIdWrap);
         popover.appendChild(wiseWrap);
         popover.appendChild(actions);

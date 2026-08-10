@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from "axios";
 import { wrapper } from "axios-cookiejar-support";
 import { CookieJar } from "tough-cookie";
 import { parse } from "csv-parse/sync";
+import { getAllAffiliateMetadata } from "../lib/logger";
 
 const BASE_URL = "https://api.ringba.com/v2";
 const POLYARES_BASE_URL = "https://affiliates.polyares.com";
@@ -24,6 +25,8 @@ export interface PublisherPayoutRow {
   convertedCalls?: number;
   completedCalls?: number;
   cplAffiliate?: boolean;
+  /** Stable affiliate ID from the Polyares CSV "Source" column (e.g. safderygd1). */
+  polyaresId?: string;
 }
 
 export interface PublisherProfitRow {
@@ -58,10 +61,22 @@ export interface MergeAffiliatesResult {
   outliers: PaymentOutlier[];
 }
 
+/**
+ * Case-insensitive name key. Whitespace runs collapse to a single space and
+ * edges are trimmed: the Polyares CSV ships names like "Safdar  Awan " (double
+ * internal space + trailing space) that must match Ringba's "Safdar Awan …".
+ */
 function normalizePublisherName(name: string): string {
-  return name.trim().toLowerCase();
+  return name.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/** Normalized Polyares Source ID ("safderygd1") for map keys. */
+function normalizePolyaresId(id: string | null | undefined): string | null {
+  const cleaned = String(id ?? "").trim().toLowerCase();
+  return cleaned || null;
+}
+
+/** @deprecated Link the Polyares Source ID in the affiliate edit popup instead. */
 const FORCE_BOTH_MERGE: Record<string, string> = {
   "dominik mikula": "DOMINIK MIKULA AND COMPANY LTD",
   "muhammad bilal2": "Muhammad Bilal2 LSW - N",
@@ -141,12 +156,39 @@ function findPartialRingbaMatch(
 }
 
 /**
- * Merges Ringba and Polyares payout rows by exact name or Ringba suffix-tag name.
+ * Polyares Source ID → dashboard publisher name, from affiliate_metadata.
+ * Set from the affiliate edit popup; this is the durable merge key that
+ * replaces name matching (and the FORCE_BOTH_MERGE hardcodes) over time.
+ */
+function polyaresIdMapFromMetadata(): Map<string, string> {
+  const map = new Map<string, string>();
+  try {
+    const metadata = getAllAffiliateMetadata();
+    for (const [publisherName, meta] of Object.entries(metadata)) {
+      const polyId = normalizePolyaresId(meta.polyaresId);
+      if (polyId) {
+        map.set(polyId, publisherName);
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[PaymentAgent] Could not load Polyares ID map — falling back to name matching:",
+      err instanceof Error ? err.message : err
+    );
+  }
+  return map;
+}
+
+/**
+ * Merges Ringba and Polyares payout rows. Primary key: the Polyares Source ID
+ * mapped via affiliate_metadata.polyaresId (immune to name drift). Fallback:
+ * exact name or Ringba suffix-tag name (whitespace-normalized on both sides).
  * Ambiguous partial matches are flagged in outliers for manual review.
  */
 export function mergeAffiliates(
   ringbaRows: PublisherPayoutRow[],
-  polyaresRows: PublisherPayoutRow[]
+  polyaresRows: PublisherPayoutRow[],
+  polyaresIdMap: Map<string, string> = polyaresIdMapFromMetadata()
 ): MergeAffiliatesResult {
   const ringbaByKey = new Map<string, PublisherPayoutRow>();
   for (const row of ringbaRows) {
@@ -176,6 +218,39 @@ export function mergeAffiliates(
     const key = normalizePublisherName(polyRow.publisherName);
     const ringbaRow = ringbaByKey.get(key);
     const existingIndex = publisherIndexByKey.get(key);
+
+    // Primary path — stable Polyares Source ID linked in affiliate metadata.
+    // Merges regardless of how the two platforms spell the name.
+    const polyId = normalizePolyaresId(polyRow.polyaresId);
+    const mappedPublisher = polyId ? polyaresIdMap.get(polyId) : undefined;
+    if (mappedPublisher) {
+      const mappedKey = normalizePublisherName(mappedPublisher);
+      const mappedIndex = publisherIndexByKey.get(mappedKey);
+      if (mappedIndex !== undefined) {
+        const existing = publishers[mappedIndex];
+        publishers[mappedIndex] = {
+          ...existing,
+          polyaresAmount: existing.polyaresAmount + polyRow.payoutAmount,
+          totalAmount:
+            existing.ringbaAmount +
+            existing.polyaresAmount +
+            polyRow.payoutAmount,
+          source: "BOTH",
+        };
+      } else {
+        // No Ringba activity this period — still surface under the canonical
+        // dashboard name so metadata/payment method line up.
+        publishers.push({
+          publisherName: mappedPublisher,
+          ringbaAmount: 0,
+          polyaresAmount: polyRow.payoutAmount,
+          totalAmount: polyRow.payoutAmount,
+          source: "POLYERAS",
+        });
+        publisherIndexByKey.set(mappedKey, publishers.length - 1);
+      }
+      continue;
+    }
 
     if (ringbaRow && existingIndex !== undefined) {
       const existing = publishers[existingIndex];
@@ -308,19 +383,23 @@ function isoToChicagoMdY(isoDate: string): string {
 }
 
 function aggregatePolyaresRows(rows: PublisherPayoutRow[]): PublisherPayoutRow[] {
-  const byName = new Map<string, PublisherPayoutRow>();
+  const byKey = new Map<string, PublisherPayoutRow>();
 
   for (const row of rows) {
-    const key = normalizePublisherName(row.publisherName);
-    const existing = byName.get(key);
+    // Group by the stable Source ID when present (two rows with the same
+    // display name but different IDs are DIFFERENT affiliates); fall back to
+    // the whitespace-normalized name.
+    const polyId = normalizePolyaresId(row.polyaresId);
+    const key = polyId ? `id:${polyId}` : `name:${normalizePublisherName(row.publisherName)}`;
+    const existing = byKey.get(key);
     if (existing) {
       existing.payoutAmount += row.payoutAmount;
       continue;
     }
-    byName.set(key, { ...row });
+    byKey.set(key, { ...row });
   }
 
-  return Array.from(byName.values()).sort((a, b) => b.payoutAmount - a.payoutAmount);
+  return Array.from(byKey.values()).sort((a, b) => b.payoutAmount - a.payoutAmount);
 }
 
 function parseNumber(value: unknown): number {
@@ -1175,6 +1254,9 @@ export async function fetchPolyaresPayouts(
   for (const record of records) {
     const affiliate = String(record.Affiliate ?? "").trim();
     const commission = parsePolyaresCommission(record.Commission);
+    // "Source" is Polyares' stable affiliate ID (e.g. safderygd1) — the
+    // durable merge key, immune to the CSV's name-whitespace quirks.
+    const polyaresId = String(record.Source ?? "").trim();
 
     if (!affiliate || commission === 0) {
       continue;
@@ -1184,6 +1266,7 @@ export async function fetchPolyaresPayouts(
       publisherName: affiliate,
       payoutAmount: commission,
       source: "POLYERAS",
+      ...(polyaresId ? { polyaresId } : {}),
     });
   }
 
