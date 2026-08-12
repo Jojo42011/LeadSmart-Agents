@@ -158,6 +158,8 @@ export interface WiseRecipientRecord {
   id: number;
   accountHolderName: string;
   currency: string | null;
+  /** Last 4 digits of the destination account, when the record exposes them. */
+  accountLast4: string | null;
 }
 
 /**
@@ -176,13 +178,57 @@ export async function getWiseRecipientById(
     if (!row || id !== recipientId) {
       return null;
     }
+    // Account digits appear under different keys per recipient type — try the
+    // known shapes and fall back to none (the email simply omits the line).
+    const details = asRecord(row.details) ?? {};
+    const last4 =
+      maskLast4(details.accountNumber) ??
+      maskLast4(details.IBAN ?? details.iban) ??
+      maskLast4(readString(row, "accountSummary")) ??
+      maskLast4(readString(row, "longAccountSummary"));
     return {
       id,
       accountHolderName: readString(row, "accountHolderName") ?? "",
       currency: readString(row, "currency"),
+      accountLast4: last4,
     };
   } catch {
     return null;
+  }
+}
+
+export interface WiseDeliveryEstimate {
+  /** ISO datetime Wise currently expects funds to reach the recipient. */
+  estimatedDeliveryDate: string | null;
+  /** Wise's own human-readable rendering of that estimate. */
+  formatted: string | null;
+}
+
+/**
+ * Wise's delivery ETA for a transfer (GET /v1/delivery-estimates/{id}).
+ * Best-effort: never throws — a missing estimate just means the confirmation
+ * email omits the arrival line.
+ */
+export async function getWiseDeliveryEstimate(
+  transferId: number
+): Promise<WiseDeliveryEstimate> {
+  try {
+    const client = createWiseClient();
+    const res = await client.get(`/v1/delivery-estimates/${transferId}`, {
+      params: { timezone: "America/Chicago" },
+    });
+    const row = asRecord(res.data);
+    return {
+      estimatedDeliveryDate: row ? readString(row, "estimatedDeliveryDate") : null,
+      formatted: row ? readString(row, "formattedEstimatedDeliveryDate") : null,
+    };
+  } catch (err) {
+    console.warn(
+      "[Wise] delivery estimate unavailable for transfer %s: %s",
+      transferId,
+      err instanceof Error ? err.message : err
+    );
+    return { estimatedDeliveryDate: null, formatted: null };
   }
 }
 

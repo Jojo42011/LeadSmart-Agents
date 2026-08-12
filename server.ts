@@ -47,6 +47,7 @@ import {
   formatWiseRecipientIdForStorage,
   listWiseRecipientsV1,
   getWiseRecipientById,
+  getWiseDeliveryEstimate,
   type WiseRecipientSummary,
   type WiseAchDetails,
   type WiseRecipient,
@@ -66,7 +67,12 @@ import {
 import { storePendingBillcomPay, takePendingBillcomPay } from "./lib/billcomPendingPay";
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
 import { sendPaymentConfirmationEmail } from "./lib/paymentEmail";
-import { chicagoDateParts, secondMondayHoldForMonth } from "./lib/chicagoTime";
+import {
+  chicagoDateParts,
+  secondMondayHoldForMonth,
+  nextBusinessDayAfterYmd,
+  chicagoBillcomProcessDateYmd,
+} from "./lib/chicagoTime";
 import {
   fraudSummary,
   listFlaggedCalls,
@@ -1210,11 +1216,26 @@ function parsePaymentEmailUpdate(body: unknown): string | null | undefined {
   return normalizePaymentEmail(trimmed);
 }
 
+/** Payment specifics for the confirmation email — every field best-effort. */
+interface PaymentConfirmationExtras {
+  wise?: {
+    transferId?: number;
+    recipientId?: number | null;
+    targetAmount?: number;
+    targetCurrency?: string;
+  };
+  billcom?: {
+    paymentId?: string;
+    processDate?: string | null;
+  };
+}
+
 function trySendPaymentConfirmation(
   publisherName: string,
   amount: number,
   period: { periodType: "month" | "week"; keys: string[] },
-  method: "Wise" | "Bill.com"
+  method: "Wise" | "Bill.com",
+  extras?: PaymentConfirmationExtras
 ): void {
   void (async () => {
     const meta = affiliateMetadataFor(publisherName);
@@ -1222,6 +1243,47 @@ function trySendPaymentConfirmation(
     if (!email) {
       console.log(`[Payment] No confirmation email for ${publisherName}, skipping`);
       return;
+    }
+
+    // Enrichment is strictly best-effort: any lookup failure just drops that
+    // line from the email — the base confirmation always goes out.
+    let targetAmount: number | null = null;
+    let targetCurrency: string | null = null;
+    let expectedArrival: string | null = null;
+    let accountLast4: string | null = null;
+    let reference: string | null = null;
+
+    try {
+      if (extras?.wise) {
+        targetAmount = extras.wise.targetAmount ?? null;
+        targetCurrency = extras.wise.targetCurrency ?? null;
+        if (extras.wise.transferId) {
+          reference = `Wise transfer #${extras.wise.transferId}`;
+          const estimate = await getWiseDeliveryEstimate(extras.wise.transferId);
+          expectedArrival = estimate.estimatedDeliveryDate;
+        }
+        if (extras.wise.recipientId) {
+          const recipient = await getWiseRecipientById(extras.wise.recipientId);
+          accountLast4 = recipient?.accountLast4 ?? null;
+        }
+      } else if (extras?.billcom) {
+        if (extras.billcom.paymentId) {
+          reference = `Bill.com payment ${extras.billcom.paymentId}`;
+        }
+        // ACH typically lands ~2 business days after the process date.
+        if (extras.billcom.processDate) {
+          expectedArrival = nextBusinessDayAfterYmd(
+            nextBusinessDayAfterYmd(extras.billcom.processDate)
+          );
+        }
+        const digits = String(meta?.billcomAccountNumber ?? "").replace(/\D/g, "");
+        accountLast4 = digits ? digits.slice(-4) : null;
+      }
+    } catch (enrichErr) {
+      console.warn(
+        `[Payment] Confirmation email enrichment failed for ${publisherName}:`,
+        enrichErr instanceof Error ? enrichErr.message : enrichErr
+      );
     }
 
     try {
@@ -1232,6 +1294,11 @@ function trySendPaymentConfirmation(
         months: period.keys,
         periodType: period.periodType,
         method,
+        targetAmount,
+        targetCurrency,
+        expectedArrival,
+        accountLast4,
+        reference,
       });
       console.log(
         `[Payment] Confirmation email sent to ${email} for ${publisherName}`
@@ -2092,7 +2159,14 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
     );
     persistWiseRecipientIdFromPayout(publisherName, meta, target);
     markAffiliatePaidIfUnpaid(publisherName, period);
-    trySendPaymentConfirmation(publisherName, amount, period, "Wise");
+    trySendPaymentConfirmation(publisherName, amount, period, "Wise", {
+      wise: {
+        transferId: payout.transferId,
+        recipientId: "recipientId" in target ? target.recipientId : null,
+        targetAmount: payout.targetAmount,
+        targetCurrency: payout.targetCurrency,
+      },
+    });
 
     console.log(
       `[Payment] Wise pay success: ${publisherName} transferId=${payout.transferId} amount=${amount} USD → ${payout.targetAmount} ${payout.targetCurrency}`
@@ -2201,7 +2275,9 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
         newBankAccount: prepared.vendorCreated,
       });
       markAffiliatePaidIfUnpaid(publisherName, period);
-      trySendPaymentConfirmation(publisherName, amount, period, "Bill.com");
+      trySendPaymentConfirmation(publisherName, amount, period, "Bill.com", {
+        billcom: { paymentId: payment.id, processDate: payment.processDate },
+      });
 
       console.log(
         `[Payment] Bill.com pay success: ${publisherName} paymentId=${payment.id} amount=${amount}`
@@ -2311,7 +2387,8 @@ app.post("/api/payment/billcom/mfa/verify", async (req, res) => {
       pending.publisherName,
       pending.amount,
       pendingPeriod,
-      "Bill.com"
+      "Bill.com",
+      { billcom: { paymentId: payment.id, processDate: payment.processDate } }
     );
 
     console.log(
@@ -2356,6 +2433,8 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
     publisherName: string;
     transferId: number;
     amount: number;
+    targetAmount: number;
+    targetCurrency: string;
     meta: AffiliateMetadata;
     target: WisePayoutTarget | { contactId: string; resolvedVia: "contact" };
   }> = [];
@@ -2387,6 +2466,8 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
         publisherName,
         transferId: transfer.transferId,
         amount,
+        targetAmount: transfer.targetAmount,
+        targetCurrency: transfer.targetCurrency,
         meta,
         target,
       });
@@ -2411,7 +2492,16 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
         pending.publisherName,
         pending.amount,
         period,
-        "Wise"
+        "Wise",
+        {
+          wise: {
+            transferId: pending.transferId,
+            recipientId:
+              "recipientId" in pending.target ? pending.target.recipientId : null,
+            targetAmount: pending.targetAmount,
+            targetCurrency: pending.targetCurrency,
+          },
+        }
       );
       succeeded.push(pending.publisherName);
     } catch (err) {
@@ -2496,6 +2586,9 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
   const bulkResult = await bulkPayBills(bulkItems);
   const paidBillIds = new Set(bulkResult.succeeded.map((item) => item.billId));
 
+  // Bulk pay uses the same process-date rule internally; recompute it here so
+  // the confirmation emails can state an estimated arrival.
+  const bulkProcessDate = chicagoBillcomProcessDateYmd();
   for (const item of billPayments) {
     if (paidBillIds.has(item.billId)) {
       markAffiliatePaidIfUnpaid(item.publisherName, period);
@@ -2503,7 +2596,8 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
         item.publisherName,
         item.amount,
         period,
-        "Bill.com"
+        "Bill.com",
+        { billcom: { processDate: bulkProcessDate } }
       );
       succeeded.push(item.publisherName);
     } else {
