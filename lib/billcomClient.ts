@@ -84,6 +84,8 @@ export interface BillcomPayment {
   billId: string;
   amount: number;
   status: string;
+  /** processDate (YYYY-MM-DD) the payment was accepted with. */
+  processDate: string | null;
 }
 
 export interface BillcomBulkPaymentItem {
@@ -629,8 +631,10 @@ export async function payBill(
   const newBankAccount = options?.newBankAccount ?? false;
   const bac = optionalBankAccountId();
 
+  let lastSentProcessDate: string | null = null;
   const runPay = async (requestedDate: string | null | undefined) => {
     const processDate = ensureBillcomProcessDateYmd(requestedDate, newBankAccount);
+    lastSentProcessDate = processDate;
     console.log("[BillCom] PayBills sending processDate=%s", processDate);
     console.log("[BillCom] PayBills request:", {
       billId,
@@ -700,14 +704,17 @@ export async function payBill(
   const sentPay = sentPays.length > 0 ? asRecord(sentPays[0]) : null;
   const id = sentPay ? readString(sentPay, "id") ?? billId : billId;
   const status = sentPay ? readString(sentPay, "status") ?? "submitted" : "submitted";
+  const processDate =
+    (sentPay ? readString(sentPay, "processDate") : null) ?? lastSentProcessDate;
 
-  console.log("[BillCom] PayBills success:", { paymentId: id, billId, amount, status });
+  console.log("[BillCom] PayBills success:", { paymentId: id, billId, amount, status, processDate });
 
   return {
     id,
     billId,
     amount,
     status,
+    processDate,
   };
 }
 

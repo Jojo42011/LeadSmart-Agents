@@ -9,6 +9,15 @@ export interface PaymentConfirmationParams {
   months: string[];
   periodType?: "month" | "week";
   method: "Wise" | "Bill.com";
+  /** Converted amount landing in the recipient's currency (Wise non-USD). */
+  targetAmount?: number | null;
+  targetCurrency?: string | null;
+  /** Estimated arrival: ISO datetime or YYYY-MM-DD. Always labeled estimated. */
+  expectedArrival?: string | null;
+  /** Last 4 digits of the destination account. */
+  accountLast4?: string | null;
+  /** Provider reference the affiliate can quote (e.g. "Wise transfer #123"). */
+  reference?: string | null;
 }
 
 function smtpConfigured(): boolean {
@@ -92,6 +101,67 @@ function formatDateChicago(): string {
   }).format(new Date());
 }
 
+/** "Wednesday, August 12, 2026" from an ISO datetime or a YYYY-MM-DD. */
+function formatArrivalDate(value: string): string | null {
+  const ymdMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  const date = ymdMatch
+    ? new Date(Date.UTC(
+        parseInt(ymdMatch[1], 10),
+        parseInt(ymdMatch[2], 10) - 1,
+        parseInt(ymdMatch[3], 10)
+      ))
+    : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    // Plain calendar dates are timezone-less; datetimes render in Chicago.
+    timeZone: ymdMatch ? "UTC" : CHICAGO_TZ,
+  }).format(date);
+}
+
+function formatTargetAmount(params: PaymentConfirmationParams): string | null {
+  const currency = params.targetCurrency?.trim().toUpperCase();
+  if (!currency || currency === "USD") {
+    return null;
+  }
+  if (typeof params.targetAmount !== "number" || params.targetAmount <= 0) {
+    return null;
+  }
+  return `≈ ${params.targetAmount.toLocaleString("en-US")} ${currency}`;
+}
+
+/** Extra label/value rows, included only when the data is actually known. */
+function extraDetailRows(
+  params: PaymentConfirmationParams
+): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [];
+  const converted = formatTargetAmount(params);
+  if (converted) {
+    rows.push({ label: "You'll receive", value: converted });
+  }
+  if (params.expectedArrival) {
+    const arrival = formatArrivalDate(params.expectedArrival);
+    if (arrival) {
+      rows.push({ label: "Expected arrival", value: `${arrival} (estimated)` });
+    }
+  }
+  if (params.accountLast4) {
+    rows.push({
+      label: "Deposited to",
+      value: `Account ending ••${params.accountLast4}`,
+    });
+  }
+  if (params.reference) {
+    rows.push({ label: "Reference", value: params.reference });
+  }
+  return rows;
+}
+
 function buildHtmlBody(params: PaymentConfirmationParams): string {
   const monthLabel = formatPeriodsLabel(params);
   const amountLabel = formatMoney(params.amount);
@@ -150,12 +220,21 @@ function buildHtmlBody(params: PaymentConfirmationParams): string {
                     <strong style="color:#18181b;">Date</strong><br />${escapeHtml(dateLabel)} CT
                   </td>
                 </tr>
+${extraDetailRows(params)
+  .map(
+    (row) => `                <tr>
+                  <td style="padding:0 18px 16px;font-size:14px;line-height:1.5;color:#52525b;">
+                    <strong style="color:#18181b;">${escapeHtml(row.label)}</strong><br />${escapeHtml(row.value)}
+                  </td>
+                </tr>`
+  )
+  .join("\n")}
               </table>
             </td>
           </tr>
           <tr>
             <td style="padding:0 32px 28px;font-size:13px;line-height:1.5;color:#71717a;">
-              — LeadSmart
+              Questions about this payment? Just reply to this email.<br /><br />— LeadSmart
             </td>
           </tr>
         </table>
@@ -181,6 +260,9 @@ function buildTextBody(params: PaymentConfirmationParams): string {
     `Period: ${monthLabel}`,
     `Payment method: ${params.method}`,
     `Date: ${dateLabel} CT`,
+    ...extraDetailRows(params).map((row) => `${row.label}: ${row.value}`),
+    "",
+    "Questions about this payment? Just reply to this email.",
     "",
     "— LeadSmart",
   ].join("\n");
