@@ -410,6 +410,31 @@ function parseNumber(value: unknown): number {
   return Number.isNaN(num) ? 0 : num;
 }
 
+/**
+ * First present numeric field among `keys`, or null when none is usable.
+ *
+ * CPL detection MUST distinguish "amount is genuinely zero" from "Ringba did
+ * not return the column" — parseNumber() maps both to 0, which made every CPL
+ * group look unfinalized and pinned the CPL badge permanently (observed: 106
+ * affiliates still tagged for June, months after those amounts settled).
+ */
+function readOptionalNumber(
+  raw: Record<string, unknown>,
+  keys: string[]
+): number | null {
+  for (const key of keys) {
+    const value = raw[key];
+    if (value === null || value === undefined || value === "") {
+      continue;
+    }
+    const num = typeof value === "number" ? value : parseFloat(String(value));
+    if (!Number.isNaN(num)) {
+      return num;
+    }
+  }
+  return null;
+}
+
 function rowFromColumns(
   columns: Array<{ column?: string; name?: string; value?: unknown }>
 ): Record<string, unknown> {
@@ -492,7 +517,10 @@ function targetBuyerLabelFromRow(raw: Record<string, unknown>): string {
     raw.targetName ?? raw.TargetName ?? raw.target ?? ""
   ).trim();
   const buyer = String(raw.buyer ?? raw.Buyer ?? "").trim();
-  return [target, buyer].filter(Boolean).join(" ");
+  // The CPL updater found that in this account the marker often lives in the
+  // campaign name rather than target/buyer, so scan it too when present.
+  const campaign = String(raw.campaignName ?? raw.CampaignName ?? "").trim();
+  return [target, buyer, campaign].filter(Boolean).join(" ");
 }
 
 function normalizePublisherRow(
@@ -529,8 +557,35 @@ function normalizePublisherRow(
  * amounts have been applied — either way, a fully-updated affiliate stops
  * tagging as CPL.
  */
-function collectCplPublisherKeys(rawRows: Record<string, unknown>[]): Set<string> {
+interface CplDetection {
+  /** Publishers whose CPL money is still unwritten — these get the CPL tag. */
+  keys: Set<string>;
+  /** CPL-target groups present in the response. */
+  cplGroups: number;
+  /** Of those, how many carried a usable amount, so we could actually judge. */
+  groupsWithAmount: number;
+}
+
+/**
+ * Publishers whose CPL calls are still UNFINALIZED (Ringba has written no
+ * money for them yet).
+ *
+ * The CPL updater writes payout and revenue together (batch rows go
+ * payout/revenue 0 → real amount in one action), so a CPL group still sitting
+ * at zero has nothing finalized. The moment any amount lands, the group
+ * reports non-zero and the tag clears on the next dashboard load.
+ *
+ * A group with NO usable amount field is treated as UNKNOWN and never tags.
+ * Inferring "unfinalized" from a missing column is exactly what made the badge
+ * permanent, so absence of evidence must not become evidence of pending.
+ */
+export function collectCplPublisherKeys(
+  rawRows: Record<string, unknown>[]
+): CplDetection {
   const keys = new Set<string>();
+  let cplGroups = 0;
+  let groupsWithAmount = 0;
+
   for (const raw of rawRows) {
     if (!isCplTargetLabel(targetBuyerLabelFromRow(raw))) {
       continue;
@@ -538,9 +593,25 @@ function collectCplPublisherKeys(rawRows: Record<string, unknown>[]): Set<string
     if (parseNumber(raw.callCount) <= 0) {
       continue;
     }
-    if (parseNumber(raw.conversionAmount) !== 0) {
+    cplGroups += 1;
+
+    // payoutAmount is the money column the insights endpoint is known to
+    // return for this account (the main payout query relies on it, and the
+    // dashboard renders it). conversionAmount is preferred when present.
+    const amount = readOptionalNumber(raw, [
+      "conversionAmount",
+      "ConversionAmount",
+      "payoutAmount",
+      "PayoutAmount",
+    ]);
+    if (amount === null) {
       continue;
     }
+    groupsWithAmount += 1;
+    if (amount !== 0) {
+      continue;
+    }
+
     const publisherName = String(
       raw.publisherName ?? raw.PublisherName ?? raw.publisher ?? ""
     ).trim();
@@ -549,7 +620,8 @@ function collectCplPublisherKeys(rawRows: Record<string, unknown>[]): Set<string
     }
     keys.add(normalizePublisherName(publisherName));
   }
-  return keys;
+
+  return { keys, cplGroups, groupsWithAmount };
 }
 
 const CPL_DETECTION_WINDOW_DAYS = 7;
@@ -618,28 +690,15 @@ export async function fetchPublisherPayouts(
       { column: "publisherName", displayName: "Publisher" },
       { column: "targetName", displayName: "Target" },
     ],
+    // Money per CPL group so collectCplPublisherKeys can tell finalized from
+    // pending. No server-side amount filter: this endpoint rejected one (which
+    // silently dropped us into a fallback that tagged every CPL publisher),
+    // and the local check does the job without depending on filter support.
     valueColumns: [
       { column: "callCount", aggregateFunction: null },
-      { column: "conversionAmount", aggregateFunction: null },
+      { column: "payoutAmount", aggregateFunction: null },
     ],
     orderByColumns: [{ column: "callCount", direction: "desc" }],
-    // Only calls whose conversion amount is still unset (0/null). Once the
-    // CPL updater writes real amounts, those calls drop out of this query and
-    // the affiliate's CPL tag clears. Same documented filter shape the
-    // calllogs endpoint uses; collectCplPublisherKeys re-checks the amount
-    // locally in case the filter is ever ignored.
-    filters: [
-      {
-        anyConditionToMatch: [
-          {
-            column: "conversionAmount",
-            value: "0",
-            isNegativeMatch: false,
-            comparisonType: "EQUALS",
-          },
-        ],
-      },
-    ],
   };
 
   let payoutResponse;
@@ -664,43 +723,33 @@ export async function fetchPublisherPayouts(
       `/${accountId}/insights`,
       cplBody
     );
-    cplPublisherKeys = collectCplPublisherKeys(extractRawRows(cplResponse.data));
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
+    const detection = collectCplPublisherKeys(extractRawRows(cplResponse.data));
+    cplPublisherKeys = detection.keys;
+
+    if (detection.cplGroups > 0 && detection.groupsWithAmount === 0) {
+      // The amount column stopped coming back. Tag nobody rather than
+      // everybody — this is the exact condition that pinned the badge before.
       console.warn(
-        "[PaymentAgent] Filtered CPL insights failed — retrying legacy unfiltered query:",
-        JSON.stringify(error.response?.data, null, 2)
+        "[PaymentAgent] CPL detection: %d CPL group(s) returned no payout/conversion amount — cannot tell finalized from pending, so tagging nobody. Check the insights valueColumns.",
+        detection.cplGroups
       );
-      // Conservative fallback: the pre-filter query (every CPL-target
-      // publisher tags, regardless of amounts). Over-tagging holds money;
-      // under-tagging could pay an un-finalized $0 CPL affiliate early.
-      try {
-        const legacyBody = {
-          ...cplBody,
-          valueColumns: [{ column: "callCount", aggregateFunction: null }],
-          filters: [] as unknown[],
-        };
-        const legacyResponse = await client.post<unknown>(
-          `/${accountId}/insights`,
-          legacyBody
-        );
-        cplPublisherKeys = collectCplPublisherKeys(
-          extractRawRows(legacyResponse.data)
-        );
-      } catch (legacyError) {
-        console.warn(
-          "[PaymentAgent] Legacy CPL insights also failed — continuing without CPL flags:",
-          axios.isAxiosError(legacyError)
-            ? JSON.stringify(legacyError.response?.data, null, 2)
-            : legacyError
-        );
-      }
     } else {
-      console.warn(
-        "[PaymentAgent] Ringba CPL target insights failed — continuing without CPL flags:",
-        error
+      console.log(
+        "[PaymentAgent] CPL detection: %d CPL group(s), %d with amounts, %d publisher(s) still pending",
+        detection.cplGroups,
+        detection.groupsWithAmount,
+        cplPublisherKeys.size
       );
     }
+  } catch (error) {
+    // Never blanket-tag on failure: doing that is what held affiliates whose
+    // CPL amounts had long since been written.
+    console.warn(
+      "[PaymentAgent] CPL insights failed — continuing without CPL flags:",
+      axios.isAxiosError(error)
+        ? JSON.stringify(error.response?.data, null, 2)
+        : error
+    );
   }
 
   const rows = extractRawRows(payoutResponse.data)
