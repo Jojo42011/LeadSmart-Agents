@@ -1225,7 +1225,8 @@ interface PaymentConfirmationExtras {
   wise?: {
     transferId?: number;
     recipientId?: number | null;
-    targetAmount?: number;
+    /** null when Wise reported no converted amount — the email omits the line. */
+    targetAmount?: number | null;
     targetCurrency?: string;
   };
   billcom?: {
@@ -2186,7 +2187,7 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
     });
 
     console.log(
-      `[Payment] Wise pay success: ${publisherName} transferId=${payout.transferId} amount=${amount} USD → ${payout.targetAmount} ${payout.targetCurrency}`
+      `[Payment] Wise pay success: ${publisherName} transferId=${payout.transferId} amount=${amount} USD → ${payout.targetAmount ?? "unknown"} ${payout.targetCurrency}`
     );
 
     res.json({
@@ -2450,7 +2451,7 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
     publisherName: string;
     transferId: number;
     amount: number;
-    targetAmount: number;
+    targetAmount: number | null;
     targetCurrency: string;
     meta: AffiliateMetadata;
     target: WisePayoutTarget | { contactId: string; resolvedVia: "contact" };
