@@ -551,6 +551,58 @@ function normalizePublisherRow(
   };
 }
 
+/**
+ * publisher name → Ringba publisher record id, for the reporting window.
+ *
+ * Deliberately a SEPARATE lookup rather than a grouping on the money query:
+ * an id-grouped money query omits publishers whose id is null, which silently
+ * drops them (and their payout) from the dashboard. Here a missing row only
+ * costs us the ability to fold a rename, never the affiliate or their money.
+ * Failure is non-fatal — no ids simply means no folding.
+ */
+async function fetchPublisherIdByName(
+  client: AxiosInstance,
+  accountId: string,
+  baseBody: ReturnType<typeof ringbaInsightsBaseBody>
+): Promise<Map<string, string>> {
+  const byName = new Map<string, string>();
+  try {
+    const res = await client.post<unknown>(`/${accountId}/insights`, {
+      ...baseBody,
+      groupByColumns: [
+        { column: "publisherId", displayName: "Publisher ID" },
+        { column: "publisherName", displayName: "Publisher" },
+      ],
+      valueColumns: [{ column: "callCount", aggregateFunction: null }],
+      orderByColumns: [{ column: "callCount", direction: "desc" }],
+    });
+
+    for (const raw of extractRawRows(res.data)) {
+      const name = String(
+        raw.publisherName ?? raw.PublisherName ?? raw.publisher ?? ""
+      ).trim();
+      const id = String(
+        raw.publisherId ?? raw.PublisherId ?? raw.publisherID ?? ""
+      ).trim();
+      if (name && id) {
+        byName.set(normalizePublisherName(name), id);
+      }
+    }
+    console.log(
+      "[PaymentAgent] publisher id lookup: %d name(s) resolved",
+      byName.size
+    );
+  } catch (error) {
+    console.warn(
+      "[PaymentAgent] publisherId lookup unavailable — mid-period renames will stay split:",
+      axios.isAxiosError(error)
+        ? JSON.stringify(error.response?.data, null, 2)
+        : error
+    );
+  }
+  return byName;
+}
+
 /** Normalized publisher names that already carry a real payment method. */
 function publishersWithPaymentMetadata(): Set<string> {
   const tagged = new Set<string>();
@@ -809,44 +861,32 @@ export async function fetchPublisherPayouts(
     orderByColumns: [{ column: "callCount", direction: "desc" }],
   };
 
-  // Group by the publisher RECORD id as well as the name, so an affiliate
-  // renamed mid-period can be recognised as one publisher instead of two.
-  const payoutBodyWithId = {
-    ...payoutBody,
-    groupByColumns: [
-      { column: "publisherId", displayName: "Publisher ID" },
-      { column: "publisherName", displayName: "Publisher" },
-    ],
-  };
-
+  // The name-grouped query stays the authoritative row set. Grouping the money
+  // query by publisherId instead would DROP any publisher whose id is null —
+  // observed live: three publishers with 66/79/7 calls and $895 between them
+  // disappeared from the dashboard entirely, which would mean never paying
+  // them. Identity is resolved separately below.
   let payoutResponse;
   try {
     payoutResponse = await client.post<unknown>(
       `/${accountId}/insights`,
-      payoutBodyWithId
+      payoutBody
     );
   } catch (error) {
-    if (axios.isAxiosError(error) && error.response?.status === 400) {
-      // Fail safe to exactly today's behaviour: name-only grouping still
-      // returns every publisher, renames just stay split across two rows.
-      console.warn(
-        "[PaymentAgent] insights rejected publisherId grouping — falling back to name-only (mid-period renames will show as separate rows):",
+    if (axios.isAxiosError(error)) {
+      console.error(
+        "[PaymentAgent] Ringba insights error response:",
         JSON.stringify(error.response?.data, null, 2)
       );
-      payoutResponse = await client.post<unknown>(
-        `/${accountId}/insights`,
-        payoutBody
-      );
-    } else {
-      if (axios.isAxiosError(error)) {
-        console.error(
-          "[PaymentAgent] Ringba insights error response:",
-          JSON.stringify(error.response?.data, null, 2)
-        );
-      }
-      throw error;
     }
+    throw error;
   }
+
+  const publisherIdByName = await fetchPublisherIdByName(
+    client,
+    accountId,
+    baseBody
+  );
 
   let cplPublisherKeys = new Set<string>();
   try {
@@ -887,10 +927,13 @@ export async function fetchPublisherPayouts(
     .map(normalizePublisherRow)
     .filter((row): row is PublisherPayoutRow => row !== null)
     .map((row) => {
-      if (!cplPublisherKeys.has(normalizePublisherName(row.publisherName))) {
-        return row;
+      const key = normalizePublisherName(row.publisherName);
+      const publisherId = publisherIdByName.get(key);
+      const withId = publisherId ? { ...row, publisherId } : row;
+      if (!cplPublisherKeys.has(key)) {
+        return withId;
       }
-      return { ...row, cplAffiliate: true as const };
+      return { ...withId, cplAffiliate: true as const };
     });
 
   // CPL flags are applied per name first, then folded together, so a rename
