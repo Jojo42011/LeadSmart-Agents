@@ -829,6 +829,22 @@ function cplDetectionWindow(
   return { start: new Date(windowStartMs).toISOString(), end: endDate };
 }
 
+/**
+ * Row cap for insights queries.
+ *
+ * This sat at 1,000 while the account carries ~1,101 publishers, and the money
+ * query orders by payout descending — so it returned exactly 1,000 rows and
+ * the ~100 SMALLEST payouts were silently truncated. Those affiliates simply
+ * never appeared on the payment dashboard and so were never paid (observed:
+ * Mudasser Abbas $514.49, Mazhar Hussain2 $204.77, Toseef Nawaz $175.93 all
+ * vanished once the publisher count crossed the cap). Headroom matters more
+ * than response size here; tunable via RINGBA_INSIGHTS_MAX_ROWS.
+ */
+function insightsMaxResultsPerGroup(): number {
+  const raw = parseInt(process.env.RINGBA_INSIGHTS_MAX_ROWS ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 10000;
+}
+
 function ringbaInsightsBaseBody(startDate: string, endDate: string) {
   return {
     reportStart: startDate,
@@ -836,7 +852,7 @@ function ringbaInsightsBaseBody(startDate: string, endDate: string) {
     formatTimespans: true,
     formatPercentages: true,
     generateRollups: true,
-    maxResultsPerGroup: 1000,
+    maxResultsPerGroup: insightsMaxResultsPerGroup(),
     filters: [] as unknown[],
     formatTimeZone: "America/Chicago",
   };
@@ -1035,7 +1051,9 @@ export async function fetchPublisherProfitData(
     formatTimespans: true,
     formatPercentages: true,
     generateRollups: true,
-    maxResultsPerGroup: 1000,
+    // Same truncation risk as the payout query — the publisher profit view
+    // would quietly lose its tail once the account passes the cap.
+    maxResultsPerGroup: insightsMaxResultsPerGroup(),
     filters: [],
     formatTimeZone: "America/Chicago",
   };
