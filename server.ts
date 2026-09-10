@@ -23,6 +23,7 @@ import { importDatabaseFile } from "./lib/importDatabase";
 import { triggerPollNow } from "./lib/pollScheduler";
 import {
   fetchPublisherPayouts,
+  getLastPayoutFetchStats,
   fetchPolyaresPayouts,
   fetchPublisherProfitData,
   mergeAffiliates,
@@ -782,6 +783,9 @@ app.get("/api/payment/stats/all", async (req, res) => {
       heldUntil: hold.heldUntil || null,
       publishers: publishersWithCpl,
       outliers,
+      // Proof that folding renames never loses a publisher:
+      // ringbaRowsFetched - rowsFoldedAway must equal rowsReturned.
+      payoutFetch: getLastPayoutFetchStats(),
     });
   } catch (err) {
     res.status(500).json({

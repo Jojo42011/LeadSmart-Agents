@@ -551,6 +551,30 @@ function normalizePublisherRow(
   };
 }
 
+export interface PayoutFetchStats {
+  /** Publisher rows Ringba returned for the money query. */
+  ringbaRowsFetched: number;
+  /** Rows after folding renames — fetched minus rowsFoldedAway must equal this. */
+  rowsReturned: number;
+  /** Rows absorbed into another row because they share a publisher record. */
+  rowsFoldedAway: number;
+  /** Names the id lookup could resolve (0 = folding disabled this run). */
+  idsResolved: number;
+  at: string;
+}
+
+let lastPayoutFetchStats: PayoutFetchStats | null = null;
+
+/**
+ * Counts from the most recent payout fetch. Surfaced on /api/payment/stats/all
+ * so it can be verified from outside that no publisher is silently dropped —
+ * an id-grouped money query once removed three affiliates and their $895
+ * without a trace, and theory alone could not rule that out afterwards.
+ */
+export function getLastPayoutFetchStats(): PayoutFetchStats | null {
+  return lastPayoutFetchStats;
+}
+
 /**
  * publisher name → Ringba publisher record id, for the reporting window.
  *
@@ -939,6 +963,21 @@ export async function fetchPublisherPayouts(
   // CPL flags are applied per name first, then folded together, so a rename
   // cannot drop the flag when it was only recorded under the other name.
   const rows = mergeRenamedPublishers(tagged);
+
+  lastPayoutFetchStats = {
+    ringbaRowsFetched: tagged.length,
+    rowsReturned: rows.length,
+    rowsFoldedAway: tagged.length - rows.length,
+    idsResolved: publisherIdByName.size,
+    at: new Date().toISOString(),
+  };
+  console.log(
+    "[PaymentAgent] payout rows: %d fetched, %d folded as renames, %d returned (%d ids resolved)",
+    tagged.length,
+    tagged.length - rows.length,
+    rows.length,
+    publisherIdByName.size
+  );
 
   rows.sort((a, b) => b.payoutAmount - a.payoutAmount);
 
