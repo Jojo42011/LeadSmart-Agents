@@ -99,10 +99,16 @@ export interface WiseRecipient {
 export interface WiseQuote {
   id: string;
   sourceAmount: number;
-  targetAmount: number;
+  /**
+   * What actually lands in the recipient's currency. null when Wise did not
+   * return a usable figure — deliberately NOT the USD source amount, because
+   * a fallback there renders as "100 INR" on a $100 payout.
+   */
+  targetAmount: number | null;
   sourceCurrency: string;
   targetCurrency: string;
-  rate: number;
+  /** Quote FX rate, or null when Wise omitted it (never a fabricated 1). */
+  rate: number | null;
   targetAccount?: number;
 }
 
@@ -319,19 +325,134 @@ function readNumber(obj: Record<string, unknown>, key: string): number | null {
   return typeof value === "number" ? value : null;
 }
 
-function parseQuoteRow(row: Record<string, unknown>, fallbackAmount: number): WiseQuote {
+/** Numbers Wise may send as JSON numbers or numeric strings. */
+function readFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+/**
+ * The converted amount for the pay-in method we actually use.
+ *
+ * Wise prices each pay-in option separately (fees differ), so the amount that
+ * lands depends on how the transfer is funded. LeadSmart always funds from the
+ * Wise balance, so the BALANCE option is the truth; the top-level targetAmount
+ * is only a default and, for source-amount quotes, is frequently absent.
+ */
+function targetAmountFromPaymentOptions(
+  row: Record<string, unknown>,
+  targetCurrency: string,
+  preferredPayIn: string
+): number | null {
+  const options = Array.isArray(row.paymentOptions) ? row.paymentOptions : [];
+  const candidates: Array<{ payIn: string; amount: number }> = [];
+
+  for (const item of options) {
+    const option = asRecord(item);
+    if (!option || option.disabled === true) {
+      continue;
+    }
+    const optionCurrency = readString(option, "targetCurrency");
+    if (
+      optionCurrency &&
+      optionCurrency.toUpperCase() !== targetCurrency.toUpperCase()
+    ) {
+      continue;
+    }
+    const amount = readFiniteNumber(option.targetAmount);
+    if (amount === null || amount <= 0) {
+      continue;
+    }
+    candidates.push({
+      payIn: (readString(option, "payIn") ?? "").toUpperCase(),
+      amount,
+    });
+  }
+
+  if (candidates.length === 0) {
+    return null;
+  }
+  const preferred = candidates.find(
+    (candidate) => candidate.payIn === preferredPayIn.toUpperCase()
+  );
+  return (preferred ?? candidates[0]).amount;
+}
+
+export interface WiseQuoteRequestContext {
+  sourceAmount: number;
+  targetCurrency: string;
+  preferredPayIn: string;
+}
+
+/**
+ * Parse a Wise quote response.
+ *
+ * The one rule that matters here: the converted amount is either read from the
+ * response or reported as null. It is never defaulted to the USD source
+ * amount — that fallback is what produced confirmation emails telling
+ * affiliates a $100 payout would arrive as "100 INR".
+ */
+export function parseWiseQuoteRow(
+  row: Record<string, unknown>,
+  request: WiseQuoteRequestContext
+): WiseQuote {
   const id = readString(row, "id");
   if (!id) {
     throw new Error("Wise quote response missing id");
   }
 
+  const sourceCurrency = readString(row, "sourceCurrency") ?? "USD";
+  const targetCurrency =
+    readString(row, "targetCurrency") ?? request.targetCurrency ?? "USD";
+  const sourceAmount =
+    readFiniteNumber(row.sourceAmount) ?? request.sourceAmount;
+  const isConverted =
+    sourceCurrency.toUpperCase() !== targetCurrency.toUpperCase();
+
+  let targetAmount =
+    targetAmountFromPaymentOptions(row, targetCurrency, request.preferredPayIn) ??
+    readFiniteNumber(row.targetAmount);
+
+  if (targetAmount !== null && targetAmount <= 0) {
+    targetAmount = null;
+  }
+
+  // A cross-currency quote whose target equals its source is an echo, not a
+  // conversion. Drop it: an omitted figure is harmless, a wrong one is not.
+  if (isConverted && targetAmount !== null && targetAmount === sourceAmount) {
+    console.warn(
+      "[Wise] Quote %s returned %s %s → %s %s (1:1) — treating converted amount as unknown",
+      id,
+      sourceAmount,
+      sourceCurrency,
+      targetAmount,
+      targetCurrency
+    );
+    targetAmount = null;
+  }
+
+  if (isConverted && targetAmount === null) {
+    console.warn(
+      "[Wise] Quote %s (%s → %s) exposed no converted amount — confirmation will omit it",
+      id,
+      sourceCurrency,
+      targetCurrency
+    );
+  }
+
   return {
     id,
-    sourceAmount: readNumber(row, "sourceAmount") ?? fallbackAmount,
-    targetAmount: readNumber(row, "targetAmount") ?? fallbackAmount,
-    sourceCurrency: readString(row, "sourceCurrency") ?? "USD",
-    targetCurrency: readString(row, "targetCurrency") ?? "USD",
-    rate: readNumber(row, "rate") ?? 1,
+    sourceAmount,
+    targetAmount,
+    sourceCurrency,
+    targetCurrency,
+    rate: readFiniteNumber(row.rate),
     targetAccount: readNumber(row, "targetAccount") ?? undefined,
   };
 }
@@ -571,11 +692,12 @@ export async function createQuote(
 ): Promise<WiseQuote> {
   return runWiseStep("quote create", async () => {
     const client = createWiseClient();
+    const preferredPayIn = "BALANCE";
     const body: Record<string, unknown> = {
       sourceCurrency: "USD",
       targetCurrency,
       sourceAmount: amount,
-      preferredPayIn: "BALANCE",
+      preferredPayIn,
     };
 
     if (options?.contactId) {
@@ -591,7 +713,11 @@ export async function createQuote(
       throw new Error("Wise quote response was empty");
     }
 
-    return parseQuoteRow(row, amount);
+    return parseWiseQuoteRow(row, {
+      sourceAmount: amount,
+      targetCurrency,
+      preferredPayIn,
+    });
   });
 }
 
@@ -841,6 +967,15 @@ function normalizePayoutTarget(
   return target;
 }
 
+export interface WiseTransferResult {
+  transferId: number;
+  quoteId: string;
+  targetCurrency: string;
+  /** Converted amount, or null when Wise did not report one. */
+  targetAmount: number | null;
+  rate: number | null;
+}
+
 /** Create quote + transfer without funding (for bulk pay batching). */
 export async function prepareWiseTransfer(
   profileId: string,
@@ -850,13 +985,7 @@ export async function prepareWiseTransfer(
     | { contactId: string; resolvedVia: "contact" }
     | { recipientId: number },
   reference = DEFAULT_WISE_TRANSFER_REFERENCE
-): Promise<{
-  transferId: number;
-  quoteId: string;
-  targetCurrency: string;
-  targetAmount: number;
-  rate: number;
-}> {
+): Promise<WiseTransferResult> {
   const normalizedTarget = normalizePayoutTarget(target);
   const { quote, targetAccountId } = await targetAccountFromQuote(
     profileId,
@@ -869,9 +998,9 @@ export async function prepareWiseTransfer(
     quote.id,
     quote.sourceAmount,
     quote.sourceCurrency,
-    quote.targetAmount,
+    quote.targetAmount ?? "unknown",
     quote.targetCurrency,
-    quote.rate
+    quote.rate ?? "unknown"
   );
   const transfer = await createTransfer(
     quote.id,
@@ -904,13 +1033,7 @@ export async function executeWisePayout(
     | { contactId: string; resolvedVia: "contact" }
     | { recipientId: number },
   reference = DEFAULT_WISE_TRANSFER_REFERENCE
-): Promise<{
-  transferId: number;
-  quoteId: string;
-  targetCurrency: string;
-  targetAmount: number;
-  rate: number;
-}> {
+): Promise<WiseTransferResult> {
   const prepared = await prepareWiseTransfer(profileId, amount, target, reference);
   await fundTransfer(profileId, prepared.transferId);
   return prepared;

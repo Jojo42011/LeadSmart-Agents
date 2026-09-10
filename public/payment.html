@@ -3312,7 +3312,14 @@
             setBanner(null, null);
             const conversion =
               data.targetCurrency && data.targetCurrency !== "USD" && data.targetAmount
-                ? " (≈ " + Number(data.targetAmount).toLocaleString() + " " + data.targetCurrency + ")"
+                ? " (≈ " +
+                  Number(data.targetAmount).toLocaleString("en-US", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }) +
+                  " " +
+                  data.targetCurrency +
+                  ")"
                 : "";
             showPaymentToast(
               "Paid " + publisherName + " " + formatMoney(amount) + conversion,

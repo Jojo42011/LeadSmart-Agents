@@ -124,15 +124,44 @@ function formatArrivalDate(value: string): string | null {
   }).format(date);
 }
 
+/**
+ * "INR 8,290.86" — the ISO code leads so nothing reads as a dollar sign in a
+ * currency that isn't dollars. Exotic/unknown codes fall back to a plain
+ * number plus the code rather than throwing.
+ */
+function formatCurrencyAmount(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      currencyDisplay: "code",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${amount.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })} ${currency}`;
+  }
+}
+
 function formatTargetAmount(params: PaymentConfirmationParams): string | null {
   const currency = params.targetCurrency?.trim().toUpperCase();
   if (!currency || currency === "USD") {
     return null;
   }
-  if (typeof params.targetAmount !== "number" || params.targetAmount <= 0) {
+  const amount = params.targetAmount;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
     return null;
   }
-  return `≈ ${params.targetAmount.toLocaleString("en-US")} ${currency}`;
+  // Last line of defence: a foreign-currency figure identical to the USD
+  // amount is an un-converted echo, not a conversion. Say nothing rather than
+  // tell an affiliate their $100 payout arrives as "100 INR".
+  if (amount === params.amount) {
+    return null;
+  }
+  return `≈ ${formatCurrencyAmount(amount, currency)}`;
 }
 
 /** Extra label/value rows, included only when the data is actually known. */
@@ -140,9 +169,17 @@ function extraDetailRows(
   params: PaymentConfirmationParams
 ): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
+  const currency = params.targetCurrency?.trim().toUpperCase();
   const converted = formatTargetAmount(params);
   if (converted) {
     rows.push({ label: "You'll receive", value: converted });
+  } else if (currency && currency !== "USD") {
+    // The payout currency is known but the converted figure is not. Name the
+    // currency so the affiliate isn't surprised, without inventing an amount.
+    rows.push({
+      label: "You'll receive",
+      value: `${currency} at Wise's exchange rate on the day of transfer`,
+    });
   }
   if (params.expectedArrival) {
     const arrival = formatArrivalDate(params.expectedArrival);
@@ -305,4 +342,14 @@ export async function sendPaymentConfirmationEmail(
     text: buildTextBody(params),
     html: buildHtmlBody(params),
   });
+}
+
+/**
+ * Render the confirmation bodies without sending — used by
+ * scripts/checkWiseQuoteParsing.ts to assert what affiliates actually read.
+ */
+export function renderPaymentConfirmationForTest(
+  params: PaymentConfirmationParams
+): { text: string; html: string } {
+  return { text: buildTextBody(params), html: buildHtmlBody(params) };
 }
