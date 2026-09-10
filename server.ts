@@ -1541,10 +1541,18 @@ app.get("/api/payment/unpaid-all", async (req, res) => {
       Math.max(1, Number.isFinite(lookbackRaw) ? lookbackRaw : DEFAULT_UNPAID_LOOKBACK_MONTHS)
     );
 
-    const monthKeys = previousMonthKeys(lookback);
+    // ?month=YYYY-MM scopes the view to the month the dashboard is showing.
+    // Without it this still sweeps the full lookback (the historical view).
+    const monthParam =
+      typeof req.query.month === "string" && /^\d{4}-\d{2}$/.test(req.query.month.trim())
+        ? req.query.month.trim()
+        : null;
+
+    const monthKeys = monthParam ? [monthParam] : previousMonthKeys(lookback);
     const byPublisher = new Map<string, UnpaidAffiliateEntry>();
     const scannedMonths: string[] = [];
     const failedMonths: string[] = [];
+    let paidTotal = 0;
 
     // Sequential to avoid opening many concurrent Polyares logins / Ringba calls.
     for (const monthKey of monthKeys) {
@@ -1563,7 +1571,10 @@ app.get("/api/payment/unpaid-all", async (req, res) => {
 
       for (const row of publishers) {
         if (row.totalAmount <= 0) continue;
-        if (isAffiliatePaidForMonth(row.publisherName, monthKey)) continue;
+        if (isAffiliatePaidForMonth(row.publisherName, monthKey)) {
+          paidTotal += row.totalAmount;
+          continue;
+        }
 
         const entry =
           byPublisher.get(row.publisherName) ?? {
@@ -1590,9 +1601,11 @@ app.get("/api/payment/unpaid-all", async (req, res) => {
 
     res.json({
       generatedAt: new Date().toISOString(),
-      excludedMonth: monthToDateRange().month,
-      lookbackMonths: lookback,
+      month: monthParam,
+      excludedMonth: monthParam ? null : monthToDateRange().month,
+      lookbackMonths: monthParam ? 1 : lookback,
       minAmount,
+      totalPaid: Math.round(paidTotal * 100) / 100,
       monthsScanned: scannedMonths,
       monthsFailed: failedMonths,
       totalAffiliates: affiliates.length,

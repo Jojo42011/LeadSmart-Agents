@@ -27,6 +27,8 @@ export interface PublisherPayoutRow {
   cplAffiliate?: boolean;
   /** Stable affiliate ID from the Polyares CSV "Source" column (e.g. safderygd1). */
   polyaresId?: string;
+  /** Ringba's publisher record ID (AF…). Identity survives a name change. */
+  publisherId?: string;
 }
 
 export interface PublisherProfitRow {
@@ -534,6 +536,10 @@ function normalizePublisherRow(
     return null;
   }
 
+  const publisherId = String(
+    raw.publisherId ?? raw.PublisherId ?? raw.publisherID ?? ""
+  ).trim();
+
   return {
     publisherName,
     payoutAmount: parseNumber(raw.payoutAmount),
@@ -541,7 +547,109 @@ function normalizePublisherRow(
     callCount: parseNumber(raw.callCount),
     convertedCalls: parseNumber(raw.convertedCalls),
     completedCalls: parseNumber(raw.completedCalls),
+    ...(publisherId ? { publisherId } : {}),
   };
+}
+
+/** Normalized publisher names that already carry a real payment method. */
+function publishersWithPaymentMetadata(): Set<string> {
+  const tagged = new Set<string>();
+  try {
+    for (const [publisherName, meta] of Object.entries(getAllAffiliateMetadata())) {
+      if (meta.paymentMethod && meta.paymentMethod !== "Untagged") {
+        tagged.add(normalizePublisherName(publisherName));
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[PaymentAgent] Could not load metadata for rename merge — falling back to call volume:",
+      err instanceof Error ? err.message : err
+    );
+  }
+  return tagged;
+}
+
+/**
+ * Of several names for one Ringba publisher record, the one to keep.
+ *
+ * Payment method, Wise/Bill.com IDs and paid-status all key off the publisher
+ * NAME, so a rename must land on the name that already carries that metadata —
+ * otherwise the affiliate would surface as Untagged and become unpayable.
+ * Falls back to the busiest variant when neither name is tagged.
+ */
+function pickCanonicalRow(
+  group: PublisherPayoutRow[],
+  taggedNames: Set<string>
+): PublisherPayoutRow {
+  const tagged = group.filter((row) =>
+    taggedNames.has(normalizePublisherName(row.publisherName))
+  );
+  const pool = tagged.length > 0 ? tagged : group;
+  return [...pool].sort(
+    (a, b) => (b.callCount ?? 0) - (a.callCount ?? 0)
+  )[0];
+}
+
+/**
+ * Collapses rows that are the SAME Ringba publisher record seen under more
+ * than one name — what happens when an affiliate is renamed mid-period, which
+ * otherwise splits their calls and money across two dashboard rows.
+ *
+ * Merging is keyed strictly on Ringba's publisherId. Names are never used:
+ * dozens of genuinely separate affiliates share a base name and differ only by
+ * a traffic tag ("Syed Hamza Farooq - GMB" vs "- Marketplace"), and combining
+ * those would pay one affiliate another's money. Rows without an id are passed
+ * through untouched.
+ */
+export function mergeRenamedPublishers(
+  rows: PublisherPayoutRow[],
+  taggedNames: Set<string> = publishersWithPaymentMetadata()
+): PublisherPayoutRow[] {
+  const byId = new Map<string, PublisherPayoutRow[]>();
+  const merged: PublisherPayoutRow[] = [];
+
+  for (const row of rows) {
+    const id = (row.publisherId ?? "").trim();
+    if (!id) {
+      merged.push(row);
+      continue;
+    }
+    const group = byId.get(id);
+    if (group) {
+      group.push(row);
+    } else {
+      byId.set(id, [row]);
+    }
+  }
+
+  for (const [publisherId, group] of byId) {
+    if (group.length === 1) {
+      merged.push(group[0]);
+      continue;
+    }
+
+    const canonical = pickCanonicalRow(group, taggedNames);
+    const sum = (pick: (row: PublisherPayoutRow) => number | undefined) =>
+      group.reduce((total, row) => total + (pick(row) ?? 0), 0);
+
+    merged.push({
+      ...canonical,
+      payoutAmount: sum((row) => row.payoutAmount),
+      callCount: sum((row) => row.callCount),
+      convertedCalls: sum((row) => row.convertedCalls),
+      completedCalls: sum((row) => row.completedCalls),
+      ...(group.some((row) => row.cplAffiliate) ? { cplAffiliate: true as const } : {}),
+    });
+
+    console.log(
+      "[PaymentAgent] Renamed publisher %s: merged [%s] into %s",
+      publisherId,
+      group.map((row) => row.publisherName).join(" | "),
+      canonical.publisherName
+    );
+  }
+
+  return merged;
 }
 
 /**
@@ -701,20 +809,43 @@ export async function fetchPublisherPayouts(
     orderByColumns: [{ column: "callCount", direction: "desc" }],
   };
 
+  // Group by the publisher RECORD id as well as the name, so an affiliate
+  // renamed mid-period can be recognised as one publisher instead of two.
+  const payoutBodyWithId = {
+    ...payoutBody,
+    groupByColumns: [
+      { column: "publisherId", displayName: "Publisher ID" },
+      { column: "publisherName", displayName: "Publisher" },
+    ],
+  };
+
   let payoutResponse;
   try {
     payoutResponse = await client.post<unknown>(
       `/${accountId}/insights`,
-      payoutBody
+      payoutBodyWithId
     );
   } catch (error) {
-    if (axios.isAxiosError(error)) {
-      console.error(
-        "[PaymentAgent] Ringba insights error response:",
+    if (axios.isAxiosError(error) && error.response?.status === 400) {
+      // Fail safe to exactly today's behaviour: name-only grouping still
+      // returns every publisher, renames just stay split across two rows.
+      console.warn(
+        "[PaymentAgent] insights rejected publisherId grouping — falling back to name-only (mid-period renames will show as separate rows):",
         JSON.stringify(error.response?.data, null, 2)
       );
+      payoutResponse = await client.post<unknown>(
+        `/${accountId}/insights`,
+        payoutBody
+      );
+    } else {
+      if (axios.isAxiosError(error)) {
+        console.error(
+          "[PaymentAgent] Ringba insights error response:",
+          JSON.stringify(error.response?.data, null, 2)
+        );
+      }
+      throw error;
     }
-    throw error;
   }
 
   let cplPublisherKeys = new Set<string>();
@@ -752,7 +883,7 @@ export async function fetchPublisherPayouts(
     );
   }
 
-  const rows = extractRawRows(payoutResponse.data)
+  const tagged = extractRawRows(payoutResponse.data)
     .map(normalizePublisherRow)
     .filter((row): row is PublisherPayoutRow => row !== null)
     .map((row) => {
@@ -761,6 +892,10 @@ export async function fetchPublisherPayouts(
       }
       return { ...row, cplAffiliate: true as const };
     });
+
+  // CPL flags are applied per name first, then folded together, so a rename
+  // cannot drop the flag when it was only recorded under the other name.
+  const rows = mergeRenamedPublishers(tagged);
 
   rows.sort((a, b) => b.payoutAmount - a.payoutAmount);
 

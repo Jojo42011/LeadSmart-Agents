@@ -1387,7 +1387,7 @@
             <button type="button" class="source-filter" data-source="POLYERAS">POLYERAS</button>
             <button type="button" class="source-filter" data-source="BOTH">BOTH</button>
             <button type="button" class="source-filter" data-source="CPL">CPL</button>
-            <button type="button" class="source-filter" data-source="UNPAID_ALL" title="All unpaid earnings across past months (excludes current month)">ALL UNPAID</button>
+            <button type="button" class="source-filter" data-source="UNPAID_ALL" title="Unpaid earnings for the selected month, with that month's paid total">ALL UNPAID</button>
             <button type="button" class="source-filter" data-source="PROFIT">PUBLISHER PROFIT</button>
           </div>
           <div class="source-filters payment-status-filters" id="paymentStatusFilters">
@@ -4490,6 +4490,13 @@
         profitDataMonth = null;
         selectedRowIndex = -1;
         currentPage = 1;
+        // ALL UNPAID is scoped to the selected month, so it has to recompile
+        // rather than fall through to the normal per-period fetch.
+        if (isUnpaidAllView()) {
+          unpaidAllLoaded = false;
+          await loadUnpaidAll();
+          return;
+        }
         await fetchStats();
         if (isProfitView()) {
           try {
@@ -4583,10 +4590,18 @@
       async function loadUnpaidAll() {
         if (isLoading) return;
         setLoading(true);
-        setBanner("loading", "Compiling all unpaid earnings across past months...");
+        // Scoped to the month the dashboard is showing — Missioner wants the
+        // selected month's paid/unpaid totals, not a 12-month sweep.
+        const unpaidMonth = monthSelect.value;
+        setBanner(
+          "loading",
+          "Compiling unpaid earnings for " + (unpaidMonth || "the selected month") + "..."
+        );
         setWarning(null);
         try {
-          const res = await fetch("/api/payment/unpaid-all");
+          const res = await fetch(
+            "/api/payment/unpaid-all?month=" + encodeURIComponent(unpaidMonth)
+          );
           const data = await res.json();
           if (!res.ok) {
             throw new Error(data.error || "Failed to compile unpaid earnings");
@@ -4611,17 +4626,24 @@
             polyareasTotalPayout: 0,
             grandTotalPayout: Number(data.totalUnpaid || 0),
           });
-          const scanned = Array.isArray(data.monthsScanned)
-            ? data.monthsScanned.length
-            : 0;
+          const scannedMonths = Array.isArray(data.monthsScanned)
+            ? data.monthsScanned
+            : [];
+          const scopeLabel = data.month
+            ? data.month
+            : scannedMonths.length +
+              " month(s), excl. " +
+              (data.excludedMonth || "current");
           lastUpdated.textContent =
             "Last updated: " +
             (data.generatedAt ? formatCstTimestamp(data.generatedAt) : "\u2014") +
-            (scanned
+            (scannedMonths.length
               ? " \u00b7 " +
-                scanned +
-                " month(s) scanned, excl. " +
-                (data.excludedMonth || "current") +
+                scopeLabel +
+                " \u00b7 paid " +
+                formatMoney(Number(data.totalPaid || 0)) +
+                " \u00b7 unpaid " +
+                formatMoney(Number(data.totalUnpaid || 0)) +
                 " \u00b7 min " +
                 formatMoney(data.minAmount)
               : "");
