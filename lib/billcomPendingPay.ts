@@ -13,6 +13,8 @@ export interface PendingBillcomPay {
   /** Period keys settled by this pay — YYYY-MM months, or Monday YYYY-MM-DD weeks. */
   months: string[];
   periodType?: "month" | "week";
+  /** Earnings per period key, carried through so the ledger can attribute the pay. */
+  earnedByPeriod?: Record<string, number> | null;
   createdAt: number;
 }
 

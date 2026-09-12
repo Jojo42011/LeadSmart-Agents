@@ -1368,15 +1368,15 @@
         <span class="badge badge--count" id="affiliateCount">Affiliates: —</span>
         <div class="stats-row">
           <div class="stat-box">
-            <div class="stat-box__label">Ringba</div>
+            <div class="stat-box__label" id="ringbaTotalLabel">Ringba</div>
             <div class="stat-box__value stat-box__value--green" id="ringbaTotal">$0.00</div>
           </div>
           <div class="stat-box">
-            <div class="stat-box__label">Polyares</div>
+            <div class="stat-box__label" id="polyaresTotalLabel">Polyares</div>
             <div class="stat-box__value stat-box__value--amber" id="polyaresTotal">$0.00</div>
           </div>
           <div class="stat-box stat-box--main">
-            <div class="stat-box__label">Total Payout</div>
+            <div class="stat-box__label" id="totalPayoutLabel">Total Payout</div>
             <div class="stat-box__value stat-box__value--green" id="totalPayout">$0.00</div>
           </div>
         </div>
@@ -1393,6 +1393,7 @@
             <button type="button" class="source-filter" data-source="NO_CPL" title="Everyone with no CPL calls this period — totals are final, payable before Ringba finalizes CPL">NO CPL</button>
             <button type="button" class="source-filter" data-source="UNPAID_ALL" title="Unpaid earnings for the selected month, with that month's paid total">ALL UNPAID</button>
             <button type="button" class="source-filter" data-source="PROFIT">PUBLISHER PROFIT</button>
+            <button type="button" class="source-filter" data-source="LEDGER" title="What each affiliate earned against what was actually paid, from the payment ledger">LEDGER</button>
           </div>
           <div class="source-filters payment-status-filters" id="paymentStatusFilters">
             <button type="button" class="source-filter payment-status-filter payment-status-filter--active" data-payment-status="UNPAID">UNPAID</button>
@@ -1652,6 +1653,31 @@
           </p>
         </div>
 
+        <div id="ledgerPanel" class="hidden">
+          <div class="table-wrap" id="ledgerTableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th data-ledger-sort="rank">#</th>
+                  <th data-ledger-sort="publisherName">Publisher Name</th>
+                  <th data-ledger-sort="earned">Earned</th>
+                  <th data-ledger-sort="paid">Paid</th>
+                  <th data-ledger-sort="owed">Still Owed</th>
+                  <th>Method</th>
+                  <th>Reference</th>
+                  <th data-ledger-sort="lastPaidAt">Paid On</th>
+                </tr>
+              </thead>
+              <tbody id="ledgerTableBody">
+                <tr>
+                  <td colspan="8" class="empty-state">No ledger data loaded</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="profit-section__note" id="ledgerNote"></p>
+        </div>
+
         <div class="pagination-bar">
           <div class="pagination" id="pagination">
             <span class="pagination__info" id="paginationInfo">—</span>
@@ -1746,6 +1772,12 @@
       const outliersBody = document.getElementById("outliersBody");
       const affiliatesPanel = document.getElementById("affiliatesPanel");
       const profitPanel = document.getElementById("profitPanel");
+      const ledgerPanel = document.getElementById("ledgerPanel");
+      const ledgerTableBody = document.getElementById("ledgerTableBody");
+      const ledgerNote = document.getElementById("ledgerNote");
+      const ringbaTotalLabel = document.getElementById("ringbaTotalLabel");
+      const polyaresTotalLabel = document.getElementById("polyaresTotalLabel");
+      const totalPayoutLabel = document.getElementById("totalPayoutLabel");
       const profitTableBody = document.getElementById("profitTableBody");
       const uploadNumbersCsvBtn = document.getElementById("uploadNumbersCsvBtn");
       const numbersCsvInput = document.getElementById("numbersCsvInput");
@@ -1798,6 +1830,23 @@
         "Untagged",
       ];
       const PAYMENT_TERMS = ["Weekly", "Biweekly", "Monthly", "Untagged"];
+
+      /* ---------- LEDGER VIEW ---------- */
+      /* Earned (live revenue) vs paid (the ledger — a record, not a
+         recomputation). The gap is who still needs to be paid, including
+         top-ups on affiliates already ticked as paid. */
+      /** Period key allPublishers was last loaded for. */
+      let loadedStatsPeriodKey = null;
+      let allLedgerRows = [];
+      let filteredLedgerRows = [];
+      let ledgerDataMonth = null;
+      let ledgerSummary = null;
+      let ledgerSortKey = "owed";
+      let ledgerSortDir = "desc";
+
+      function isLedgerView() {
+        return sourceFilter === "LEDGER";
+      }
 
       function isProfitView() {
         return sourceFilter === "PROFIT";
@@ -1852,7 +1901,7 @@
       }
 
       function syncPaymentStatusFiltersVisibility() {
-        if (isProfitView() || isUnpaidAllView()) {
+        if (isProfitView() || isUnpaidAllView() || isLedgerView()) {
           // Profit has no paid state; the All-Unpaid aggregate is inherently unpaid.
           paymentStatusFilters.classList.add("hidden");
         } else {
@@ -2703,7 +2752,7 @@
       }
 
       function updatePayAllButton() {
-        if (isProfitView()) {
+        if (isProfitView() || isLedgerView()) {
           payAllBtn.classList.add("hidden");
           return;
         }
@@ -3772,9 +3821,13 @@
           const endpoint = isWeekMode()
             ? "/api/payment/mark-paid-week/"
             : "/api/payment/mark-paid/";
+          // Send what the affiliate earned for the period so the ledger has a
+          // figure to report. The server stores it as "assumed" — it is the
+          // best available number, not a confirmed transfer amount.
+          const earned = Number(row.totalAmount || 0);
           const body = isWeekMode()
-            ? { week: getDashboardWeek() }
-            : { month: getDashboardMonth() };
+            ? { week: getDashboardWeek(), amount: earned }
+            : { month: getDashboardMonth(), amount: earned };
           try {
             const res = await fetch(
               endpoint + encodeURIComponent(row.publisherName),
@@ -3978,14 +4031,28 @@
       }
 
       function updateViewPanels() {
-        if (isProfitView()) {
-          affiliatesPanel.classList.add("hidden");
-          profitPanel.classList.remove("hidden");
-        } else {
-          affiliatesPanel.classList.remove("hidden");
-          profitPanel.classList.add("hidden");
-        }
+        affiliatesPanel.classList.toggle(
+          "hidden",
+          isProfitView() || isLedgerView()
+        );
+        profitPanel.classList.toggle("hidden", !isProfitView());
+        ledgerPanel.classList.toggle("hidden", !isLedgerView());
+        syncStatBoxLabels();
         syncPaymentStatusFiltersVisibility();
+      }
+
+      /* The three header boxes read Ringba / Polyares / Total everywhere
+         except the ledger, where the useful split is earned / paid / owed. */
+      function syncStatBoxLabels() {
+        if (isLedgerView()) {
+          ringbaTotalLabel.textContent = "Earned";
+          polyaresTotalLabel.textContent = "Paid";
+          totalPayoutLabel.textContent = "Still Owed";
+        } else {
+          ringbaTotalLabel.textContent = "Ringba";
+          polyaresTotalLabel.textContent = "Polyares";
+          totalPayoutLabel.textContent = "Total Payout";
+        }
       }
 
       function updateHeaderTotals(data) {
@@ -4095,9 +4162,204 @@
         }
       }
 
+      async function fetchLedgerData() {
+        if (isLoading) return;
+        const month = monthSelect.value;
+        setLoading(true);
+        setBanner("loading", "Building the payment ledger for " + month + "...");
+        setWarning(null);
+        try {
+          const res = await fetch(
+            "/api/payment/ledger?month=" + encodeURIComponent(month)
+          );
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || "Failed to build the payment ledger");
+          }
+          allLedgerRows = Array.isArray(data.rows) ? data.rows : [];
+          ledgerSummary = data;
+          ledgerDataMonth = month;
+          currentPage = 1;
+          selectedRowIndex = -1;
+          renderLedgerSummary();
+          applyLedgerFilterAndSort();
+          setBanner(null, "");
+        } catch (err) {
+          setBanner("error", err.message || "Failed to build the payment ledger");
+          allLedgerRows = [];
+          filteredLedgerRows = [];
+          ledgerTableBody.innerHTML =
+            '<tr><td colspan="8" class="empty-state">Unable to load the ledger</td></tr>';
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function renderLedgerSummary() {
+        if (!ledgerSummary) return;
+        updateHeaderTotals({
+          ringbaTotalPayout: Number(ledgerSummary.totalEarned || 0),
+          polyareasTotalPayout: Number(ledgerSummary.totalPaid || 0),
+          grandTotalPayout: Number(ledgerSummary.totalOwed || 0),
+        });
+        affiliateCount.textContent =
+          "Still owed: " + (ledgerSummary.affiliatesOwed ?? 0);
+        lastUpdated.textContent =
+          "Last updated: " +
+          (ledgerSummary.generatedAt
+            ? formatCstTimestamp(ledgerSummary.generatedAt)
+            : "\u2014");
+
+        const notes = [
+          "Earned is live Ringba + Polyares revenue and keeps moving. Paid comes from the payment ledger \u2014 what was actually sent \u2014 and does not.",
+        ];
+        if (ledgerSummary.affiliatesWithUnknownAmount > 0) {
+          notes.push(
+            ledgerSummary.affiliatesWithUnknownAmount +
+              " affiliate(s) were settled before amounts were recorded, so their paid figure is unknown rather than $0. They are not counted as owed."
+          );
+        }
+        if (ledgerSummary.affiliatesEstimated > 0) {
+          notes.push(
+            ledgerSummary.affiliatesEstimated +
+              " affiliate(s) have an estimated paid amount (marked paid by hand, or one payment split across months)."
+          );
+        }
+        if (Number(ledgerSummary.totalOverpaid || 0) > 0) {
+          notes.push(
+            "Paid exceeds earned by " +
+              formatMoney(Number(ledgerSummary.totalOverpaid)) +
+              " \u2014 usually revenue revised down after the money went out."
+          );
+        }
+        ledgerNote.textContent = notes.join(" ");
+      }
+
+      function getLedgerSortValue(row, key) {
+        if (key === "publisherName") return String(row.publisherName || "");
+        if (key === "lastPaidAt") return row.lastPaidAt || "";
+        return Number(row[key] || 0);
+      }
+
+      function applyLedgerFilterAndSort() {
+        const q = searchInput.value.trim().toLowerCase();
+        filteredLedgerRows = allLedgerRows.filter((row) => {
+          if (!q) return true;
+          return String(row.publisherName || "").toLowerCase().includes(q);
+        });
+
+        if (ledgerSortKey !== "rank") {
+          filteredLedgerRows.sort((a, b) => {
+            const av = getLedgerSortValue(a, ledgerSortKey);
+            const bv = getLedgerSortValue(b, ledgerSortKey);
+            return compareRows(
+              { [ledgerSortKey]: av },
+              { [ledgerSortKey]: bv },
+              ledgerSortKey,
+              ledgerSortDir
+            );
+          });
+        }
+
+        renderLedgerTable();
+        updateLedgerSortHeaders();
+      }
+
+      function updateLedgerSortHeaders() {
+        document.querySelectorAll("th[data-ledger-sort]").forEach((th) => {
+          th.classList.remove("sorted-asc", "sorted-desc");
+          if (th.dataset.ledgerSort === ledgerSortKey) {
+            th.classList.add(ledgerSortDir === "asc" ? "sorted-asc" : "sorted-desc");
+          }
+        });
+      }
+
+      function ledgerPaidCellHtml(row) {
+        if (row.amountUnknown) {
+          return '<span class="col-dim" title="Settled before amounts were recorded">unknown</span>';
+        }
+        const estimated = row.estimated
+          ? ' <span class="col-dim" title="Marked paid by hand, or one payment split across months">est.</span>'
+          : "";
+        return formatMoney(row.paid) + estimated;
+      }
+
+      function ledgerOwedCellHtml(row) {
+        if (row.owed > 0) {
+          return '<span class="col-profit--negative">' + formatMoney(row.owed) + "</span>";
+        }
+        if (row.overpaid > 0) {
+          return (
+            '<span class="col-dim" title="Paid more than the period now shows as earned">+' +
+            formatMoney(row.overpaid) +
+            " over</span>"
+          );
+        }
+        return '<span class="col-dim">\u2014</span>';
+      }
+
+      /** Repaint whichever table the active tab is showing. */
+      function renderActiveTable() {
+        if (isProfitView()) {
+          renderProfitTable();
+        } else if (isLedgerView()) {
+          renderLedgerTable();
+        } else {
+          renderTable();
+        }
+      }
+
+      function renderLedgerTable() {
+        updatePagination();
+        const pageRows = getPageSlice();
+
+        if (pageRows.length === 0) {
+          ledgerTableBody.innerHTML =
+            '<tr><td colspan="8" class="empty-state">No affiliates match your filter</td></tr>';
+          return;
+        }
+
+        const globalOffset = pageSize === Infinity ? 0 : (currentPage - 1) * pageSize;
+        ledgerTableBody.innerHTML = "";
+        pageRows.forEach((row, index) => {
+          const globalIndex = globalOffset + index;
+          const tr = document.createElement("tr");
+          if (globalIndex === selectedRowIndex) {
+            tr.classList.add("row--selected");
+          }
+
+          const methods = (row.methods || []).join(", ");
+          const reference = (row.references || []).filter(Boolean).join(", ");
+          const paidOn = row.lastPaidAt ? formatCstTimestamp(row.lastPaidAt) : "";
+
+          tr.innerHTML =
+            '<td class="col-rank">' + (globalIndex + 1) + "</td>" +
+            '<td class="col-name" title="' + escapeHtml(row.publisherName) + '">' +
+              publisherNameCellHtml(row.publisherName, row.cplAffiliate) + "</td>" +
+            '<td class="col-payout">' + formatMoney(row.earned) + "</td>" +
+            "<td>" + ledgerPaidCellHtml(row) + "</td>" +
+            "<td>" + ledgerOwedCellHtml(row) + "</td>" +
+            "<td>" + (methods ? escapeHtml(methods) : '<span class="col-dim">\u2014</span>') + "</td>" +
+            '<td class="col-name" title="' + escapeHtml(reference) + '">' +
+              (reference ? escapeHtml(reference) : '<span class="col-dim">\u2014</span>') + "</td>" +
+            "<td>" + (paidOn ? escapeHtml(paidOn) : '<span class="col-dim">\u2014</span>') + "</td>";
+
+          tr.addEventListener("click", () => {
+            selectedRowIndex = globalIndex;
+            renderLedgerTable();
+          });
+
+          ledgerTableBody.appendChild(tr);
+        });
+      }
+
       async function fetchStats() {
         if (isUnpaidAllView()) {
           await loadUnpaidAll();
+          return;
+        }
+        if (isLedgerView()) {
+          await fetchLedgerData();
           return;
         }
         if (isLoading) return;
@@ -4116,6 +4378,7 @@
           allPublishers = Array.isArray(data.publishers)
             ? data.publishers.map(normalizePublisherRow)
             : [];
+          loadedStatsPeriodKey = getDashboardPeriodKey();
           holdActive = data.holdActive === true;
           heldUntil = data.heldUntil || null;
           allOutliers = Array.isArray(data.outliers) ? data.outliers : [];
@@ -4148,6 +4411,7 @@
             allPublishers = Array.isArray(fallbackData.publishers)
               ? fallbackData.publishers.map(normalizePublisherRow)
               : [];
+            loadedStatsPeriodKey = getDashboardPeriodKey();
             holdActive = fallbackData.holdActive === true;
             heldUntil = fallbackData.heldUntil || null;
             allOutliers = [];
@@ -4215,7 +4479,9 @@
       }
 
       function getActiveFilteredRows() {
-        return isProfitView() ? filteredProfitRows : filteredPublishers;
+        if (isProfitView()) return filteredProfitRows;
+        if (isLedgerView()) return filteredLedgerRows;
+        return filteredPublishers;
       }
 
       function applyProfitFilterAndSort() {
@@ -4247,7 +4513,7 @@
       }
 
       function updateCplBanner() {
-        if (isProfitView()) {
+        if (isProfitView() || isLedgerView()) {
           cplBanner.classList.add("hidden");
           cplBanner.textContent = "";
           return;
@@ -4590,6 +4856,8 @@
         currentPage = 1;
         if (isProfitView()) {
           applyProfitFilterAndSort();
+        } else if (isLedgerView()) {
+          applyLedgerFilterAndSort();
         } else {
           applyFilterAndSort();
         }
@@ -4598,6 +4866,12 @@
       async function switchSourceFilter(nextSource) {
         const leavingUnpaidAll =
           sourceFilter === "UNPAID_ALL" && nextSource !== "UNPAID_ALL";
+        // The ledger keeps its own rows, so allPublishers can be a month
+        // behind if the month was changed while the ledger was open.
+        const leavingStaleLedger =
+          sourceFilter === "LEDGER" &&
+          nextSource !== "LEDGER" &&
+          loadedStatsPeriodKey !== getDashboardPeriodKey();
         sourceFilter = nextSource;
         previousSourceFilter = nextSource;
         document.querySelectorAll(".source-filter[data-source]").forEach((el) => {
@@ -4615,9 +4889,19 @@
           await loadUnpaidAll();
           return;
         }
-        if (leavingUnpaidAll) {
-          // The aggregate replaced allPublishers \u2014 reload the normal period data.
+        if (leavingUnpaidAll || leavingStaleLedger) {
+          // allPublishers is either replaced (the aggregate) or a month behind
+          // (the ledger) \u2014 reload the normal period data either way.
           await fetchStats();
+          return;
+        }
+        if (isLedgerView()) {
+          if (ledgerDataMonth !== monthSelect.value || allLedgerRows.length === 0) {
+            await fetchLedgerData();
+          } else {
+            renderLedgerSummary();
+            applyLedgerFilterAndSort();
+          }
           return;
         }
         if (isProfitView()) {
@@ -4657,6 +4941,7 @@
             throw new Error(data.error || "Failed to compile unpaid earnings");
           }
           const affiliates = Array.isArray(data.affiliates) ? data.affiliates : [];
+          loadedStatsPeriodKey = null;
           allPublishers = affiliates.map((a) => ({
             publisherName: a.publisherName,
             ringbaAmount: 0,
@@ -4723,7 +5008,7 @@
 
       paymentStatusFilters.addEventListener("click", (e) => {
         const btn = e.target.closest(".payment-status-filter");
-        if (!btn || isProfitView()) return;
+        if (!btn || isProfitView() || isLedgerView()) return;
         paymentStatusFilter = btn.dataset.paymentStatus || "UNPAID";
         document.querySelectorAll(".payment-status-filter").forEach((el) => {
           el.classList.toggle("payment-status-filter--active", el === btn);
@@ -4731,6 +5016,21 @@
         selectedRowIndex = -1;
         currentPage = 1;
         applyFilterAndSort();
+      });
+
+      document.querySelectorAll("th[data-ledger-sort]").forEach((th) => {
+        th.addEventListener("click", () => {
+          const key = th.dataset.ledgerSort;
+          if (ledgerSortKey === key) {
+            ledgerSortDir = ledgerSortDir === "desc" ? "asc" : "desc";
+          } else {
+            ledgerSortKey = key;
+            ledgerSortDir = key === "publisherName" ? "asc" : "desc";
+          }
+          currentPage = 1;
+          selectedRowIndex = -1;
+          applyLedgerFilterAndSort();
+        });
       });
 
       pageSizeControls.addEventListener("click", (e) => {
@@ -4742,32 +5042,20 @@
         document.querySelectorAll(".page-size-btn").forEach((el) => {
           el.classList.toggle("page-size-btn--active", el === btn);
         });
-        if (isProfitView()) {
-          renderProfitTable();
-        } else {
-          renderTable();
-        }
+        renderActiveTable();
       });
 
       prevBtn.addEventListener("click", () => {
         if (currentPage > 1) {
           currentPage--;
-          if (isProfitView()) {
-            renderProfitTable();
-          } else {
-            renderTable();
-          }
+          renderActiveTable();
         }
       });
 
       nextBtn.addEventListener("click", () => {
         if (currentPage < getTotalPages()) {
           currentPage++;
-          if (isProfitView()) {
-            renderProfitTable();
-          } else {
-            renderTable();
-          }
+          renderActiveTable();
         }
       });
 
