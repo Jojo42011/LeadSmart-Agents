@@ -385,6 +385,8 @@
 
       .source-filters {
         display: flex;
+        /* Wrap rather than clip: the tab row grows as tabs are added. */
+        flex-wrap: wrap;
         gap: 0;
         border: 1px solid var(--border-bright);
         overflow: hidden;
@@ -392,6 +394,7 @@
 
       .source-filter {
         font-family: var(--font);
+        white-space: nowrap;
         font-size: 10px;
         font-weight: 600;
         letter-spacing: 2px;
@@ -1387,6 +1390,7 @@
             <button type="button" class="source-filter" data-source="POLYERAS">POLYERAS</button>
             <button type="button" class="source-filter" data-source="BOTH">BOTH</button>
             <button type="button" class="source-filter" data-source="CPL">CPL</button>
+            <button type="button" class="source-filter" data-source="NO_CPL" title="Everyone with no CPL calls this period — totals are final, payable before Ringba finalizes CPL">NO CPL</button>
             <button type="button" class="source-filter" data-source="UNPAID_ALL" title="Unpaid earnings for the selected month, with that month's paid total">ALL UNPAID</button>
             <button type="button" class="source-filter" data-source="PROFIT">PUBLISHER PROFIT</button>
           </div>
@@ -2659,12 +2663,35 @@
         );
       }
 
+      /**
+       * Whether a row belongs to the active source tab. Shared by the table and
+       * the PAY ALL set so the button can never pay someone the tab isn't showing.
+       *
+       * CPL lists only CPL-tagged affiliates; NO CPL lists everyone else — their
+       * totals are already final, so they can be paid without waiting for Ringba
+       * to finalize the CPL numbers.
+       */
+      function matchesSourceFilter(row) {
+        if (sourceFilter === "ALL") return true;
+        if (sourceFilter === "CPL") return !!row.cplAffiliate;
+        if (sourceFilter === "NO_CPL") return !row.cplAffiliate;
+        return row.source === sourceFilter;
+      }
+
+      /** Visible label of the active source tab, for confirmation copy. */
+      function activeSourceTabLabel() {
+        const btn = document.querySelector(
+          '.source-filter[data-source="' + sourceFilter + '"]'
+        );
+        return btn ? btn.textContent.trim() : sourceFilter;
+      }
+
       function getPayableAffiliates() {
         return allPublishers.filter((row) => {
           if (isRowHeld(row)) {
             return false;
           }
-          if (sourceFilter !== "ALL" && sourceFilter !== "CPL" && row.source !== sourceFilter) {
+          if (!matchesSourceFilter(row)) {
             return false;
           }
           if (isPaidForDashboardMonth(row.publisherName)) {
@@ -3077,11 +3104,14 @@
         payAmountUserEdited = false;
         resetPayModalMfaState();
         payModalTitle.textContent = "Confirm bulk payment";
+        // Name the tab: PAY ALL only ever covers the affiliates it is showing.
         payModalSubtitle.textContent =
           wiseNames.length +
           " Wise and " +
           billNames.length +
-          " Bill.com affiliate(s)";
+          " Bill.com affiliate(s) — " +
+          activeSourceTabLabel() +
+          " tab";
         payModalAmountSection.classList.add("hidden");
         renderPayModalPeriodOptions(getDashboardPeriodKey());
         payModalHint.textContent = "";
@@ -4217,17 +4247,34 @@
       }
 
       function updateCplBanner() {
-        if (sourceFilter === "CPL" && !isProfitView()) {
+        if (isProfitView()) {
+          cplBanner.classList.add("hidden");
+          cplBanner.textContent = "";
+          return;
+        }
+
+        if (sourceFilter === "CPL") {
           cplBanner.classList.remove("hidden");
           cplBanner.textContent =
             "CPL = 33 Miles RTT / Inquirly calls in the last 7 days of the month (Ringba finalizes these later). " +
             "$0 CPL affiliates are HELD" +
             (holdActive && heldUntil ? " until " + formatHeldUntil(heldUntil) : " until the second Monday next month") +
             "; CPL affiliates with a non-zero total are payable now.";
-        } else {
-          cplBanner.classList.add("hidden");
-          cplBanner.textContent = "";
+          return;
         }
+
+        if (sourceFilter === "NO_CPL") {
+          cplBanner.classList.remove("hidden");
+          cplBanner.textContent =
+            "NO CPL = every affiliate with no CPL calls this period. Their totals are final, " +
+            "so they can be paid now without waiting for Ringba to finalize CPL" +
+            (holdActive && heldUntil ? " on " + formatHeldUntil(heldUntil) : "") +
+            ". PAY ALL on this tab covers only these affiliates.";
+          return;
+        }
+
+        cplBanner.classList.add("hidden");
+        cplBanner.textContent = "";
       }
 
       function applyFilterAndSort() {
@@ -4238,11 +4285,7 @@
             if (!q) return true;
             return String(row.publisherName || "").toLowerCase().includes(q);
           }
-          if (sourceFilter === "CPL") {
-            if (!row.cplAffiliate) {
-              return false;
-            }
-          } else if (sourceFilter !== "ALL" && row.source !== sourceFilter) {
+          if (!matchesSourceFilter(row)) {
             return false;
           }
           if (!isProfitView()) {
