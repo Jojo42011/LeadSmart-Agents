@@ -14,7 +14,8 @@
     "dashboard": "ts-node -r dotenv/config server.ts",
     "db:push-fly": "powershell -ExecutionPolicy Bypass -File scripts/push-db-to-fly.ps1",
     "build": "tsc",
-    "check:wise-quote": "ts-node scripts/checkWiseQuoteParsing.ts"
+    "check:wise-quote": "ts-node scripts/checkWiseQuoteParsing.ts",
+    "check:ledger": "ts-node scripts/checkPaymentLedger.ts"
   },
   "dependencies": {
     "axios": "^1.7.9",

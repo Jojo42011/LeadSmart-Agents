@@ -1619,15 +1619,30 @@ export async function resolvePublisherPayoutAmount(
 }
 
 /** Sum merged payout totals for one publisher across multiple date ranges. */
-export async function sumPublisherPayoutAcrossMonths(
+export interface PublisherPayoutBreakdown {
+  total: number;
+  /** Payout per requested range, in the order the ranges were given. */
+  byRange: Array<{ startDate: string; endDate: string; amount: number }>;
+}
+
+/**
+ * Payout total plus the per-range split behind it.
+ *
+ * The split costs nothing extra — the total was always the sum of the same
+ * per-range lookups — and it lets the payment ledger attribute a multi-month
+ * payment to the months the money was actually earned in.
+ */
+export async function sumPublisherPayoutBreakdown(
   publisherName: string,
   ranges: Array<{ startDate: string; endDate: string }>
-): Promise<number> {
+): Promise<PublisherPayoutBreakdown> {
+  const byRange: PublisherPayoutBreakdown["byRange"] = [];
   let total = 0;
 
   for (const range of ranges) {
+    let amount = 0;
     try {
-      total += await resolvePublisherPayoutAmount(
+      amount = await resolvePublisherPayoutAmount(
         publisherName,
         range.startDate,
         range.endDate
@@ -1639,11 +1654,14 @@ export async function sumPublisherPayoutAcrossMonths(
           message.includes("Publisher not found") ||
           message.includes("No payout amount")
         ) {
+          byRange.push({ ...range, amount: 0 });
           continue;
         }
       }
       throw err;
     }
+    byRange.push({ ...range, amount });
+    total += amount;
   }
 
   if (total <= 0) {
@@ -1652,7 +1670,14 @@ export async function sumPublisherPayoutAcrossMonths(
     );
   }
 
-  return total;
+  return { total, byRange };
+}
+
+export async function sumPublisherPayoutAcrossMonths(
+  publisherName: string,
+  ranges: Array<{ startDate: string; endDate: string }>
+): Promise<number> {
+  return (await sumPublisherPayoutBreakdown(publisherName, ranges)).total;
 }
 
 export interface PayableRecipientMatch {

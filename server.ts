@@ -31,7 +31,7 @@ import {
   rentalCostsFromNumberCounts,
   PAYMENT_METHODS,
   PAYMENT_TERMS,
-  sumPublisherPayoutAcrossMonths,
+  sumPublisherPayoutBreakdown,
   matchWiseRecipientByName,
   type MergedPublisherRow,
 } from "./agents/paymentAgent";
@@ -66,6 +66,17 @@ import {
   type BillcomAchDetails,
 } from "./lib/billcomClient";
 import { storePendingBillcomPay, takePendingBillcomPay } from "./lib/billcomPendingPay";
+import {
+  apportionAcrossPeriods,
+  backfillLedgerFromPaidFlags,
+  ensurePaymentLedgerSchema,
+  buildLedgerReport,
+  getLedgerSummaryForPeriod,
+  getPaymentHistoryForPublisher,
+  recordAffiliatePayment,
+  voidManualPaymentsForPeriod,
+  type PaymentLedgerMethod,
+} from "./lib/paymentLedger";
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
 import { sendPaymentConfirmationEmail } from "./lib/paymentEmail";
 import {
@@ -1530,6 +1541,186 @@ interface UnpaidAffiliateEntry {
   months: Array<{ month: string; amount: number }>;
 }
 
+/* ---------- PAYMENT LEDGER ---------- */
+
+/**
+ * Earned vs actually paid for one month, per affiliate. The join itself lives
+ * in lib/paymentLedger so it can be tested without a Ringba round trip.
+ */
+app.get("/api/payment/ledger", async (req, res) => {
+  try {
+    const monthKey =
+      typeof req.query.month === "string" && /^\d{4}-\d{2}$/.test(req.query.month.trim())
+        ? req.query.month.trim()
+        : monthToDateRange().month;
+
+    const publishers = await getMergedForMonth(monthKey);
+    const report = buildLedgerReport(
+      publishers,
+      getLedgerSummaryForPeriod("month", monthKey)
+    );
+
+    res.json({
+      month: monthKey,
+      generatedAt: new Date().toISOString(),
+      ...report,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : "Failed to build the payment ledger report",
+    });
+  }
+});
+
+/** Every payment ever recorded for one affiliate, newest first. */
+app.get("/api/payment/ledger/publisher/:name", (req, res) => {
+  try {
+    const publisherName = decodePublisherParam(req.params.name).trim();
+    if (!publisherName) {
+      res.status(400).json({ error: "Publisher name is required" });
+      return;
+    }
+    const payments = getPaymentHistoryForPublisher(publisherName);
+    res.json({
+      publisherName,
+      payments,
+      totalRecorded: Math.round(
+        payments
+          .filter((payment) => payment.status === "paid")
+          .reduce((sum, payment) => sum + (payment.amount ?? 0), 0) * 100
+      ) / 100,
+      paymentsWithUnknownAmount: payments.filter(
+        (payment) => payment.status === "paid" && payment.amount === null
+      ).length,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to load payment history",
+    });
+  }
+});
+
+/**
+ * The running tally: everyone still owed money, across months.
+ *
+ * Driven off earned-minus-paid rather than the paid flag, so an affiliate
+ * whose revenue was revised up after settlement shows the top-up instead of
+ * disappearing behind a ticked box.
+ */
+app.get("/api/payment/owed", async (req, res) => {
+  try {
+    const minAmount =
+      typeof req.query.min === "string" && req.query.min.trim()
+        ? Math.max(0, parseFloat(req.query.min))
+        : envNumber("UNPAID_MIN_AMOUNT", DEFAULT_UNPAID_MIN_AMOUNT);
+
+    const lookbackRaw =
+      typeof req.query.lookback === "string" && req.query.lookback.trim()
+        ? parseInt(req.query.lookback, 10)
+        : envNumber("UNPAID_LOOKBACK_MONTHS", DEFAULT_UNPAID_LOOKBACK_MONTHS);
+    const lookback = Math.min(
+      MAX_UNPAID_LOOKBACK_MONTHS,
+      Math.max(1, Number.isFinite(lookbackRaw) ? lookbackRaw : DEFAULT_UNPAID_LOOKBACK_MONTHS)
+    );
+
+    const includeCurrent = req.query.includeCurrent === "true";
+    const monthKeys = includeCurrent
+      ? [monthToDateRange().month, ...previousMonthKeys(lookback)]
+      : previousMonthKeys(lookback);
+
+    interface OwedEntry {
+      publisherName: string;
+      owed: number;
+      months: Array<{ month: string; earned: number; paid: number; owed: number }>;
+      /** Months settled with no recoverable amount — our gap, not their money. */
+      settledMonthsWithUnknownAmount: string[];
+    }
+
+    const byPublisher = new Map<string, OwedEntry>();
+    const scannedMonths: string[] = [];
+    const failedMonths: string[] = [];
+    let totalPaid = 0;
+    let totalEarned = 0;
+
+    // Sequential: each month is a Ringba + Polyares round trip.
+    for (const monthKey of monthKeys) {
+      let publishers: MergedPublisherRow[];
+      try {
+        publishers = await getMergedForMonth(monthKey);
+      } catch (err) {
+        console.warn(
+          `[Payment] owed: month ${monthKey} fetch failed — skipping:`,
+          err instanceof Error ? err.message : err
+        );
+        failedMonths.push(monthKey);
+        continue;
+      }
+      scannedMonths.push(monthKey);
+
+      // Same join as the single-month ledger view, so the two can never
+      // disagree about what an affiliate is owed.
+      const report = buildLedgerReport(
+        publishers,
+        getLedgerSummaryForPeriod("month", monthKey)
+      );
+      totalEarned += report.totalEarned;
+      totalPaid += report.totalPaid;
+
+      for (const row of report.rows) {
+        if (row.owed <= 0 && !row.amountUnknown) {
+          continue;
+        }
+        const entry =
+          byPublisher.get(row.publisherName) ?? {
+            publisherName: row.publisherName,
+            owed: 0,
+            months: [],
+            settledMonthsWithUnknownAmount: [],
+          };
+        if (row.amountUnknown) {
+          entry.settledMonthsWithUnknownAmount.push(monthKey);
+        }
+        if (row.owed > 0) {
+          entry.owed = Math.round((entry.owed + row.owed) * 100) / 100;
+          entry.months.push({
+            month: monthKey,
+            earned: row.earned,
+            paid: row.paid,
+            owed: row.owed,
+          });
+        }
+        byPublisher.set(row.publisherName, entry);
+      }
+    }
+
+    const affiliates = [...byPublisher.values()]
+      .filter((entry) => entry.owed >= minAmount)
+      .sort((a, b) => b.owed - a.owed);
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      monthsScanned: scannedMonths,
+      monthsFailed: failedMonths,
+      includesCurrentMonth: includeCurrent,
+      minAmount,
+      totalEarned: Math.round(totalEarned * 100) / 100,
+      totalPaid: Math.round(totalPaid * 100) / 100,
+      totalOwed: Math.round(
+        affiliates.reduce((sum, entry) => sum + entry.owed, 0) * 100
+      ) / 100,
+      totalAffiliates: affiliates.length,
+      affiliates,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to compile amounts owed",
+    });
+  }
+});
+
 app.get("/api/payment/unpaid-all", async (req, res) => {
   try {
     const minAmount =
@@ -1883,6 +2074,16 @@ app.post("/api/payment/mark-paid/:name", (req, res) => {
     }
 
     const result = toggleAffiliatePaidForMonth(publisherName, monthRaw);
+    if (result.paid) {
+      recordManualSettlement(
+        publisherName,
+        "month",
+        monthRaw,
+        parsePayAmountOverride(req) ?? null
+      );
+    } else {
+      retractManualSettlement(publisherName, "month", monthRaw);
+    }
     const meta = affiliateMetadataFor(publisherName);
     res.json({
       ...(meta ?? {
@@ -1936,6 +2137,16 @@ app.post("/api/payment/mark-paid-week/:name", (req, res) => {
     // Normalize any in-week date to its Monday key so toggling is stable.
     const weekKey = weekToDateRange(weekRaw).week;
     const result = toggleAffiliatePaidForWeek(publisherName, weekKey);
+    if (result.paid) {
+      recordManualSettlement(
+        publisherName,
+        "week",
+        weekKey,
+        parsePayAmountOverride(req) ?? null
+      );
+    } else {
+      retractManualSettlement(publisherName, "week", weekKey);
+    }
     const meta = affiliateMetadataFor(publisherName);
     res.json({
       ...(meta ?? {
@@ -2045,6 +2256,124 @@ function markAffiliatePaidIfUnpaid(
   }
 }
 
+interface SettlementRecord {
+  method: PaymentLedgerMethod;
+  /** USD actually sent. null only when genuinely unknown. */
+  amount: number | null;
+  reference?: string | null;
+  targetAmount?: number | null;
+  targetCurrency?: string | null;
+  note?: string | null;
+  earnedByPeriod?: Record<string, number> | null;
+}
+
+/**
+ * Mark an affiliate settled AND record what was actually sent.
+ *
+ * Every payment path goes through this one function so the paid flags and the
+ * ledger can never drift apart. The flag write happens first and keeps its
+ * existing behaviour exactly; the ledger write is wrapped because a
+ * bookkeeping failure must never make a completed transfer look like a failed
+ * one to whoever clicked pay.
+ */
+function settleAffiliatePayment(
+  publisherName: string,
+  period: { periodType: "month" | "week"; keys: string[] },
+  record: SettlementRecord
+): void {
+  markAffiliatePaidIfUnpaid(publisherName, period);
+
+  try {
+    recordAffiliatePayment({
+      publisherName,
+      method: record.method,
+      amount: record.amount,
+      targetAmount: record.targetAmount ?? null,
+      targetCurrency: record.targetCurrency ?? null,
+      reference: record.reference ?? null,
+      note: record.note ?? null,
+      periodType: period.periodType,
+      periods: apportionAcrossPeriods(
+        record.amount,
+        period.keys,
+        record.earnedByPeriod
+      ),
+    });
+  } catch (err) {
+    console.error(
+      `[Payment] Ledger write failed for ${publisherName} ${period.periodType}s=${period.keys.join(",")} — the payment itself succeeded:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+/**
+ * Record a hand-marked settlement.
+ *
+ * Ticking the paid box asserts "we settled this outside the automated
+ * flows". The dashboard sends the affiliate's earnings for the period, which
+ * is the best available figure but is an assumption about what was sent, not
+ * a confirmed transfer amount — so it is stored as "assumed" and reports can
+ * separate it from measured money.
+ */
+function recordManualSettlement(
+  publisherName: string,
+  periodType: "month" | "week",
+  periodKey: string,
+  amount: number | null
+): void {
+  try {
+    recordAffiliatePayment({
+      publisherName,
+      method: "Manual",
+      amount,
+      note:
+        amount === null
+          ? "Marked paid by hand — no amount supplied"
+          : "Marked paid by hand — amount is the affiliate's earnings for the period, not a confirmed transfer",
+      periodType,
+      periods: [
+        {
+          key: periodKey,
+          amount,
+          attribution: amount === null ? "unknown" : "assumed",
+        },
+      ],
+    });
+  } catch (err) {
+    console.error(
+      `[Payment] Ledger write failed for manual settlement ${publisherName} ${periodKey}:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+/** Un-ticking the paid box retracts the bookkeeping entry, never a transfer. */
+function retractManualSettlement(
+  publisherName: string,
+  periodType: "month" | "week",
+  periodKey: string
+): void {
+  try {
+    const result = voidManualPaymentsForPeriod(
+      publisherName,
+      periodType,
+      periodKey,
+      "Unmarked in the dashboard"
+    );
+    if (result.keptRealPayments > 0) {
+      console.warn(
+        `[Payment] ${publisherName} unmarked for ${periodKey}, but ${result.keptRealPayments} real payment(s) stay on the ledger — money that already moved is not retracted`
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[Payment] Ledger void failed for ${publisherName} ${periodKey}:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
 function isAffiliatePaidForAllPeriods(
   publisherName: string,
   period: { periodType: "month" | "week"; keys: string[] }
@@ -2103,21 +2432,39 @@ function parsePayAmountOverride(req: express.Request): number | undefined {
   return undefined;
 }
 
+interface ResolvedPayAmount {
+  amount: number;
+  /**
+   * Earnings per period key behind the amount, used by the ledger to put a
+   * multi-month payment where the money was earned. null when an operator
+   * typed the amount, since then there is nothing measured to split by.
+   */
+  earnedByPeriod: Record<string, number> | null;
+}
+
 async function resolvePayAmount(
   publisherName: string,
   req: express.Request,
   period: PayPeriod
-): Promise<{ amount: number }> {
+): Promise<ResolvedPayAmount> {
   const override = parsePayAmountOverride(req);
   if (override !== undefined) {
-    return { amount: override };
+    return { amount: override, earnedByPeriod: null };
   }
 
-  const amount = await sumPublisherPayoutAcrossMonths(
+  const breakdown = await sumPublisherPayoutBreakdown(
     publisherName,
     period.ranges
   );
-  return { amount };
+  // parsePayPeriods builds ranges in the same order as keys.
+  const earnedByPeriod: Record<string, number> = {};
+  breakdown.byRange.forEach((range, index) => {
+    const key = period.keys[index];
+    if (key) {
+      earnedByPeriod[key] = range.amount;
+    }
+  });
+  return { amount: breakdown.total, earnedByPeriod };
 }
 
 app.post("/api/payment/pay/wise/:name", async (req, res) => {
@@ -2146,7 +2493,11 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       return;
     }
 
-    const { amount } = await resolvePayAmount(publisherName, req, period);
+    const { amount, earnedByPeriod } = await resolvePayAmount(
+      publisherName,
+      req,
+      period
+    );
 
     const profileId = getWiseProfileIdFromEnv();
     const recipients = await getRecipients(profileId);
@@ -2176,7 +2527,14 @@ app.post("/api/payment/pay/wise/:name", async (req, res) => {
       target
     );
     persistWiseRecipientIdFromPayout(publisherName, meta, target);
-    markAffiliatePaidIfUnpaid(publisherName, period);
+    settleAffiliatePayment(publisherName, period, {
+      method: "Wise",
+      amount,
+      reference: `Wise transfer #${payout.transferId}`,
+      targetAmount: payout.targetAmount,
+      targetCurrency: payout.targetCurrency,
+      earnedByPeriod,
+    });
     trySendPaymentConfirmation(publisherName, amount, period, "Wise", {
       wise: {
         transferId: payout.transferId,
@@ -2237,7 +2595,11 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       return;
     }
 
-    const { amount } = await resolvePayAmount(publisherName, req, period);
+    const { amount, earnedByPeriod } = await resolvePayAmount(
+      publisherName,
+      req,
+      period
+    );
 
     let billcomVendorId = meta.billcomVendorId?.trim() ?? "";
     if (typeof req.body?.billcomVendorId === "string" && req.body.billcomVendorId.trim()) {
@@ -2292,7 +2654,12 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
       const payment = await payBill(prepared.billId, prepared.vendorId, amount, {
         newBankAccount: prepared.vendorCreated,
       });
-      markAffiliatePaidIfUnpaid(publisherName, period);
+      settleAffiliatePayment(publisherName, period, {
+        method: "Bill.com",
+        amount,
+        reference: `Bill.com payment ${payment.id}`,
+        earnedByPeriod,
+      });
       trySendPaymentConfirmation(publisherName, amount, period, "Bill.com", {
         billcom: { paymentId: payment.id, processDate: payment.processDate },
       });
@@ -2329,6 +2696,7 @@ app.post("/api/payment/pay/billcom/:name", async (req, res) => {
         newBankAccount: prepared.vendorCreated,
         months: period.keys,
         periodType: period.periodType,
+        earnedByPeriod,
       });
 
       console.log(
@@ -2400,7 +2768,12 @@ app.post("/api/payment/billcom/mfa/verify", async (req, res) => {
       periodType: pending.periodType ?? ("month" as const),
       keys: pending.months,
     };
-    markAffiliatePaidIfUnpaid(pending.publisherName, pendingPeriod);
+    settleAffiliatePayment(pending.publisherName, pendingPeriod, {
+      method: "Bill.com",
+      amount: pending.amount,
+      reference: `Bill.com payment ${payment.id}`,
+      earnedByPeriod: pending.earnedByPeriod ?? null,
+    });
     trySendPaymentConfirmation(
       pending.publisherName,
       pending.amount,
@@ -2453,6 +2826,7 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
     amount: number;
     targetAmount: number | null;
     targetCurrency: string;
+    earnedByPeriod: Record<string, number> | null;
     meta: AffiliateMetadata;
     target: WisePayoutTarget | { contactId: string; resolvedVia: "contact" };
   }> = [];
@@ -2467,7 +2841,11 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
         throw new Error(`Affiliate is already marked paid for the selected ${period.periodType}(s)`);
       }
 
-      const { amount } = await resolvePayAmount(publisherName, req, period);
+      const { amount, earnedByPeriod } = await resolvePayAmount(
+        publisherName,
+        req,
+        period
+      );
       const target = await resolveWisePayoutForAffiliate(
         profileId,
         recipients,
@@ -2486,6 +2864,7 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
         amount,
         targetAmount: transfer.targetAmount,
         targetCurrency: transfer.targetCurrency,
+        earnedByPeriod,
         meta,
         target,
       });
@@ -2505,7 +2884,14 @@ app.post("/api/payment/pay/bulk/wise", async (req, res) => {
         pending.meta,
         pending.target
       );
-      markAffiliatePaidIfUnpaid(pending.publisherName, period);
+      settleAffiliatePayment(pending.publisherName, period, {
+        method: "Wise",
+        amount: pending.amount,
+        reference: `Wise transfer #${pending.transferId}`,
+        targetAmount: pending.targetAmount,
+        targetCurrency: pending.targetCurrency,
+        earnedByPeriod: pending.earnedByPeriod,
+      });
       trySendPaymentConfirmation(
         pending.publisherName,
         pending.amount,
@@ -2550,8 +2936,12 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
 
   const succeeded: string[] = [];
   const failed: Array<{ publisherName: string; error: string }> = [];
-  const billPayments: Array<{ publisherName: string; billId: string; amount: number }> =
-    [];
+  const billPayments: Array<{
+    publisherName: string;
+    billId: string;
+    amount: number;
+    earnedByPeriod: Record<string, number> | null;
+  }> = [];
 
   for (const publisherName of publisherNames) {
     try {
@@ -2571,7 +2961,11 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
         );
       }
 
-      const { amount } = await resolvePayAmount(publisherName, req, period);
+      const { amount, earnedByPeriod } = await resolvePayAmount(
+        publisherName,
+        req,
+        period
+      );
       const prepared = await prepareBillcomPayout(publisherName, amount, {
         billcomVendorId: billcomVendorId || null,
         achDetails,
@@ -2588,6 +2982,7 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
         publisherName,
         billId: prepared.billId,
         amount,
+        earnedByPeriod,
       });
     } catch (err) {
       failed.push({
@@ -2609,7 +3004,12 @@ app.post("/api/payment/pay/bulk/billcom", async (req, res) => {
   const bulkProcessDate = chicagoBillcomProcessDateYmd();
   for (const item of billPayments) {
     if (paidBillIds.has(item.billId)) {
-      markAffiliatePaidIfUnpaid(item.publisherName, period);
+      settleAffiliatePayment(item.publisherName, period, {
+        method: "Bill.com",
+        amount: item.amount,
+        reference: `Bill.com bill ${item.billId}`,
+        earnedByPeriod: item.earnedByPeriod,
+      });
       trySendPaymentConfirmation(
         item.publisherName,
         item.amount,
@@ -3524,6 +3924,32 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "index.html"));
 });
 
+/**
+ * Create the ledger tables and give every pre-existing paid flag an entry.
+ * Only ever fills gaps, so it is safe on every boot. Never fatal: the
+ * dashboard must come up even if bookkeeping cannot.
+ */
+function initPaymentLedger(): void {
+  try {
+    ensurePaymentLedgerSchema();
+    const result = backfillLedgerFromPaidFlags();
+    if (result.monthsInserted || result.weeksInserted) {
+      console.log(
+        `[Payment] Ledger backfill: ${result.monthsInserted} month flag(s), ${result.weeksInserted} week flag(s) recorded as legacy payments (${result.alreadyPresent} already covered)`
+      );
+    } else {
+      console.log(
+        `[Payment] Ledger ready — ${result.alreadyPresent} settled period(s) already recorded`
+      );
+    }
+  } catch (err) {
+    console.error(
+      "[Payment] Ledger initialization failed — paid/unpaid status is unaffected:",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
 const server = http.createServer(app);
 
 server.on("upgrade", (request, socket, head) => {
@@ -3538,6 +3964,7 @@ server.on("upgrade", (request, socket, head) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   warnMissingPaymentEnvVars();
+  initPaymentLedger();
   console.log(`[Dashboard] listening on 0.0.0.0:${PORT}`);
   startFraudScheduler();
 });

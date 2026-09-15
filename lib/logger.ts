@@ -233,6 +233,16 @@ function migrateLegacyPaidToMonths(database: Database.Database): void {
 }
 
 /** Ensures tables/columns exist (call on app startup). */
+/**
+ * The shared SQLite connection, for sibling modules that store their own
+ * tables in the same database file (see paymentLedger.ts). better-sqlite3
+ * connections are not safe to duplicate per-module, so everything goes
+ * through this one handle.
+ */
+export function getSharedDb(): Database.Database {
+  return getDb();
+}
+
 export function ensureScrubLogSchema(): void {
   getDb();
 }
