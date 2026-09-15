@@ -1064,23 +1064,39 @@ function parseWiseFieldUpdates(
 
   const updates: WiseFieldUpdates = {};
   let hasUpdate = false;
+  const bodyObj = body as Record<string, unknown>;
 
-  const emailRaw = readOptionalString(body, "wiseEmail");
-  if (emailRaw !== undefined) {
-    updates.wiseEmail = emailRaw ? normalizeWiseEmail(emailRaw) : null;
-    hasUpdate = true;
+  // Read wiseEmail/wiseTag/wiseRecipientId raw (not via readOptionalString,
+  // which swallows empty strings) so an explicit null or "" CLEARS the
+  // stored value. Same pattern for all three Wise identity fields.
+  if ("wiseEmail" in bodyObj) {
+    const raw = bodyObj.wiseEmail;
+    if (raw === null || (typeof raw === "string" && !raw.trim())) {
+      updates.wiseEmail = null;
+      hasUpdate = true;
+    } else if (typeof raw === "string") {
+      updates.wiseEmail = normalizeWiseEmail(raw);
+      hasUpdate = true;
+    } else {
+      throw new Error("Wise email must be a string");
+    }
   }
 
-  const tagRaw = readOptionalString(body, "wiseTag");
-  if (tagRaw !== undefined) {
-    updates.wiseTag = tagRaw ? normalizeWiseTag(tagRaw) : null;
-    hasUpdate = true;
+  if ("wiseTag" in bodyObj) {
+    const raw = bodyObj.wiseTag;
+    if (raw === null || (typeof raw === "string" && !raw.trim())) {
+      updates.wiseTag = null;
+      hasUpdate = true;
+    } else if (typeof raw === "string") {
+      updates.wiseTag = normalizeWiseTag(raw);
+      hasUpdate = true;
+    } else {
+      throw new Error("Wise tag must be a string");
+    }
   }
 
-  // Read wiseRecipientId raw (not via readOptionalString, which swallows
-  // empty strings) so an explicit null or "" UNLINKS the stored recipient.
-  if ("wiseRecipientId" in (body as Record<string, unknown>)) {
-    const raw = (body as { wiseRecipientId?: unknown }).wiseRecipientId;
+  if ("wiseRecipientId" in bodyObj) {
+    const raw = bodyObj.wiseRecipientId;
     if (raw === null || (typeof raw === "string" && !raw.trim())) {
       updates.wiseRecipientId = null;
       hasUpdate = true;
