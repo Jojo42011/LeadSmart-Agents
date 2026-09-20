@@ -1,4 +1,3 @@
-import nodemailer from "nodemailer";
 import { CHICAGO_TZ } from "./chicagoTime";
 
 export interface PaymentConfirmationParams {
@@ -18,15 +17,6 @@ export interface PaymentConfirmationParams {
   accountLast4?: string | null;
   /** Provider reference the affiliate can quote (e.g. "Wise transfer #123"). */
   reference?: string | null;
-}
-
-function smtpConfigured(): boolean {
-  return Boolean(
-    process.env.SMTP_HOST?.trim() &&
-      process.env.SMTP_USER?.trim() &&
-      process.env.SMTP_PASS?.trim() &&
-      process.env.PAYMENT_EMAIL_FROM?.trim()
-  );
 }
 
 function formatMoney(amount: number): string {
@@ -313,35 +303,16 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Send payment confirmation email via Gmail SMTP. Throws on transport failure. */
+/**
+ * Payment confirmation sending is DISABLED (spam / domain reputation).
+ * Function kept so call sites and tests compile; it never hits SMTP.
+ */
 export async function sendPaymentConfirmationEmail(
   params: PaymentConfirmationParams
 ): Promise<void> {
-  if (!smtpConfigured()) {
-    throw new Error("SMTP is not configured (SMTP_HOST, SMTP_USER, SMTP_PASS, PAYMENT_EMAIL_FROM)");
-  }
-
-  const host = process.env.SMTP_HOST!.trim();
-  const port = parseInt(process.env.SMTP_PORT?.trim() || "587", 10);
-  const user = process.env.SMTP_USER!.trim();
-  const pass = process.env.SMTP_PASS!.trim();
-  const from = process.env.PAYMENT_EMAIL_FROM!.trim();
-  const monthLabel = formatPeriodsLabel(params);
-
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
-
-  await transporter.sendMail({
-    from,
-    to: params.email,
-    subject: `LeadSmart Payment Confirmation — ${monthLabel}`,
-    text: buildTextBody(params),
-    html: buildHtmlBody(params),
-  });
+  console.log(
+    `[PaymentEmail] DISABLED — would have sent confirmation to ${params.email} for ${params.publisherName}`
+  );
 }
 
 /**
