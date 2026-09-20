@@ -48,7 +48,6 @@ import {
   formatWiseRecipientIdForStorage,
   listWiseRecipientsV1,
   getWiseRecipientById,
-  getWiseDeliveryEstimate,
   type WiseRecipientSummary,
   type WiseAchDetails,
   type WiseRecipient,
@@ -78,11 +77,9 @@ import {
   type PaymentLedgerMethod,
 } from "./lib/paymentLedger";
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
-import { sendPaymentConfirmationEmail } from "./lib/paymentEmail";
 import {
   chicagoDateParts,
   secondMondayHoldForMonth,
-  nextBusinessDayAfterYmd,
   chicagoBillcomProcessDateYmd,
 } from "./lib/chicagoTime";
 import {
@@ -1262,86 +1259,20 @@ interface PaymentConfirmationExtras {
   };
 }
 
+/**
+ * Payment confirmation emails are DISABLED — sending was landing in spam and
+ * hurting domain reputation. Call sites stay so re-enabling is one revert.
+ */
 function trySendPaymentConfirmation(
   publisherName: string,
-  amount: number,
-  period: { periodType: "month" | "week"; keys: string[] },
+  _amount: number,
+  _period: { periodType: "month" | "week"; keys: string[] },
   method: "Wise" | "Bill.com",
-  extras?: PaymentConfirmationExtras
+  _extras?: PaymentConfirmationExtras
 ): void {
-  void (async () => {
-    const meta = affiliateMetadataFor(publisherName);
-    const email = meta?.paymentEmail?.trim();
-    if (!email) {
-      console.log(`[Payment] No confirmation email for ${publisherName}, skipping`);
-      return;
-    }
-
-    // Enrichment is strictly best-effort: any lookup failure just drops that
-    // line from the email — the base confirmation always goes out.
-    let targetAmount: number | null = null;
-    let targetCurrency: string | null = null;
-    let expectedArrival: string | null = null;
-    let accountLast4: string | null = null;
-    let reference: string | null = null;
-
-    try {
-      if (extras?.wise) {
-        targetAmount = extras.wise.targetAmount ?? null;
-        targetCurrency = extras.wise.targetCurrency ?? null;
-        if (extras.wise.transferId) {
-          reference = `Wise transfer #${extras.wise.transferId}`;
-          const estimate = await getWiseDeliveryEstimate(extras.wise.transferId);
-          expectedArrival = estimate.estimatedDeliveryDate;
-        }
-        if (extras.wise.recipientId) {
-          const recipient = await getWiseRecipientById(extras.wise.recipientId);
-          accountLast4 = recipient?.accountLast4 ?? null;
-        }
-      } else if (extras?.billcom) {
-        if (extras.billcom.paymentId) {
-          reference = `Bill.com payment ${extras.billcom.paymentId}`;
-        }
-        // ACH typically lands ~2 business days after the process date.
-        if (extras.billcom.processDate) {
-          expectedArrival = nextBusinessDayAfterYmd(
-            nextBusinessDayAfterYmd(extras.billcom.processDate)
-          );
-        }
-        const digits = String(meta?.billcomAccountNumber ?? "").replace(/\D/g, "");
-        accountLast4 = digits ? digits.slice(-4) : null;
-      }
-    } catch (enrichErr) {
-      console.warn(
-        `[Payment] Confirmation email enrichment failed for ${publisherName}:`,
-        enrichErr instanceof Error ? enrichErr.message : enrichErr
-      );
-    }
-
-    try {
-      await sendPaymentConfirmationEmail({
-        publisherName,
-        email,
-        amount,
-        months: period.keys,
-        periodType: period.periodType,
-        method,
-        targetAmount,
-        targetCurrency,
-        expectedArrival,
-        accountLast4,
-        reference,
-      });
-      console.log(
-        `[Payment] Confirmation email sent to ${email} for ${publisherName}`
-      );
-    } catch (err) {
-      console.error(
-        `[Payment] Confirmation email failed for ${publisherName}:`,
-        err instanceof Error ? err.message : err
-      );
-    }
-  })();
+  console.log(
+    `[Payment] Confirmation email DISABLED — not sending for ${publisherName} (${method})`
+  );
 }
 
 function wiseDetailsFromMetadata(meta: AffiliateMetadata | null): {
