@@ -24,7 +24,12 @@ import { getSharedDb } from "./logger";
  *     happened stays on the record.
  */
 
-export type PaymentLedgerMethod = "Wise" | "Bill.com" | "Manual" | "Legacy";
+export type PaymentLedgerMethod =
+  | "Wise"
+  | "Bill.com"
+  | "Trolley"
+  | "Manual"
+  | "Legacy";
 export type PaymentPeriodType = "month" | "week";
 
 /**

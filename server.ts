@@ -14,6 +14,7 @@ import {
   isAffiliatePaidForWeek,
   setAffiliateBillcomVendorId,
   setAffiliatePolyaresId,
+  setAffiliateTrolleyLink,
   type AffiliateMetadata,
   type BillcomAchFieldUpdates,
   type WiseFieldUpdates,
@@ -77,6 +78,14 @@ import {
   type PaymentLedgerMethod,
 } from "./lib/paymentLedger";
 import { warnMissingPaymentEnvVars } from "./lib/paymentEnv";
+import {
+  buildTrolleyWidgetInviteUrl,
+  executeTrolleyPayout,
+  findTrolleyRecipientByRefId,
+  getTrolleyRecipient,
+  isTrolleyConfigured,
+  trolleyRefIdForAffiliate,
+} from "./lib/trolleyClient";
 import {
   chicagoDateParts,
   secondMondayHoldForMonth,
@@ -1991,6 +2000,49 @@ app.post("/api/payment/metadata/:name", (req, res) => {
       metadata = setAffiliatePolyaresId(publisherName, cleaned || null);
     }
 
+    // Trolley recipient link — only when either field is present in the body.
+    if (
+      req.body &&
+      typeof req.body === "object" &&
+      ("trolleyRecipientId" in req.body || "trolleyRefId" in req.body)
+    ) {
+      const body = req.body as {
+        trolleyRecipientId?: unknown;
+        trolleyRefId?: unknown;
+      };
+      const prev = affiliateMetadataFor(publisherName);
+      let nextRecipientId = prev?.trolleyRecipientId ?? null;
+      let nextRefId = prev?.trolleyRefId ?? null;
+      if ("trolleyRecipientId" in body) {
+        const raw = body.trolleyRecipientId;
+        if (raw === null || (typeof raw === "string" && !raw.trim())) {
+          nextRecipientId = null;
+        } else if (typeof raw === "string") {
+          const cleaned = raw.trim();
+          if (cleaned && !cleaned.startsWith("R-")) {
+            res.status(400).json({
+              error: "Trolley recipient ID must start with R-",
+            });
+            return;
+          }
+          nextRecipientId = cleaned || null;
+        }
+      }
+      if ("trolleyRefId" in body) {
+        const raw = body.trolleyRefId;
+        if (raw === null || (typeof raw === "string" && !raw.trim())) {
+          nextRefId = null;
+        } else if (typeof raw === "string") {
+          nextRefId = raw.trim() || null;
+        }
+      }
+      metadata = setAffiliateTrolleyLink(
+        publisherName,
+        nextRecipientId,
+        nextRefId
+      );
+    }
+
     res.json(metadata);
   } catch (err) {
     const message =
@@ -2413,6 +2465,219 @@ async function resolvePayAmount(
   });
   return { amount: breakdown.total, earnedByPeriod };
 }
+
+// ==================== Trolley (Pakistan rail) ====================
+
+app.get("/api/payment/trolley/configured", (_req, res) => {
+  res.json({ configured: isTrolleyConfigured() });
+});
+
+/** Signed Widget invite URL — affiliate self-onboards bank/wallet details. */
+app.post("/api/payment/trolley/invite/:name", express.json(), (req, res) => {
+  try {
+    if (!isTrolleyConfigured()) {
+      res.status(503).json({
+        error:
+          "Trolley keys not configured. Set TROLLEY_ACCESS_KEY and TROLLEY_SECRET_KEY.",
+      });
+      return;
+    }
+    const publisherName = decodePublisherParam(req.params.name).trim();
+    if (!publisherName) {
+      res.status(400).json({ error: "Publisher name is required" });
+      return;
+    }
+    const meta = affiliateMetadataFor(publisherName);
+    const emailRaw =
+      typeof req.body?.email === "string" && req.body.email.trim()
+        ? req.body.email.trim()
+        : meta?.paymentEmail?.trim() || "";
+    if (!emailRaw) {
+      res.status(400).json({
+        error:
+          "Add a payment confirmation email on this affiliate (or pass email) before inviting to Trolley",
+      });
+      return;
+    }
+    const refId =
+      meta?.trolleyRefId?.trim() ||
+      trolleyRefIdForAffiliate(publisherName, meta?.polyaresId);
+    const widgetUrl = buildTrolleyWidgetInviteUrl({
+      email: emailRaw,
+      refId,
+    });
+    setAffiliateTrolleyLink(
+      publisherName,
+      meta?.trolleyRecipientId ?? null,
+      refId
+    );
+    res.json({
+      widgetUrl,
+      refId,
+      email: emailRaw.toLowerCase(),
+      publisherName,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to build Trolley invite",
+    });
+  }
+});
+
+/** Pull recipient from Trolley by stored id or refId and persist R-… when found. */
+app.post("/api/payment/trolley/refresh/:name", async (req, res) => {
+  try {
+    if (!isTrolleyConfigured()) {
+      res.status(503).json({
+        error:
+          "Trolley keys not configured. Set TROLLEY_ACCESS_KEY and TROLLEY_SECRET_KEY.",
+      });
+      return;
+    }
+    const publisherName = decodePublisherParam(req.params.name).trim();
+    if (!publisherName) {
+      res.status(400).json({ error: "Publisher name is required" });
+      return;
+    }
+    const meta = affiliateMetadataFor(publisherName);
+    const refId =
+      meta?.trolleyRefId?.trim() ||
+      trolleyRefIdForAffiliate(publisherName, meta?.polyaresId);
+
+    let recipient = meta?.trolleyRecipientId
+      ? await getTrolleyRecipient(meta.trolleyRecipientId)
+      : null;
+    if (!recipient) {
+      recipient = await findTrolleyRecipientByRefId(refId);
+    }
+    if (!recipient) {
+      res.status(404).json({
+        error: `No Trolley recipient found for ref ${refId}. Send the invite and have them finish onboarding.`,
+        refId,
+      });
+      return;
+    }
+
+    const updated = setAffiliateTrolleyLink(
+      publisherName,
+      recipient.id,
+      recipient.referenceId || refId
+    );
+    res.json({
+      recipient,
+      metadata: updated,
+      payable: String(recipient.status || "").toLowerCase() === "active",
+    });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : "Failed to refresh Trolley recipient",
+    });
+  }
+});
+
+app.post("/api/payment/pay/trolley/:name", async (req, res) => {
+  try {
+    if (!isTrolleyConfigured()) {
+      res.status(503).json({
+        error:
+          "Trolley keys not configured. Set TROLLEY_ACCESS_KEY and TROLLEY_SECRET_KEY.",
+      });
+      return;
+    }
+    const publisherName = decodePublisherParam(req.params.name).trim();
+    if (!publisherName) {
+      res.status(400).json({ error: "Publisher name is required" });
+      return;
+    }
+
+    const period = parsePayPeriods(req);
+    const override = parsePayAmountOverride(req);
+    console.log(
+      `[Payment] Trolley pay request: ${publisherName} ${period.periodType}s=${period.keys.join(",")} amount=${override ?? "auto"}`
+    );
+
+    const meta = affiliateMetadataFor(publisherName);
+    if (!meta || meta.paymentMethod !== "Trolley") {
+      res.status(400).json({
+        error: "Affiliate is not tagged for Trolley payments",
+      });
+      return;
+    }
+    if (isAffiliatePaidForAllPeriods(publisherName, period)) {
+      res.status(400).json({
+        error: `Affiliate is already marked paid for the selected ${period.periodType}(s)`,
+      });
+      return;
+    }
+
+    let recipientId = meta.trolleyRecipientId?.trim() || "";
+    if (
+      typeof req.body?.trolleyRecipientId === "string" &&
+      req.body.trolleyRecipientId.trim()
+    ) {
+      recipientId = req.body.trolleyRecipientId.trim();
+    }
+    if (!recipientId.startsWith("R-")) {
+      res.status(400).json({
+        error:
+          "No Trolley recipient ID (R-…) linked. Invite the affiliate, then Refresh status after they finish onboarding.",
+      });
+      return;
+    }
+
+    const { amount, earnedByPeriod } = await resolvePayAmount(
+      publisherName,
+      req,
+      period
+    );
+
+    const payout = await executeTrolleyPayout({
+      recipientId,
+      amountUsd: amount,
+      memo: `LeadSmart ${period.periodType} ${period.keys.join(",")}`,
+    });
+
+    if (recipientId !== (meta.trolleyRecipientId?.trim() || "")) {
+      setAffiliateTrolleyLink(
+        publisherName,
+        recipientId,
+        meta.trolleyRefId ??
+          trolleyRefIdForAffiliate(publisherName, meta.polyaresId)
+      );
+    }
+
+    settleAffiliatePayment(publisherName, period, {
+      method: "Trolley",
+      amount,
+      reference: payout.paymentId
+        ? `Trolley payment ${payout.paymentId}`
+        : `Trolley batch ${payout.batchId}`,
+      earnedByPeriod,
+    });
+
+    console.log(
+      `[Payment] Trolley pay success: ${publisherName} batch=${payout.batchId} amount=${amount}`
+    );
+
+    res.json({
+      success: true,
+      batchId: payout.batchId,
+      paymentId: payout.paymentId,
+      status: payout.status,
+      amount,
+      publisherName,
+    });
+  } catch (err) {
+    console.error(
+      `[Payment] Trolley pay failed: ${req.params.name}`,
+      err instanceof Error ? err.message : err
+    );
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Trolley payout failed",
+    });
+  }
+});
 
 app.post("/api/payment/pay/wise/:name", async (req, res) => {
   try {
