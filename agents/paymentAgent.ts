@@ -1569,6 +1569,7 @@ export const PAYMENT_METHODS = [
   "Wise",
   "Venmo",
   "Bill.com",
+  "Trolley",
   "Crypto",
   "Untagged",
 ] as const;

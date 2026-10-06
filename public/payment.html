@@ -1208,6 +1208,10 @@
         display: none;
       }
 
+      .metadata-popover__trolley-section.hidden {
+        display: none;
+      }
+
       .metadata-popover__billcom-hint {
         margin: 0 0 10px;
         font-size: 9px;
@@ -1826,6 +1830,7 @@
         "Wise",
         "Venmo",
         "Bill.com",
+        "Trolley",
         "Crypto",
         "Untagged",
       ];
@@ -2126,8 +2131,14 @@
             wiseAddressZip: null,
             paymentEmail: null,
             polyaresId: null,
+            trolleyRecipientId: null,
+            trolleyRefId: null,
           }
         );
+      }
+
+      function hasTrolleyPayableClient(meta) {
+        return /^R-/.test(String(meta.trolleyRecipientId || "").trim());
       }
 
       function hasWiseRecipientIdClient(meta) {
@@ -2298,7 +2309,8 @@
         billcomAch,
         wiseFields,
         paymentEmail,
-        polyaresId
+        polyaresId,
+        trolleyFields
       ) {
         const payload = {
           paymentMethod: paymentMethod || "Untagged",
@@ -2318,6 +2330,9 @@
         }
         if (polyaresId !== undefined) {
           payload.polyaresId = polyaresId || "";
+        }
+        if (trolleyFields) {
+          Object.assign(payload, trolleyFields);
         }
         const res = await fetch(
           "/api/payment/metadata/" + encodeURIComponent(publisherName),
@@ -2564,6 +2579,156 @@
         wiseWrap.appendChild(wiseTagLabel);
         wiseWrap.appendChild(wiseTagInput);
 
+        const trolleyWrap = document.createElement("div");
+        trolleyWrap.className = "metadata-popover__trolley-section";
+        if ((meta.paymentMethod || "Untagged") !== "Trolley") {
+          trolleyWrap.classList.add("hidden");
+        }
+
+        const trolleyHint = document.createElement("p");
+        trolleyHint.className = "metadata-popover__billcom-hint";
+        trolleyHint.textContent =
+          "Pakistan rail: send Invite so the affiliate fills IBAN/wallet in Trolley's widget. " +
+          "Then Refresh to pull their R-… recipient ID. Needs TROLLEY_* keys on the server.";
+
+        const trolleyRecipientLabel = document.createElement("label");
+        trolleyRecipientLabel.textContent = "Trolley recipient ID (R-…)";
+        const trolleyRecipientInput = document.createElement("input");
+        trolleyRecipientInput.type = "text";
+        trolleyRecipientInput.placeholder = "R-… (after onboarding)";
+        trolleyRecipientInput.value = meta.trolleyRecipientId || "";
+        trolleyRecipientInput.autocomplete = "off";
+        trolleyRecipientInput.spellcheck = false;
+
+        const trolleyRefLabel = document.createElement("label");
+        trolleyRefLabel.textContent = "Trolley ref ID";
+        const trolleyRefInput = document.createElement("input");
+        trolleyRefInput.type = "text";
+        trolleyRefInput.placeholder = "ls-… (auto on invite)";
+        trolleyRefInput.value = meta.trolleyRefId || "";
+        trolleyRefInput.autocomplete = "off";
+        trolleyRefInput.spellcheck = false;
+
+        const trolleyActions = document.createElement("div");
+        trolleyActions.className = "metadata-popover__actions";
+        trolleyActions.style.marginTop = "8px";
+
+        const inviteBtn = document.createElement("button");
+        inviteBtn.type = "button";
+        inviteBtn.className = "btn-metadata-save";
+        inviteBtn.textContent = "Invite link";
+        inviteBtn.title = "Build a signed Trolley widget URL";
+        inviteBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          inviteBtn.disabled = true;
+          try {
+            // Persist method/email first so invite can use paymentEmail.
+            await saveAffiliateMetadata(
+              publisherName,
+              "Trolley",
+              termsSelect.value,
+              undefined,
+              null,
+              null,
+              paymentEmailInput.value.trim(),
+              polyaresIdInput.value.trim(),
+              {
+                trolleyRecipientId: trolleyRecipientInput.value.trim(),
+                trolleyRefId: trolleyRefInput.value.trim(),
+              }
+            );
+            methodSelect.value = "Trolley";
+            const res = await fetch(
+              "/api/payment/trolley/invite/" + encodeURIComponent(publisherName),
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  email: paymentEmailInput.value.trim() || undefined,
+                }),
+              }
+            );
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || "Invite failed");
+            }
+            if (data.refId) {
+              trolleyRefInput.value = data.refId;
+            }
+            await fetchAffiliateMetadata();
+            if (navigator.clipboard && data.widgetUrl) {
+              await navigator.clipboard.writeText(data.widgetUrl);
+              showPaymentToast("Trolley invite link copied", false);
+            } else {
+              showPaymentToast(data.widgetUrl || "Invite ready", false);
+            }
+          } catch (err) {
+            setWarning(err instanceof Error ? err.message : "Invite failed");
+            showPaymentToast(
+              err instanceof Error ? err.message : "Invite failed",
+              true
+            );
+          } finally {
+            inviteBtn.disabled = false;
+          }
+        });
+
+        const refreshBtn = document.createElement("button");
+        refreshBtn.type = "button";
+        refreshBtn.className = "btn-metadata-save";
+        refreshBtn.textContent = "Refresh";
+        refreshBtn.title = "Pull recipient status from Trolley";
+        refreshBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          refreshBtn.disabled = true;
+          try {
+            const res = await fetch(
+              "/api/payment/trolley/refresh/" + encodeURIComponent(publisherName),
+              { method: "POST" }
+            );
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || "Refresh failed");
+            }
+            if (data.metadata) {
+              affiliateMetadataMap[publisherName] = data.metadata;
+            }
+            trolleyRecipientInput.value =
+              (data.recipient && data.recipient.id) ||
+              trolleyRecipientInput.value;
+            trolleyRefInput.value =
+              (data.recipient && data.recipient.referenceId) ||
+              trolleyRefInput.value;
+            showPaymentToast(
+              data.payable
+                ? "Trolley recipient active — ready to pay"
+                : "Trolley recipient linked (status: " +
+                    ((data.recipient && data.recipient.status) || "unknown") +
+                    ")",
+              false
+            );
+            renderTable();
+            updatePayAllButton();
+          } catch (err) {
+            setWarning(err instanceof Error ? err.message : "Refresh failed");
+            showPaymentToast(
+              err instanceof Error ? err.message : "Refresh failed",
+              true
+            );
+          } finally {
+            refreshBtn.disabled = false;
+          }
+        });
+
+        trolleyActions.appendChild(inviteBtn);
+        trolleyActions.appendChild(refreshBtn);
+        trolleyWrap.appendChild(trolleyHint);
+        trolleyWrap.appendChild(trolleyRecipientLabel);
+        trolleyWrap.appendChild(trolleyRecipientInput);
+        trolleyWrap.appendChild(trolleyRefLabel);
+        trolleyWrap.appendChild(trolleyRefInput);
+        trolleyWrap.appendChild(trolleyActions);
+
         methodSelect.addEventListener("change", () => {
           if (methodSelect.value === "Bill.com") {
             vendorIdWrap.classList.remove("hidden");
@@ -2574,6 +2739,11 @@
             wiseWrap.classList.remove("hidden");
           } else {
             wiseWrap.classList.add("hidden");
+          }
+          if (methodSelect.value === "Trolley") {
+            trolleyWrap.classList.remove("hidden");
+          } else {
+            trolleyWrap.classList.add("hidden");
           }
           requestAnimationFrame(() => positionMetadataPopover(anchorTd, popover));
         });
@@ -2590,6 +2760,7 @@
           try {
             let billcomVendorId;
             let wiseFields;
+            let trolleyFields;
             if (methodSelect.value === "Bill.com") {
               const parsed = normalizeBillcomVendorIdInput(vendorIdInput.value);
               if (parsed === null) {
@@ -2615,6 +2786,12 @@
                 tag: wiseTagInput.value,
               });
             }
+            if (methodSelect.value === "Trolley") {
+              trolleyFields = {
+                trolleyRecipientId: trolleyRecipientInput.value.trim(),
+                trolleyRefId: trolleyRefInput.value.trim(),
+              };
+            }
             const data = await saveAffiliateMetadata(
               publisherName,
               methodSelect.value,
@@ -2623,7 +2800,8 @@
               null,
               wiseFields,
               paymentEmailInput.value.trim(),
-              polyaresIdInput.value.trim()
+              polyaresIdInput.value.trim(),
+              trolleyFields
             );
             affiliateMetadataMap[publisherName] = data;
             closeEditPopover();
@@ -2647,6 +2825,7 @@
         popover.appendChild(polyaresHint);
         popover.appendChild(vendorIdWrap);
         popover.appendChild(wiseWrap);
+        popover.appendChild(trolleyWrap);
         popover.appendChild(actions);
         popover.addEventListener("click", (e) => e.stopPropagation());
         popover.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -2676,14 +2855,14 @@
         if (!method || method === "Untagged") {
           return "Tag payment method first";
         }
-        if (method === "Wise" || method === "Bill.com") {
+        if (method === "Wise" || method === "Bill.com" || method === "Trolley") {
           return "Pay affiliate";
         }
         return "Manual payment";
       }
 
       function isAutoPayMethod(method) {
-        return method === "Wise" || method === "Bill.com";
+        return method === "Wise" || method === "Bill.com" || method === "Trolley";
       }
 
       function formatHeldUntil(ymd) {
@@ -3209,6 +3388,9 @@
           if (extras.wiseFields) {
             Object.assign(payload, extras.wiseFields);
           }
+          if (extras.trolleyRecipientId) {
+            payload.trolleyRecipientId = extras.trolleyRecipientId;
+          }
         }
         return payload;
       }
@@ -3331,6 +3513,11 @@
               return;
             }
           }
+          if (method === "Trolley" && !hasTrolleyPayableClient(meta)) {
+            payModalHint.textContent =
+              "Link a Trolley recipient (R-…) via Invite + Refresh in the edit popup first.";
+            return;
+          }
 
           if (method === "Bill.com" && payModalMfaToken) {
             isPayingAffiliate = true;
@@ -3345,7 +3532,11 @@
             return;
           }
 
-          if (method !== "Bill.com" && method !== "Wise") {
+          if (
+            method !== "Bill.com" &&
+            method !== "Wise" &&
+            method !== "Trolley"
+          ) {
             closePayModal();
           }
 
@@ -3358,7 +3549,11 @@
             const endpoint =
               method === "Wise"
                 ? "/api/payment/pay/wise/" + encodeURIComponent(publisherName)
-                : "/api/payment/pay/billcom/" + encodeURIComponent(publisherName);
+                : method === "Trolley"
+                  ? "/api/payment/pay/trolley/" +
+                    encodeURIComponent(publisherName)
+                  : "/api/payment/pay/billcom/" +
+                    encodeURIComponent(publisherName);
             const res = await fetch(endpoint, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -3367,6 +3562,10 @@
                   billcomVendorId,
                   billcomAch,
                   wiseFields,
+                  trolleyRecipientId:
+                    method === "Trolley"
+                      ? String(meta.trolleyRecipientId || "").trim()
+                      : undefined,
                 })
               ),
             });
@@ -3383,7 +3582,11 @@
               throw new Error(data.error || "Payment failed");
             }
 
-            if (method === "Bill.com" || method === "Wise") {
+            if (
+              method === "Bill.com" ||
+              method === "Wise" ||
+              method === "Trolley"
+            ) {
               closePayModal();
             }
 
@@ -3409,7 +3612,11 @@
           } catch (err) {
             setBanner(null, null);
             const message = err instanceof Error ? err.message : "Payment failed";
-            if ((method === "Bill.com" && !payModalMfaToken) || method === "Wise") {
+            if (
+              (method === "Bill.com" && !payModalMfaToken) ||
+              method === "Wise" ||
+              method === "Trolley"
+            ) {
               payModalHint.textContent = message;
             }
             setWarning(message);

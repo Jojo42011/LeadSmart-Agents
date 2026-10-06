@@ -20,4 +20,13 @@ export function warnMissingPaymentEnvVars(): void {
       "[Payment] Missing env var: BILLCOM_BANK_ACCOUNT_ID (Bill.com bulk payouts disabled)"
     );
   }
+
+  if (
+    !process.env.TROLLEY_ACCESS_KEY?.trim() ||
+    !process.env.TROLLEY_SECRET_KEY?.trim()
+  ) {
+    console.warn(
+      "[Payment] Missing TROLLEY_ACCESS_KEY / TROLLEY_SECRET_KEY (Trolley PK rail inactive until set)"
+    );
+  }
 }
