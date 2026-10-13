@@ -1,4 +1,7 @@
+import nodemailer from "nodemailer";
 import { CHICAGO_TZ } from "./chicagoTime";
+
+const BLUE_BOOK_SURVEY_URL = "https://mthink.com/blue-book-survey";
 
 export interface PaymentConfirmationParams {
   publisherName: string;
@@ -17,6 +20,15 @@ export interface PaymentConfirmationParams {
   accountLast4?: string | null;
   /** Provider reference the affiliate can quote (e.g. "Wise transfer #123"). */
   reference?: string | null;
+}
+
+function smtpConfigured(): boolean {
+  return Boolean(
+    process.env.SMTP_HOST?.trim() &&
+      process.env.SMTP_USER?.trim() &&
+      process.env.SMTP_PASS?.trim() &&
+      process.env.PAYMENT_EMAIL_FROM?.trim()
+  );
 }
 
 function formatMoney(amount: number): string {
@@ -261,6 +273,9 @@ ${extraDetailRows(params)
           </tr>
           <tr>
             <td style="padding:0 32px 28px;font-size:13px;line-height:1.5;color:#71717a;">
+              If you can, please fill out this short survey and vote for LeadSmart:<br />
+              <a href="${BLUE_BOOK_SURVEY_URL}" style="color:#2563eb;word-break:break-all;">${BLUE_BOOK_SURVEY_URL}</a>
+              <br /><br />
               Questions about this payment? Just reply to this email.<br /><br />— LeadSmart
             </td>
           </tr>
@@ -289,6 +304,9 @@ function buildTextBody(params: PaymentConfirmationParams): string {
     `Date: ${dateLabel} CT`,
     ...extraDetailRows(params).map((row) => `${row.label}: ${row.value}`),
     "",
+    "If you can, please fill out this short survey and vote for LeadSmart:",
+    BLUE_BOOK_SURVEY_URL,
+    "",
     "Questions about this payment? Just reply to this email.",
     "",
     "— LeadSmart",
@@ -303,16 +321,37 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/**
- * Payment confirmation sending is DISABLED (spam / domain reputation).
- * Function kept so call sites and tests compile; it never hits SMTP.
- */
+/** Send payment confirmation email via configured SMTP (IONOS). Throws on transport failure. */
 export async function sendPaymentConfirmationEmail(
   params: PaymentConfirmationParams
 ): Promise<void> {
-  console.log(
-    `[PaymentEmail] DISABLED — would have sent confirmation to ${params.email} for ${params.publisherName}`
-  );
+  if (!smtpConfigured()) {
+    throw new Error(
+      "SMTP is not configured (SMTP_HOST, SMTP_USER, SMTP_PASS, PAYMENT_EMAIL_FROM)"
+    );
+  }
+
+  const host = process.env.SMTP_HOST!.trim();
+  const port = parseInt(process.env.SMTP_PORT?.trim() || "587", 10);
+  const user = process.env.SMTP_USER!.trim();
+  const pass = process.env.SMTP_PASS!.trim();
+  const from = process.env.PAYMENT_EMAIL_FROM!.trim();
+  const monthLabel = formatPeriodsLabel(params);
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+  });
+
+  await transporter.sendMail({
+    from,
+    to: params.email,
+    subject: `LeadSmart Payment Confirmation — ${monthLabel}`,
+    text: buildTextBody(params),
+    html: buildHtmlBody(params),
+  });
 }
 
 /**
